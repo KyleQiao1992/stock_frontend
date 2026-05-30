@@ -24,6 +24,12 @@ const ADJUST_OPTIONS = [
   { value: "2", label: "后复权" },
 ];
 
+const MARKET_TABS = [
+  { value: "ashare", label: "A股" },
+  { value: "us", label: "美股" },
+  { value: "agent", label: "Agent" },
+];
+
 function isSixDigitCode(value) {
   const s = String(value || "").trim();
   return s.length === 6 && Array.from(s).every((ch) => ch >= "0" && ch <= "9");
@@ -35,6 +41,20 @@ function onlyDigits(value) {
     .filter((ch) => ch >= "0" && ch <= "9")
     .join("")
     .slice(0, 6);
+}
+
+function normalizeUsSymbol(value) {
+  return String(value || "")
+    .toUpperCase()
+    .split("")
+    .filter((ch) => (ch >= "A" && ch <= "Z") || (ch >= "0" && ch <= "9") || ch === "." || ch === "-")
+    .join("")
+    .slice(0, 12);
+}
+
+function isValidUsSymbol(value) {
+  const s = String(value || "").trim().toUpperCase();
+  return /^[A-Z][A-Z0-9.-]{0,11}$/.test(s);
 }
 
 function guessSecid(code) {
@@ -417,6 +437,104 @@ async function fetchAshareKline({ code, period, adjust, limit }) {
       .slice(-3)
       .join("；")}`,
   );
+}
+
+async function fetchUsKline({ symbol, period, adjust, limit }) {
+  const normalized = normalizeUsSymbol(symbol);
+  if (!isValidUsSymbol(normalized)) {
+    throw new Error("请输入有效的美股代码，例如 AAPL、MSFT、NVDA、BRK.B。");
+  }
+
+  const errors = [];
+
+  try {
+    const params = new URLSearchParams({
+      symbol: normalized,
+      period,
+      adjust,
+      limit: String(limit || 600),
+    });
+    const res = await fetch(`/api/us-kline?${params.toString()}`, {
+      method: "GET",
+      cache: "no-store",
+    });
+    const payload = await res.json().catch(() => null);
+    if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+    const klines = Array.isArray(payload?.klines) ? payload.klines : [];
+    if (!klines.length) throw new Error("本地美股代理返回空数据");
+    return {
+      code: payload.code || normalized,
+      name: payload.name || normalized,
+      marketCap: null,
+      floatMarketCap: null,
+      klines,
+      sourceInfo: payload.sourceInfo || "Nasdaq local proxy",
+    };
+  } catch (e) {
+    errors.push(`Nasdaq local proxy: ${e?.message || e}`);
+  }
+
+  const hosts = [
+    "https://push2his.eastmoney.com",
+    "https://79.push2his.eastmoney.com",
+    "https://82.push2his.eastmoney.com",
+  ];
+  const secids = [`105.${normalized}`, `106.${normalized}`];
+  const limits = Array.from(new Set([Math.max(300, Number(limit) || 600), 1200, 600].filter((v) => Number(v) > 0)));
+
+  for (const currentLimit of limits) {
+    for (const secid of secids) {
+      for (const host of hosts) {
+        const url = buildEastmoneyKlineUrl({ host, secid, period, adjust, limit: currentLimit });
+        try {
+          const res = await loadMarketJson(url);
+          const data = res?.data || null;
+          const klines = Array.isArray(data?.klines) ? data.klines : [];
+          if (!data || klines.length === 0) {
+            errors.push(`${host} ${secid} lmt=${currentLimit}: 空数据`);
+            continue;
+          }
+
+          const parsed = klines
+            .map((line) => {
+              const parts = String(line).split(",");
+              return {
+                date: parts[0],
+                open: Number(parts[1]),
+                close: Number(parts[2]),
+                high: Number(parts[3]),
+                low: Number(parts[4]),
+                volume: Number(parts[5]),
+                amount: Number(parts[6]),
+                amplitude: Number(parts[7]),
+                pct: Number(parts[8]),
+                change: Number(parts[9]),
+                turnover: Number(parts[10]),
+              };
+            })
+            .filter((r) => r.date && [r.open, r.close, r.high, r.low, r.volume].every(Number.isFinite));
+
+          if (!parsed.length) {
+            errors.push(`${host} ${secid} lmt=${currentLimit}: 数据格式异常`);
+            continue;
+          }
+
+          return {
+            code: data.code || normalized,
+            name: data.name || normalized,
+            marketCap: null,
+            floatMarketCap: null,
+            klines: parsed,
+            sourceInfo: `${host}, ${secid}, lmt=${currentLimit}`,
+          };
+        } catch (e) {
+          errors.push(`${host} ${secid} lmt=${currentLimit}: ${e?.message || e}`);
+        }
+      }
+    }
+  }
+
+  throw new Error(`美股行情暂时不可用。已尝试无 key 历史行情源，但都失败了。最后错误：${errors.slice(-3).join("；")}`);
 }
 
 function calcSimpleTD9(rows) {
@@ -1869,7 +1987,7 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
         </svg>
         <button
           type="button"
-          className="absolute bottom-4 right-[-14px] z-10 inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white/98 text-slate-500 shadow-sm backdrop-blur hover:border-slate-300 hover:bg-white hover:text-slate-700"
+          className="absolute bottom-4 right-[-18px] z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/98 text-slate-500 shadow-sm backdrop-blur hover:border-slate-300 hover:bg-white hover:text-slate-700"
           onClick={(e) => {
             e.stopPropagation();
             setShowMacdSignals((value) => !value);
@@ -1877,7 +1995,7 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
           title={showMacdSignals ? "隐藏金叉/死叉标记" : "显示金叉/死叉标记"}
           aria-label={showMacdSignals ? "隐藏金叉和死叉标记" : "显示金叉和死叉标记"}
         >
-          {showMacdSignals ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+          {showMacdSignals ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
         </button>
       </div>
     </div>
@@ -1885,7 +2003,8 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
 }
 
 export default function AShareTD9InteractiveChart() {
-  const [code, setCode] = useState("600519");
+  const [market, setMarket] = useState("ashare");
+  const [marketCodes, setMarketCodes] = useState({ ashare: "600519", us: "MSFT" });
   const [period, setPeriod] = useState("101");
   const [adjust, setAdjust] = useState("1");
   const [displayCount, setDisplayCount] = useState(120);
@@ -1916,22 +2035,38 @@ export default function AShareTD9InteractiveChart() {
   const latest = rows.length > 0 ? rows[rows.length - 1] : null;
   const latestColor = latest && latest.close >= latest.open ? "text-red-600" : "text-green-700";
   const prediction = useMemo(() => buildTrendPrediction(rawRows), [rawRows]);
+  const currentCode = market === "us" ? marketCodes.us : marketCodes.ashare;
 
   async function load() {
-    const normalized = String(code || "").trim();
-    if (!isSixDigitCode(normalized)) {
-      setError("请输入 6 位 A 股代码，例如 600519、000001、300750。");
-      return;
-    }
+    if (market === "agent") return;
     setLoading(true);
     setError("");
     try {
-      const result = await fetchAshareKline({
-        code: normalized,
-        period,
-        adjust,
-        limit: Math.max(5000, Number(displayCount) + 120),
-      });
+      const result = market === "ashare"
+        ? await (() => {
+          const normalized = String(currentCode || "").trim();
+          if (!isSixDigitCode(normalized)) {
+            throw new Error("请输入 6 位 A 股代码，例如 600519、000001、300750。");
+          }
+          return fetchAshareKline({
+            code: normalized,
+            period,
+            adjust,
+            limit: Math.max(5000, Number(displayCount) + 120),
+          });
+        })()
+        : await (() => {
+          const normalized = normalizeUsSymbol(currentCode);
+          if (!isValidUsSymbol(normalized)) {
+            throw new Error("请输入有效的美股代码，例如 AAPL、MSFT、NVDA、BRK.B。");
+          }
+          return fetchUsKline({
+            symbol: normalized,
+            period,
+            adjust,
+            limit: Math.max(5000, Number(displayCount) + 120),
+          });
+        })();
       setRawRows(result.klines);
       setMeta({
         code: result.code,
@@ -1942,47 +2077,90 @@ export default function AShareTD9InteractiveChart() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载失败");
       setRawRows([]);
-      setMeta({ code: normalized, name: "" });
+      setMeta({ code: currentCode, name: "" });
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
+    if (market === "agent") return undefined;
     const timer = window.setTimeout(() => {
       load();
     }, 0);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [market]);
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 text-slate-900">
       <div className="mx-auto max-w-[1600px] space-y-4">
         <div className="flex flex-col gap-3 rounded-2xl bg-white p-4 shadow-sm md:flex-row md:items-end md:justify-between">
           <div>
+            <div className="mb-3 inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
+              {MARKET_TABS.map((tab) => {
+                const active = market === tab.value;
+                return (
+                  <button
+                    key={tab.value}
+                    type="button"
+                    className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${active ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-900"}`}
+                    onClick={() => {
+                      setMarket(tab.value);
+                      setError("");
+                      if (tab.value === "us") {
+                        setMarketCodes((prev) => ({ ...prev, us: prev.us || "MSFT" }));
+                        setRawRows([]);
+                        setMeta({ code: marketCodes.us || "MSFT", name: "" });
+                      } else if (tab.value === "agent") {
+                        setRawRows([]);
+                        setMeta({ code: "", name: "" });
+                      }
+                    }}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
             <div className="flex items-center gap-2 text-2xl font-semibold">
               <BarChart3 className="h-6 w-6" />
-              A股 K线
+              {market === "ashare" ? "A股 K线" : market === "us" ? "美股 K线" : "Agent"}
             </div>
-            <p className="mt-1 text-sm text-slate-500">输入股票代码后查询。默认只显示当前正在形成的九转。</p>
+            <p className="mt-1 text-sm text-slate-500">
+              {market === "ashare"
+                ? "输入股票代码后查询。默认只显示当前正在形成的九转。"
+                : market === "us"
+                  ? "输入美股代码后查询。当前使用无 key 历史行情。"
+                  : "Agent 页签已预留，后续再接入智能分析工作流。"}
+            </p>
           </div>
           <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
             <div className="col-span-2 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 md:w-44">
               <Search className="h-4 w-4 text-slate-400" />
-              <input value={code} onChange={(e) => setCode(onlyDigits(e.target.value))} onKeyDown={(e) => { if (e.key === "Enter") load(); }} placeholder="如 600519" className="w-full outline-none" />
+              <input
+                value={currentCode}
+                onChange={(e) => {
+                  const value = market === "ashare" ? onlyDigits(e.target.value) : normalizeUsSymbol(e.target.value);
+                  setMarketCodes((prev) => ({ ...prev, [market]: value }));
+                }}
+                onKeyDown={(e) => { if (e.key === "Enter" && market !== "agent") load(); }}
+                placeholder={market === "ashare" ? "如 600519" : market === "us" ? "如 AAPL" : "Agent 功能待接入"}
+                disabled={market === "agent"}
+                className="w-full bg-transparent outline-none disabled:cursor-not-allowed disabled:text-slate-400"
+              />
             </div>
-            <select value={period} onChange={(e) => setPeriod(e.target.value)} className="rounded-xl border bg-white px-3 py-2 outline-none">
+            <select value={period} onChange={(e) => setPeriod(e.target.value)} disabled={market === "agent"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               {PERIOD_OPTIONS.map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
               ))}
             </select>
-            <select value={adjust} onChange={(e) => setAdjust(e.target.value)} className="rounded-xl border bg-white px-3 py-2 outline-none">
+            <select value={adjust} onChange={(e) => setAdjust(e.target.value)} disabled={market === "agent"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               {ADJUST_OPTIONS.map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
               ))}
             </select>
-            <select value={displayCount} onChange={(e) => setDisplayCount(Number(e.target.value))} className="rounded-xl border bg-white px-3 py-2 outline-none">
+            <select value={displayCount} onChange={(e) => setDisplayCount(Number(e.target.value))} disabled={market === "agent"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               <option value={30}>近30根</option>
               <option value={45}>近45根</option>
               <option value={60}>近60根</option>
@@ -1991,21 +2169,21 @@ export default function AShareTD9InteractiveChart() {
               <option value={180}>近180根</option>
               <option value={240}>近240根</option>
             </select>
-            <select value={tdMode} onChange={(e) => setTdMode(e.target.value)} className="rounded-xl border bg-white px-3 py-2 outline-none">
+            <select value={tdMode} onChange={(e) => setTdMode(e.target.value)} disabled={market === "agent"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               <option value="current">只显示当前九转</option>
               <option value="full">显示全部1~9转</option>
               <option value="ths">同花顺显示逻辑</option>
               <option value="simple">简化连续计数</option>
             </select>
             <label className="flex items-center gap-1 rounded-xl border bg-white px-3 py-2 text-sm">
-              <input type="checkbox" checked={showGaps} onChange={(e) => setShowGaps(e.target.checked)} />
+              <input type="checkbox" checked={showGaps} disabled={market === "agent"} onChange={(e) => setShowGaps(e.target.checked)} />
               断层
             </label>
             <label className="flex items-center gap-1 rounded-xl border bg-white px-3 py-2 text-sm">
-              <input type="checkbox" checked={unfilledOnly} onChange={(e) => setUnfilledOnly(e.target.checked)} />
+              <input type="checkbox" checked={unfilledOnly} disabled={market === "agent"} onChange={(e) => setUnfilledOnly(e.target.checked)} />
               未回补
             </label>
-            <Button onClick={load} disabled={loading} className="rounded-xl">
+            <Button onClick={load} disabled={loading || market === "agent"} className="rounded-xl">
               <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               {loading ? "加载中" : "查询"}
             </Button>
@@ -2019,74 +2197,92 @@ export default function AShareTD9InteractiveChart() {
           </div>
         )}
 
-        <div className="grid gap-4 md:grid-cols-4">
-          <Card className="rounded-2xl md:col-span-1">
-            <CardContent className="p-4">
-              <div className="text-sm text-slate-500">当前标的</div>
-              <div className="mt-1 text-2xl font-semibold">{meta.name || "-"}</div>
-              <div className="text-sm text-slate-500">{meta.code || code}</div>
-              {latest && (
-                <div className="mt-4 space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span>日期</span>
-                    <span>{latest.date}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>收盘</span>
-                    <span className={`font-semibold ${latestColor}`}>{latest.close.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>涨跌幅</span>
-                    <span className={latest.pct >= 0 ? "text-red-600" : "text-green-700"}>
-                      {Number.isFinite(latest.pct) ? latest.pct.toFixed(2) : "-"}%
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>成交量</span>
-                    <span>{formatNumber(latest.volume)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>总市值</span>
-                    <span>{formatNumber(meta.marketCap)}</span>
-                  </div>
-                </div>
-              )}
-              <TrendPredictionPanel prediction={prediction} />
-              <div className="mt-4">
-                <TradeConclusionPanel rawRows={rawRows} />
-              </div>
-            </CardContent>
-          </Card>
-          <Card className="rounded-2xl md:col-span-3">
+        {market !== "agent" ? (
+          <div className="grid gap-4 md:grid-cols-4">
+            <Card className="rounded-2xl md:col-span-1">
               <CardContent className="p-4">
-                <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <div className="text-lg font-semibold">{meta.code ? `${meta.code} ${meta.name}` : "K线图"}</div>
-                    <div className="text-xs text-slate-500">九转规则：上涨结构 close[i] &gt; close[i-4]；下跌结构 close[i] &lt; close[i-4]。当前默认只显示最新正在形成的九转；可切换为全部1~9转或同花顺显示逻辑。</div>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-end gap-2">
-                    <div className="hidden items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600 md:flex">
-                      <TrendingUp className="h-3.5 w-3.5" />
-                      绿字=上涨九结构；红字=下跌九结构
+                <div className="text-sm text-slate-500">当前标的</div>
+                <div className="mt-1 text-2xl font-semibold">{meta.name || "-"}</div>
+                <div className="text-sm text-slate-500">{meta.code || currentCode}</div>
+                {latest && (
+                  <div className="mt-4 space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span>日期</span>
+                      <span>{latest.date}</span>
                     </div>
-                    <div className="flex items-center gap-1 rounded-xl border bg-white p-1 text-xs text-slate-600">
-                      <button type="button" className="rounded-lg px-2 py-1 hover:bg-slate-100" onClick={() => setChartZoom((z) => Math.max(0.8, Number((z - 0.1).toFixed(2))))}>缩小</button>
-                      <button type="button" className="rounded-lg px-2 py-1 font-semibold text-slate-800 hover:bg-slate-100" onClick={() => setChartZoom(1)}>{Math.round(chartZoom * 100)}%</button>
-                      <button type="button" className="rounded-lg px-2 py-1 hover:bg-slate-100" onClick={() => setChartZoom((z) => Math.min(1.8, Number((z + 0.1).toFixed(2))))}>放大</button>
+                    <div className="flex justify-between">
+                      <span>收盘</span>
+                      <span className={`font-semibold ${latestColor}`}>{latest.close.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>涨跌幅</span>
+                      <span className={latest.pct >= 0 ? "text-red-600" : "text-green-700"}>
+                        {Number.isFinite(latest.pct) ? latest.pct.toFixed(2) : "-"}%
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>成交量</span>
+                      <span>{formatNumber(latest.volume)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>总市值</span>
+                      <span>{formatNumber(meta.marketCap)}</span>
                     </div>
                   </div>
-                </div>
-                {rows.length > 0 ? (
-                  <>
-                    <Chart rows={rows} visibleGaps={visibleGaps} showGaps={showGaps} zoom={chartZoom} />
-                    <TD9StatsTable rawRows={rawRows} />
-                  </>
-                ) : (
-                  <div className="rounded-2xl bg-slate-100 p-12 text-center text-slate-500">暂无数据</div>
                 )}
+                <TrendPredictionPanel prediction={prediction} />
+                <div className="mt-4">
+                  <TradeConclusionPanel rawRows={rawRows} />
+                </div>
               </CardContent>
             </Card>
-        </div>
+            <Card className="rounded-2xl md:col-span-3">
+                <CardContent className="p-4">
+                  <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <div className="text-lg font-semibold">{meta.code ? `${meta.code} ${meta.name}` : market === "us" ? "美股 K线图" : "K线图"}</div>
+                      <div className="text-xs text-slate-500">
+                        九转规则：上涨结构 close[i] &gt; close[i-4]；下跌结构 close[i] &lt; close[i-4]。当前默认只显示最新正在形成的九转；可切换为全部1~9转或同花顺显示逻辑。
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <div className="hidden items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600 md:flex">
+                        <TrendingUp className="h-3.5 w-3.5" />
+                        绿字=上涨九结构；红字=下跌九结构
+                      </div>
+                      <div className="flex items-center gap-1 rounded-xl border bg-white p-1 text-xs text-slate-600">
+                        <button type="button" className="rounded-lg px-2 py-1 hover:bg-slate-100" onClick={() => setChartZoom((z) => Math.max(0.8, Number((z - 0.1).toFixed(2))))}>缩小</button>
+                        <button type="button" className="rounded-lg px-2 py-1 font-semibold text-slate-800 hover:bg-slate-100" onClick={() => setChartZoom(1)}>{Math.round(chartZoom * 100)}%</button>
+                        <button type="button" className="rounded-lg px-2 py-1 hover:bg-slate-100" onClick={() => setChartZoom((z) => Math.min(1.8, Number((z + 0.1).toFixed(2))))}>放大</button>
+                      </div>
+                    </div>
+                  </div>
+                  {rows.length > 0 ? (
+                    <>
+                      <Chart rows={rows} visibleGaps={visibleGaps} showGaps={showGaps} zoom={chartZoom} />
+                      <TD9StatsTable rawRows={rawRows} />
+                    </>
+                  ) : (
+                    <div className="rounded-2xl bg-slate-100 p-12 text-center text-slate-500">暂无数据</div>
+                  )}
+                </CardContent>
+              </Card>
+          </div>
+        ) : market === "us" ? (
+          <Card className="rounded-2xl">
+            <CardContent className="p-10 text-center">
+              <div className="text-2xl font-semibold text-slate-800">美股页签已创建</div>
+              <p className="mt-3 text-sm text-slate-500">当前只完成了顶部 Tab 和页面切换，占位页已就绪，后续再接入真实的美股行情与指标逻辑。</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="rounded-2xl">
+            <CardContent className="p-10 text-center">
+              <div className="text-2xl font-semibold text-slate-800">Agent 页签已创建</div>
+              <p className="mt-3 text-sm text-slate-500">当前只完成了顶部 Tab 和页面切换，占位页已就绪，后续可以在这里接入选股、研报总结、策略问答等 Agent 工作流。</p>
+            </CardContent>
+          </Card>
+        )}
         <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-sm">
           说明：这是学习/研究用图表，不构成投资建议。断层基于已拉取的完整历史 K 线计算，再映射到当前显示区间；规则按相邻 K 线高低价判断：向上断层为当日最低价高于前一根最高价，向下断层为当日最高价低于前一根最低价；默认只显示未回补断层。
         </div>
