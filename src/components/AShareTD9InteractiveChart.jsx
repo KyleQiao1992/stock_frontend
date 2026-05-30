@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   BarChart3,
+  Eye,
+  EyeOff,
   Info,
   RefreshCw,
   Search,
@@ -333,70 +335,6 @@ function extractTencentMarketCap(res, code) {
   if (!possibleYi.length) return null;
   const candidate = possibleYi[possibleYi.length - 1];
   return candidate * 100000000;
-}
-
-function normalizeRowsForKronos(rows, maxBars = 512) {
-  if (!Array.isArray(rows)) return [];
-  return rows
-    .slice(-maxBars)
-    .map((r) => ({
-      date: r.date,
-      open: Number(r.open),
-      high: Number(r.high),
-      low: Number(r.low),
-      close: Number(r.close),
-      volume: Number(r.volume || 0),
-      amount: Number(r.amount || 0),
-    }))
-    .filter((r) => r.date && [r.open, r.high, r.low, r.close].every(Number.isFinite));
-}
-
-function buildKronosPreviewForecast({ code, name, rows, model = "Kronos-base", prediction }) {
-  const latest = rows?.[rows.length - 1];
-  const close = latest?.close || 0;
-  const score = prediction?.ready ? prediction.score : 50;
-  const bias = (score - 50) / 100;
-  const volatility = (() => {
-    if (!Array.isArray(rows) || rows.length < 20) return 0.03;
-    const recent = rows.slice(-20);
-    const rets = [];
-    for (let i = 1; i < recent.length; i += 1) {
-      rets.push(recent[i].close / recent[i - 1].close - 1);
-    }
-    const avg = rets.reduce((a, b) => a + b, 0) / Math.max(1, rets.length);
-    const variance = rets.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / Math.max(1, rets.length);
-    return Math.sqrt(variance);
-  })();
-
-  const return5d = bias * 0.06 + volatility * 0.3;
-  const return10d = bias * 0.1 + volatility * 0.45;
-  const return20d = bias * 0.16 + volatility * 0.65;
-  const direction = return20d > 0.015 ? "bullish" : return20d < -0.015 ? "bearish" : "neutral";
-  const confidence = Math.max(0.35, Math.min(0.78, 0.5 + Math.abs(score - 50) / 100));
-
-  return {
-    symbol: code,
-    name,
-    model,
-    mode: "frontend-preview",
-    inputBars: normalizeRowsForKronos(rows, 512).length,
-    summary: {
-      return5d,
-      return10d,
-      return20d,
-      direction,
-      confidence,
-    },
-    agreement: "前端模拟预览：基于趋势分与近期波动生成，不是真实 Kronos-base 模型输出。",
-    forecast: [
-      { step: 5, predictedClose: close * (1 + return5d), predictedReturn: return5d },
-      { step: 10, predictedClose: close * (1 + return10d), predictedReturn: return10d },
-      { step: 20, predictedClose: close * (1 + return20d), predictedReturn: return20d },
-    ],
-    risk: {
-      note: "This is a frontend preview fallback, not real Kronos inference.",
-    },
-  };
 }
 
 function extractTencentName(res, code) {
@@ -1287,41 +1225,6 @@ function TrendPredictionPanel({ prediction }) {
         </div>
         <div className="rounded-xl bg-slate-50 p-2">
           <div className="inline-flex items-center">
-            MACD
-            <InfoTip text="MACD 使用 EMA12 与 EMA26 计算 DIF，再对 DIF 做 EMA9 得到 DEA。现在会识别水下金叉/水上金叉/零轴附近金叉，以及水下死叉/水上死叉。水下金叉表示 DIF 在0轴下方上穿 DEA，偏短线反弹；水上金叉更偏强势上涨确认。" />
-          </div>
-          <div className="mt-1 text-slate-500">{prediction.macdText}</div>
-        </div>
-        <div className="rounded-xl bg-slate-50 p-2">
-          <div className="inline-flex items-center">
-            RSI
-            <InfoTip text="RSI14 统计最近 14 根 K 线的平均上涨幅度和平均下跌幅度。RSI 高于 70-75 通常表示短线过热，低于 30-40 通常表示短线超跌。" />
-          </div>
-          <div className="mt-1 text-slate-500">{prediction.rsiText}</div>
-        </div>
-        <div className="rounded-xl bg-slate-50 p-2">
-          <div className="inline-flex items-center">
-            KDJ
-            <InfoTip text="KDJ9 先计算 RSV，再平滑得到 K、D，并用 J=3K-2D 表示更敏感的动能。K 上穿 D 偏多，K 下穿 D 偏空；K/D 高于 80 偏过热，低于 20 偏超跌。" />
-          </div>
-          <div className="mt-1 text-slate-500">{prediction.kdjText}</div>
-        </div>
-        <div className="rounded-xl bg-slate-50 p-2">
-          <div className="inline-flex items-center">
-            布林带
-            <InfoTip text="BOLL20 使用最近 20 根收盘价均值作为中轨，上下轨为中轨加减 2 倍标准差。价格在中轨上方偏强，突破上轨可能表示强势但也可能短线过热；跌破下轨可能表示超跌。" />
-          </div>
-          <div className="mt-1 text-slate-500">{prediction.bollText}</div>
-        </div>
-        <div className="rounded-xl bg-slate-50 p-2">
-          <div className="inline-flex items-center">
-            ATR
-            <InfoTip text="ATR14 衡量最近 14 根 K 线的真实波动范围，考虑最高最低价以及与前收盘价的跳空。ATR 占价格比例越高，说明波动和风险越大。" />
-          </div>
-          <div className="mt-1 text-slate-500">{prediction.atrText}</div>
-        </div>
-        <div className="rounded-xl bg-slate-50 p-2">
-          <div className="inline-flex items-center">
             量价关系
             <InfoTip text="量价关系比较近 5 日价格涨跌与近 5 日/20 日平均成交量。上涨放量偏确认趋势，上涨缩量可能是量价背离；下跌放量说明抛压偏强，下跌缩量说明抛压可能减弱。" />
           </div>
@@ -1354,96 +1257,9 @@ function TrendPredictionPanel({ prediction }) {
   );
 }
 
-function kronosReturnText(value) {
-  if (!Number.isFinite(value)) return "-";
-  return `${value >= 0 ? "+" : ""}${(value * 100).toFixed(2)}%`;
-}
-
-function KronosForecastPanel({ forecast, loading, error, model, horizon, onModelChange, onHorizonChange, onRun }) {
-  const summary = forecast?.summary || null;
-  const direction = summary?.direction || "-";
-  const directionClass =
-    direction === "bullish" ? "text-red-600" : direction === "bearish" ? "text-green-700" : "text-slate-700";
-
-  return (
-    <div className="mt-5 border-t pt-4">
-      <div className="mb-2 flex items-center text-sm font-semibold text-slate-700">
-        AI Forecast
-        <InfoTip text="当前版本在页面内直接运行，不需要你部署后端。它不是直接运行真实 Kronos-base PyTorch 模型，而是使用当前已有的趋势分、技术指标、九转、断层和近期波动生成本地预测结果。Kronos-base 可作为后续真实后端模型接入方向。" />
-      </div>
-
-      <div className="space-y-2 rounded-2xl bg-slate-50 p-3 text-xs">
-        <div className="grid grid-cols-2 gap-2">
-          <select value={model} onChange={(e) => onModelChange(e.target.value)} className="rounded-xl border bg-white px-2 py-1 outline-none">
-            <option value="Local-AI-mini">Local-AI-mini</option>
-            <option value="Local-AI-small">Local-AI-small</option>
-            <option value="Local-AI-base">Local-AI-base</option>
-            <option value="Kronos-base-ready">Kronos-base-ready</option>
-          </select>
-          <select value={horizon} onChange={(e) => onHorizonChange(Number(e.target.value))} className="rounded-xl border bg-white px-2 py-1 outline-none">
-            <option value={5}>预测5日</option>
-            <option value={10}>预测10日</option>
-            <option value={20}>预测20日</option>
-          </select>
-        </div>
-
-        <Button onClick={onRun} disabled={loading} className="w-full rounded-xl">
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          {loading ? "预测中" : "运行 AI 预测"}
-        </Button>
-
-        {error && <div className="rounded-xl border border-amber-200 bg-amber-50 p-2 text-amber-700">{error}</div>}
-
-        {!forecast && !error && (
-          <div className="rounded-xl bg-white p-2 text-slate-500">
-            这个版本可以直接运行，不需要你配置前端或后端。点击“运行 AI 预测”即可基于当前股票数据生成预测结果。
-          </div>
-        )}
-
-        {forecast && (
-          <div className="space-y-2 rounded-xl bg-white p-2">
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-2 text-slate-600">
-              当前为页面内本地预测结果，可直接使用；不是外部 Kronos-base PyTorch 模型的真实推理结果。
-            </div>
-            <div className="flex justify-between">
-              <span>模型模式</span>
-              <span>{forecast.model || model}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>输入K线</span>
-              <span>{forecast.inputBars || "-"} 根</span>
-            </div>
-            <div className="flex justify-between">
-              <span>预测方向</span>
-              <span className={`font-semibold ${directionClass}`}>{direction}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>置信度</span>
-              <span>{Number.isFinite(summary?.confidence) ? percentText(summary.confidence) : "-"}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>预测5日</span>
-              <span>{kronosReturnText(summary?.return5d)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>预测10日</span>
-              <span>{kronosReturnText(summary?.return10d)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>预测20日</span>
-              <span>{kronosReturnText(summary?.return20d)}</span>
-            </div>
-            {forecast?.agreement && <div className="text-slate-500">说明：{forecast.agreement}</div>}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function buildTrendChecklist(rawRows) {
   if (!Array.isArray(rawRows) || rawRows.length < 80) {
-    return { ready: false, items: [], summary: "历史数据不足" };
+    return { ready: false, summary: "历史数据不足", tradeAction: null, items: [] };
   }
 
   const i = rawRows.length - 1;
@@ -1460,7 +1276,6 @@ function buildTrendChecklist(rawRows) {
   const prev20High = Math.max(...rawRows.slice(Math.max(0, i - 20), i).map((r) => r.high));
   const prev60High = Math.max(...rawRows.slice(Math.max(0, i - 60), i).map((r) => r.high));
   const isNew20High = latest.high >= prev20High || latest.close >= prev20High;
-  const isNear20High = latest.close >= prev20High * 0.97;
 
   const macd = calcMACDState(rawRows);
   const macdBull = macd.state === "bull" || macd.state === "weakBull" || macd.state === "nearGolden";
@@ -1490,8 +1305,7 @@ function buildTrendChecklist(rawRows) {
       key: "newHigh",
       title: "价格是否持续创新高",
       ok: isNew20High,
-      neutral: !isNew20High && isNear20High,
-      status: isNew20High ? "是" : isNear20High ? "接近" : "否",
+      status: isNew20High ? "是" : "否",
       detail: `当前收盘 ${latestValid(latest.close)}；近20日前高 ${latestValid(prev20High)}；近60日前高 ${latestValid(prev60High)}`,
     },
     {
@@ -1523,13 +1337,14 @@ function buildTrendChecklist(rawRows) {
       title: "断层是否未回补",
       ok: latestGap?.type === "up",
       neutral: !latestGap,
-      status: latestGap ? (latestGap.type === "up" ? "向上未回补" : "向下未回补") : "暂无",
+      status: latestGap ? (latestGap.type === "up" ? "是" : "否") : "暂无",
       detail: latestGap ? `${latestGap.label}：${latestGap.bottom.toFixed(2)}-${latestGap.top.toFixed(2)}` : "当前历史区间内没有未回补断层。",
     },
   ];
 
   const positive = items.filter((item) => item.ok).length;
   const negative = items.filter((item) => !item.ok && !item.neutral).length;
+
   let summary = "趋势信号偏中性";
   if (positive >= 4 && negative <= 1) summary = "多数趋势条件偏强";
   else if (negative >= 4) summary = "多数趋势条件偏弱";
@@ -1548,7 +1363,7 @@ function buildTrendChecklist(rawRows) {
       label: "建议买入",
       colorClass: "text-red-600",
       bgClass: "bg-red-50 border-red-100",
-      reason: "多数趋势条件偏强，均线/动能/量价等信号更支持上涨方向。",
+      reason: "多数趋势条件偏强，均线、动能和量价信号更支持上涨方向。",
     };
   } else if (negative >= 4) {
     tradeAction = {
@@ -1562,7 +1377,7 @@ function buildTrendChecklist(rawRows) {
       label: "建议继续持有",
       colorClass: "text-blue-700",
       bgClass: "bg-blue-50 border-blue-100",
-      reason: "趋势略偏强但还不够一致，更适合持有观察，不宜盲目追高。",
+      reason: "趋势略偏强但不够一致，更适合持有观察，不宜盲目追高。",
     };
   } else if (negative >= 3) {
     tradeAction = {
@@ -1573,402 +1388,61 @@ function buildTrendChecklist(rawRows) {
     };
   }
 
-  return { ready: true, items, summary, positive, negative, tradeAction };
+  return { ready: true, summary, tradeAction, positive, negative, items };
 }
 
-function calcADXState(rows, period = 14) {
-  if (!Array.isArray(rows) || rows.length <= period * 2) return { ready: false, text: "样本不足", direction: "neutral" };
-
-  const trs = [];
-  const plusDMs = [];
-  const minusDMs = [];
-  for (let i = 1; i < rows.length; i += 1) {
-    const curr = rows[i];
-    const prev = rows[i - 1];
-    const upMove = curr.high - prev.high;
-    const downMove = prev.low - curr.low;
-    const plusDM = upMove > downMove && upMove > 0 ? upMove : 0;
-    const minusDM = downMove > upMove && downMove > 0 ? downMove : 0;
-    const tr = Math.max(curr.high - curr.low, Math.abs(curr.high - prev.close), Math.abs(curr.low - prev.close));
-    trs.push(tr);
-    plusDMs.push(plusDM);
-    minusDMs.push(minusDM);
-  }
-
-  function avgLast(arr) {
-    const part = arr.slice(-period);
-    return part.reduce((a, b) => a + b, 0) / Math.max(1, part.length);
-  }
-
-  const atr = avgLast(trs);
-  if (!Number.isFinite(atr) || atr === 0) return { ready: false, text: "样本不足", direction: "neutral" };
-  const plusDI = (100 * avgLast(plusDMs)) / atr;
-  const minusDI = (100 * avgLast(minusDMs)) / atr;
-  const diSum = plusDI + minusDI;
-  const dx = diSum === 0 ? 0 : (100 * Math.abs(plusDI - minusDI)) / diSum;
-
-  let strength = "弱";
-  if (dx >= 35) strength = "强";
-  else if (dx >= 20) strength = "中";
-
-  const direction = plusDI > minusDI ? "up" : minusDI > plusDI ? "down" : "neutral";
-  return {
-    ready: true,
-    direction,
-    value: dx,
-    strength,
-    plusDI,
-    minusDI,
-    text: `DMI ${direction === "up" ? "+DI > -DI" : direction === "down" ? "-DI > +DI" : "DI接近"}；强度 ${strength}，ADX≈${latestValid(dx, 1)}`,
-  };
-}
-
-function calcPriceStructureState(rows) {
-  if (!Array.isArray(rows) || rows.length < 45) return { ready: false, text: "样本不足", state: "unknown" };
-  const recent = rows.slice(-20);
-  const previous = rows.slice(-40, -20);
-  const recentHigh = Math.max(...recent.map((r) => r.high));
-  const recentLow = Math.min(...recent.map((r) => r.low));
-  const prevHigh = Math.max(...previous.map((r) => r.high));
-  const prevLow = Math.min(...previous.map((r) => r.low));
-
-  if (recentHigh > prevHigh && recentLow > prevLow) {
-    return { ready: true, state: "hhhl", text: `HH/HL：近20日高点 ${latestValid(recentHigh)} > 前20日高点 ${latestValid(prevHigh)}，低点也抬高` };
-  }
-  if (recentHigh < prevHigh && recentLow < prevLow) {
-    return { ready: true, state: "lhll", text: `LH/LL：近20日高点 ${latestValid(recentHigh)} < 前20日高点 ${latestValid(prevHigh)}，低点也降低` };
-  }
-  return { ready: true, state: "mixed", text: `结构震荡：近20日高点 ${latestValid(recentHigh)} / 低点 ${latestValid(recentLow)}，尚未形成清晰 HH/HL 或 LH/LL` };
-}
-
-function buildTrendRegime(rawRows) {
-  if (!Array.isArray(rawRows) || rawRows.length < 90) {
-    return { ready: false, direction: "未知", strength: "-", quality: "样本不足", score: 50, reasons: ["历史K线不足，无法判断趋势状态。"] };
-  }
-
-  const i = rawRows.length - 1;
-  const latest = rawRows[i];
-  const ma5 = calcMAValue(rawRows, i, 5);
-  const ma10 = calcMAValue(rawRows, i, 10);
-  const ma20 = calcMAValue(rawRows, i, 20);
-  const ma60 = calcMAValue(rawRows, i, 60);
-  const ma20Prev = calcMAValue(rawRows, i - 5, 20);
-  const ma60Prev = calcMAValue(rawRows, i - 5, 60);
-  const macd = calcMACDState(rawRows);
-  const kdj = calcKDJState(rawRows);
-  const volumePrice = calcVolumePriceState(rawRows);
-  const adx = calcADXState(rawRows);
-  const structure = calcPriceStructureState(rawRows);
-
-  let upScore = 0;
-  let downScore = 0;
-  const reasons = [];
-
-  if (latest.close > ma20) {
-    upScore += 2;
-    reasons.push("价格站上MA20");
-  } else {
-    downScore += 2;
-    reasons.push("价格低于MA20");
-  }
-  if (ma20 > ma60) {
-    upScore += 2;
-    reasons.push("MA20高于MA60");
-  } else {
-    downScore += 2;
-    reasons.push("MA20低于MA60");
-  }
-  if (ma20 > ma20Prev && ma60 > ma60Prev) {
-    upScore += 2;
-    reasons.push("MA20/MA60同步向上");
-  }
-  if (ma20 < ma20Prev && ma60 < ma60Prev) {
-    downScore += 2;
-    reasons.push("MA20/MA60同步向下");
-  }
-  if (ma5 > ma10 && ma10 > ma20 && ma20 > ma60) {
-    upScore += 3;
-    reasons.push("均线多头排列");
-  }
-  if (ma5 < ma10 && ma10 < ma20 && ma20 < ma60) {
-    downScore += 3;
-    reasons.push("均线空头排列");
-  }
-  if (structure.state === "hhhl") {
-    upScore += 2;
-    reasons.push("价格结构 HH/HL");
-  }
-  if (structure.state === "lhll") {
-    downScore += 2;
-    reasons.push("价格结构 LH/LL");
-  }
-  if (macd.state === "bull" || macd.state === "weakBull") {
-    upScore += 1;
-    reasons.push("MACD偏多");
-  }
-  if (macd.state === "nearGolden") {
-    upScore += 1;
-    reasons.push("MACD临近金叉");
-  }
-  if (macd.state === "bear" || macd.state === "weakBear") {
-    downScore += 1;
-    reasons.push("MACD偏空");
-  }
-  if (macd.state === "nearDeath") {
-    downScore += 1;
-    reasons.push("MACD临近死叉");
-  }
-  if (kdj.state === "golden" || kdj.state === "bull") {
-    upScore += 1;
-    reasons.push("KDJ偏多");
-  }
-  if (kdj.state === "death" || kdj.state === "bear") {
-    downScore += 1;
-    reasons.push("KDJ偏空");
-  }
-  if (volumePrice.state === "confirmUp") {
-    upScore += 1;
-    reasons.push("上涨放量确认");
-  }
-  if (volumePrice.state === "confirmDown") {
-    downScore += 1;
-    reasons.push("下跌放量确认");
-  }
-  if (adx.direction === "up") upScore += 1;
-  if (adx.direction === "down") downScore += 1;
-
-  const diff = upScore - downScore;
-  let direction = "震荡趋势";
-  let directionClass = "text-slate-700";
-  let bgClass = "bg-slate-50 border-slate-100";
-  if (diff >= 4) {
-    direction = "上升趋势";
-    directionClass = "text-red-600";
-    bgClass = "bg-red-50 border-red-100";
-  } else if (diff <= -4) {
-    direction = "下跌趋势";
-    directionClass = "text-green-700";
-    bgClass = "bg-green-50 border-green-100";
-  }
-
-  const rawStrength = Math.abs(diff) + (adx.ready ? Math.min(4, Math.round(adx.value / 10)) : 0);
-  let strength = "弱";
-  if (rawStrength >= 8) strength = "强";
-  else if (rawStrength >= 4) strength = "中";
-
-  let quality = "一般";
-  if (direction === "上升趋势" && (volumePrice.state === "weakUp" || calcRSIState(rawRows).state === "overbought")) quality = "偏过热/有背离";
-  else if (direction === "下跌趋势" && calcRSIState(rawRows).state === "oversold") quality = "超跌但仍需确认";
-  else if (direction !== "震荡趋势" && strength !== "弱") quality = "较健康";
-  else if (direction === "震荡趋势") quality = "方向不清晰";
-
-  const score = Math.max(0, Math.min(100, Math.round(50 + diff * 4)));
-  return {
-    ready: true,
-    direction,
-    directionClass,
-    bgClass,
-    strength,
-    quality,
-    score,
-    upScore,
-    downScore,
-    reasons: reasons.slice(0, 5),
-    maText: `MA5 ${latestValid(ma5)} / MA10 ${latestValid(ma10)} / MA20 ${latestValid(ma20)} / MA60 ${latestValid(ma60)}`,
-    macdText: macd.text,
-    macdPattern: macd.pattern,
-    macdState: macd.state,
-    structureText: structure.text,
-    adxText: adx.text,
-  };
-}
-
-function MACDPatternVisual({ pattern, macdState }) {
-  const p = String(pattern || "");
-
-  const isUnderGolden = p.includes("水下金叉");
-  const isAboveGolden = p.includes("水上金叉");
-  const isNearGolden = p.includes("零轴附近金叉");
-  const isUnderDeath = p.includes("水下死叉");
-  const isAboveDeath = p.includes("水上死叉");
-  const isNearDeath = p.includes("零轴附近死叉");
-
-  const isGolden = isUnderGolden || isAboveGolden || isNearGolden || macdState === "bull" || macdState === "weakBull";
-  const isDeath = isUnderDeath || isAboveDeath || isNearDeath || macdState === "bear" || macdState === "weakBear";
-  const isAbove = isAboveGolden || isAboveDeath || p.includes("水上");
-  const isUnder = isUnderGolden || isUnderDeath || p.includes("水下");
-
-  const axisY = isAbove ? 62 : isUnder ? 28 : 45;
-  const title = pattern || "MACD形态";
-
-  let explain = "MACD 通过 DIF 与 DEA 的相对位置，以及柱体变化，帮助判断动能和趋势变化。";
-  if (isUnderGolden) {
-    explain = "水下金叉：DIF 上穿 DEA，但交叉发生在0轴下方。绿柱逐渐缩短，说明空头动能减弱，可能出现短线反弹；但仍处弱势区，稳定性通常不如水上金叉。";
-  } else if (isAboveGolden) {
-    explain = "水上金叉：DIF 上穿 DEA，且交叉发生在0轴上方。红柱逐渐放大，说明多头动能增强，通常比水下金叉更强、更稳定，偏向上涨趋势延续。";
-  } else if (isNearGolden) {
-    explain = "零轴附近金叉：DIF 在零轴附近上穿 DEA，说明动能可能从弱转强，需要结合价格是否站上均线和成交量确认。";
-  } else if (isUnderDeath) {
-    explain = "水下死叉：DIF 在0轴下方下穿 DEA，说明弱势区内空头仍占优，反弹可能结束后继续承压。";
-  } else if (isAboveDeath) {
-    explain = "水上死叉：DIF 在0轴上方下穿 DEA，说明强势上涨开始转弱，需要警惕回调或阶段性见顶。";
-  } else if (isNearDeath) {
-    explain = "零轴附近死叉：DIF 在零轴附近下穿 DEA，说明动能可能转弱，需要观察是否跌破关键均线。";
-  } else if (isGolden) {
-    explain = "DIF 位于 DEA 上方，短线动能偏多；若发生在0轴上方，通常更强，若发生在0轴下方，则更偏反弹。";
-  } else if (isDeath) {
-    explain = "DIF 位于 DEA 下方，短线动能偏空；若发生在0轴上方，可能是强势转弱，若发生在0轴下方，则偏弱势延续。";
-  }
-
-  const fastPath = isGolden
-    ? isAbove
-      ? "M18 48 C34 47, 46 44, 58 39 C74 30, 96 25, 120 20"
-      : "M18 58 C34 56, 46 50, 58 42 C74 34, 96 28, 120 24"
-    : isAbove
-      ? "M18 20 C34 23, 46 28, 58 36 C74 46, 96 52, 120 56"
-      : "M18 24 C34 27, 46 33, 58 42 C74 52, 96 58, 120 62";
-
-  const slowPath = isGolden
-    ? isAbove
-      ? "M18 40 C34 39, 46 38, 60 36 C78 34, 98 32, 120 30"
-      : "M18 47 C34 46, 46 44, 60 41 C78 38, 98 35, 120 33"
-    : isAbove
-      ? "M18 30 C34 31, 46 34, 60 38 C78 42, 98 45, 120 47"
-      : "M18 34 C34 35, 46 38, 60 42 C78 46, 98 49, 120 51";
-
-  const bars = isGolden ? (isAbove ? [7, 10, 13, 16, 19, 22] : [24, 21, 18, 15, 12, 9]) : isAbove ? [24, 21, 18, 15, 12, 9] : [8, 11, 14, 17, 20, 23];
-  const barColor = isAbove ? "#dc2626" : "#16a34a";
-  const labelColor = isGolden ? "#dc2626" : "#16a34a";
-  const crossY = isGolden ? (isAbove ? 39 : 42) : isAbove ? 36 : 42;
-  const label = isUnderGolden
-    ? "水下金叉"
-    : isAboveGolden
-      ? "水上金叉"
-      : isNearGolden
-        ? "零轴金叉"
-        : isUnderDeath
-          ? "水下死叉"
-          : isAboveDeath
-            ? "水上死叉"
-            : isNearDeath
-              ? "零轴死叉"
-              : isGolden
-                ? "偏多"
-                : isDeath
-                  ? "偏空"
-                  : "中性";
-
-  return (
-    <div className="mt-2 rounded-lg bg-white/80 p-2">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="text-slate-500">MACD示意</span>
-        <span className={isGolden ? "font-semibold text-red-600" : isDeath ? "font-semibold text-green-700" : "font-semibold text-slate-700"}>{title}</span>
-      </div>
-      <svg viewBox="0 0 140 100" className="h-28 w-full rounded-lg bg-slate-50">
-        <line x1="8" x2="132" y1={axisY} y2={axisY} stroke="#94a3b8" strokeDasharray="4 3" />
-        <text x="10" y={axisY - 5} fontSize="9" fill="#64748b">0轴</text>
-        {[0, 1, 2, 3, 4, 5].map((n) => {
-          const x = 22 + n * 14;
-          const h = bars[n];
-          const y = isAbove ? axisY - h : axisY;
-          return <rect key={n} x={x} y={y} width="6" height={Math.max(3, h)} fill={barColor} opacity="0.48" />;
-        })}
-        <path d={slowPath} fill="none" stroke="#d4af37" strokeWidth="2" />
-        <path d={fastPath} fill="none" stroke="#111827" strokeWidth="2.4" />
-        <circle cx="59" cy={crossY} r="5.5" fill="none" stroke={labelColor} strokeWidth="2" />
-        <text x="78" y={crossY + 3} fontSize="10" fill={labelColor}>{label}</text>
-        <text x="18" y="91" fontSize="9" fill="#111827">DIF</text>
-        <text x="45" y="91" fontSize="9" fill="#b59f00">DEA</text>
-        <text x="76" y="91" fontSize="9" fill="#64748b">柱体</text>
-      </svg>
-      <div className="mt-2 leading-relaxed text-slate-500">{explain}</div>
-    </div>
-  );
-}
-
-function TrendRegimePanel({ rawRows }) {
-  const regime = useMemo(() => buildTrendRegime(rawRows), [rawRows]);
+function TradeConclusionPanel({ rawRows }) {
   const checklist = useMemo(() => buildTrendChecklist(rawRows), [rawRows]);
 
-  const action = checklist?.tradeAction;
-  const summaryClass = checklist?.summary?.includes("偏强")
+  if (!checklist.ready || !checklist.tradeAction) {
+    return (
+      <div className="rounded-2xl border bg-white p-3 text-xs">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="font-semibold text-slate-700">交易结论</span>
+          <InfoTip text="这里只保留最终交易结论，不显示上面的 AI Forecast 和趋势状态细项。" />
+        </div>
+        <div className="rounded-xl bg-slate-50 p-3 text-slate-500">{checklist.summary}</div>
+      </div>
+    );
+  }
+
+  const action = checklist.tradeAction;
+  const summaryClass = checklist.summary.includes("偏强")
     ? "text-red-600"
-    : checklist?.summary?.includes("偏弱")
+    : checklist.summary.includes("偏弱")
       ? "text-green-700"
       : "text-slate-700";
 
   return (
-    <div className="mb-3 rounded-2xl border bg-white p-3 text-xs">
+    <div className="rounded-2xl border bg-white p-3 text-xs">
       <div className="mb-2 flex items-center justify-between">
-        <span className="font-semibold text-slate-700">趋势状态与交易结论</span>
-        <InfoTip text="合并展示趋势状态、交易结论和趋势条件明细。趋势判断基于均线、价格结构、MACD、成交量、断层和DMI/ADX等信号。" />
+        <span className="font-semibold text-slate-700">交易结论</span>
+        <InfoTip text="根据均线、动能、量价和断层等条件给出简化交易建议，只保留最终结果卡片。" />
       </div>
-
-      {!regime.ready ? (
-        <div className="rounded-xl bg-slate-50 p-2 text-slate-500">{regime.reasons?.[0] || "历史数据不足"}</div>
-      ) : (
-        <div className={`rounded-xl border p-2 ${regime.bgClass}`}>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-slate-600">当前趋势</span>
-            <span className={`font-bold ${regime.directionClass}`}>{regime.direction}</span>
-          </div>
-          <div className="mt-2 grid grid-cols-2 gap-2">
-            <div className="rounded-lg bg-white/70 p-2">
-              <div className="text-slate-500">强度</div>
-              <div className="font-semibold text-slate-800">{regime.strength}</div>
-            </div>
-            <div className="rounded-lg bg-white/70 p-2">
-              <div className="text-slate-500">质量</div>
-              <div className="font-semibold text-slate-800">{regime.quality}</div>
-            </div>
-          </div>
-          <div className="mt-2 h-2 rounded-full bg-slate-200">
-            <div className="h-2 rounded-full bg-slate-700" style={{ width: `${regime.score}%` }} />
-          </div>
-          <div className="mt-1 text-right text-slate-500">趋势状态分 {regime.score}/100</div>
-          <div className="mt-2 rounded-lg bg-white/80 p-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-slate-500">MACD形态</span>
-              <span className={regime.macdState === "bull" || regime.macdState === "weakBull" || regime.macdState === "nearGolden" ? "font-semibold text-red-600" : regime.macdState === "bear" || regime.macdState === "weakBear" || regime.macdState === "nearDeath" ? "font-semibold text-green-700" : "font-semibold text-slate-700"}>{regime.macdPattern || "-"}</span>
-            </div>
-            <div className="mt-1 leading-relaxed text-slate-500">{regime.macdText}</div>
-          </div>
-          <MACDPatternVisual pattern={regime.macdPattern} macdState={regime.macdState} />
-          <div className="mt-2 leading-relaxed text-slate-500">依据：{regime.reasons.join("；")}</div>
-          <div className="mt-1 leading-relaxed text-slate-400">{regime.structureText}</div>
-          <div className="mt-1 leading-relaxed text-slate-400">{regime.adxText}</div>
+      <div className={`rounded-xl border p-3 ${action.bgClass}`}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-slate-600">结论</span>
+          <span className={`font-bold ${action.colorClass}`}>{action.label}</span>
         </div>
-      )}
-
-      {checklist.ready && action && (
-        <div className="mt-3 space-y-2">
-          <div className={`rounded-xl border p-2 ${action.bgClass}`}>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-slate-600">交易结论</span>
-              <span className={`font-bold ${action.colorClass}`}>{action.label}</span>
+        <div className={`mt-2 font-semibold ${summaryClass}`}>{checklist.summary}</div>
+        <div className="mt-2 leading-relaxed text-slate-600">{action.reason}</div>
+      </div>
+      <div className={`mt-3 rounded-xl bg-slate-50 p-2 font-semibold ${summaryClass}`}>{checklist.summary}</div>
+      <div className="mt-3 space-y-1.5">
+        {checklist.items.map((item) => {
+          const color = item.ok ? "text-red-600" : item.neutral ? "text-slate-600" : "text-green-700";
+          const badge = item.ok ? "是" : item.neutral ? item.status : "否";
+          return (
+            <div key={item.key} className="rounded-xl bg-slate-50 p-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-slate-700">{item.title}</span>
+                <span className={`shrink-0 font-semibold ${color}`}>{badge}</span>
+              </div>
+              <div className="mt-1 leading-relaxed text-slate-500">{item.detail}</div>
             </div>
-            <div className="mt-1 leading-relaxed text-slate-500">{action.reason}</div>
-          </div>
-
-          <div className={`rounded-xl bg-slate-50 p-2 font-semibold ${summaryClass}`}>{checklist.summary}</div>
-
-          <div className="space-y-1.5">
-            {checklist.items.map((item) => {
-              const color = item.ok ? "text-red-600" : item.neutral ? "text-slate-600" : "text-green-700";
-              const badge = item.ok ? "是" : item.neutral ? item.status : "否";
-              return (
-                <div key={item.key} className="rounded-xl bg-slate-50 p-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-slate-700">{item.title}</span>
-                    <span className={`shrink-0 font-semibold ${color}`}>{badge}</span>
-                  </div>
-                  <div className="mt-1 leading-relaxed text-slate-500">{item.detail}</div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -2081,6 +1555,7 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
   const height = Math.round(760 * zoom);
   const [hoverIndex, setHoverIndex] = useState(null);
   const [selectedIndex, setSelectedIndex] = useState(null);
+  const [showMacdSignals, setShowMacdSignals] = useState(true);
   const scrollRef = useRef(null);
   const dragRef = useRef({ active: false, startX: 0, startScrollLeft: 0, moved: false });
 
@@ -2131,7 +1606,6 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
       if (![prev?.dif, prev?.dea, curr?.dif, curr?.dea, curr?.hist].every(Number.isFinite)) continue;
       const prevDiff = prev.dif - prev.dea;
       const currDiff = curr.dif - curr.dea;
-      const nearThreshold = Math.max(0.03, Math.abs(curr.dea) * 0.08, Math.abs(curr.hist) * 0.25);
       if (prevDiff <= 0 && currDiff > 0) {
         macdCrosses.push({
           index: i,
@@ -2145,14 +1619,6 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
           index: i,
           type: "death",
           label: "死叉",
-          value: (curr.dif + curr.dea) / 2,
-          zone: curr.dif > 0 && curr.dea > 0 ? "water" : curr.dif < 0 && curr.dea < 0 ? "under" : "near",
-        });
-      } else if (Math.abs(currDiff) <= nearThreshold) {
-        macdCrosses.push({
-          index: i,
-          type: currDiff > 0 ? "golden" : "death",
-          label: currDiff > 0 ? "临近金叉" : "临近死叉",
           value: (curr.dif + curr.dea) / 2,
           zone: curr.dif > 0 && curr.dea > 0 ? "water" : curr.dif < 0 && curr.dea < 0 ? "under" : "near",
         });
@@ -2215,56 +1681,57 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
       onTouchMove={(e) => moveDrag(e.touches[0]?.clientX || 0)}
       onTouchEnd={endDrag}
     >
-      <svg
-        viewBox={`0 0 ${width} ${height}`}
-        style={{ width: `${width}px`, height: `${height}px` }}
-        className="cursor-pointer select-none"
-        onMouseLeave={() => setHoverIndex(null)}
-        onMouseMove={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect();
-          const scaleX = width / Math.max(rect.width, 1);
-          const mouseX = (e.clientX - rect.left) * scaleX;
-          const idx = Math.floor((mouseX - chart.margin.left) / chart.xStep);
-          if (idx >= 0 && idx < safeRows.length) setHoverIndex(idx);
-        }}
-        onClick={(e) => {
-          if (dragRef.current.moved) return;
-          const rect = e.currentTarget.getBoundingClientRect();
-          const scaleX = width / Math.max(rect.width, 1);
-          const mouseX = (e.clientX - rect.left) * scaleX;
-          const idx = Math.floor((mouseX - chart.margin.left) / chart.xStep);
-          if (idx >= 0 && idx < safeRows.length) setSelectedIndex(idx);
-        }}
-      >
-        <rect x="0" y="0" width={width} height={height} fill="#ffffff" />
-        <text x="18" y="22" fontSize="13" fill="#333">
-          {hover.date} 开 {hover.open.toFixed(2)} 高 {hover.high.toFixed(2)} 低 {hover.low.toFixed(2)} 收 {hover.close.toFixed(2)}
-        </text>
-        <text x="430" y="22" fontSize="13" fill={positive ? "#d50000" : "#008000"}>
-          涨跌 {Number.isFinite(hover.change) ? hover.change.toFixed(2) : "-"} ({Number.isFinite(hover.pct) ? hover.pct.toFixed(2) : "-"}%)
-        </text>
-        <text x="650" y="22" fontSize="13" fill="#666">
-          成交量 {formatNumber(hover.volume)} 换手 {Number.isFinite(hover.turnover) ? hover.turnover.toFixed(2) : "-"}%
-        </text>
-        {currentTD && (
-          <g>
-            <rect x={width - chart.margin.right - 150} y="8" width="140" height="22" rx="11" fill={currentTD.direction === "up" ? "rgba(213,0,0,0.08)" : "rgba(0,128,0,0.08)"} stroke={currentTD.direction === "up" ? "#d50000" : "#008000"} />
-            <text x={width - chart.margin.right - 80} y="23" textAnchor="middle" fontSize="12" fontWeight="700" fill={currentTD.direction === "up" ? "#d50000" : "#008000"}>
-              当前九转：{currentTD.text}
-            </text>
-          </g>
-        )}
-
-        {Array.from({ length: gridLines + 1 }).map((_, i) => {
-          const yy = chart.margin.top + (chart.mainH / gridLines) * i;
-          const price = chart.yMax - ((chart.yMax - chart.yMin) / gridLines) * i;
-          return (
-            <g key={`grid-${i}`}>
-              <line x1={chart.margin.left} x2={width - chart.margin.right} y1={yy} y2={yy} stroke="#e7e7e7" strokeDasharray="4 4" />
-              <text x={width - chart.margin.right + 8} y={yy + 4} fontSize="11" fill="#666">{price.toFixed(2)}</text>
+      <div className="relative" style={{ width: `${width}px` }}>
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          style={{ width: `${width}px`, height: `${height}px` }}
+          className="cursor-pointer select-none"
+          onMouseLeave={() => setHoverIndex(null)}
+          onMouseMove={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const scaleX = width / Math.max(rect.width, 1);
+            const mouseX = (e.clientX - rect.left) * scaleX;
+            const idx = Math.floor((mouseX - chart.margin.left) / chart.xStep);
+            if (idx >= 0 && idx < safeRows.length) setHoverIndex(idx);
+          }}
+          onClick={(e) => {
+            if (dragRef.current.moved) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const scaleX = width / Math.max(rect.width, 1);
+            const mouseX = (e.clientX - rect.left) * scaleX;
+            const idx = Math.floor((mouseX - chart.margin.left) / chart.xStep);
+            if (idx >= 0 && idx < safeRows.length) setSelectedIndex(idx);
+          }}
+        >
+          <rect x="0" y="0" width={width} height={height} fill="#ffffff" />
+          <text x="18" y="22" fontSize="13" fill="#333">
+            {hover.date} 开 {hover.open.toFixed(2)} 高 {hover.high.toFixed(2)} 低 {hover.low.toFixed(2)} 收 {hover.close.toFixed(2)}
+          </text>
+          <text x="430" y="22" fontSize="13" fill={positive ? "#d50000" : "#008000"}>
+            涨跌 {Number.isFinite(hover.change) ? hover.change.toFixed(2) : "-"} ({Number.isFinite(hover.pct) ? hover.pct.toFixed(2) : "-"}%)
+          </text>
+          <text x="650" y="22" fontSize="13" fill="#666">
+            成交量 {formatNumber(hover.volume)} 换手 {Number.isFinite(hover.turnover) ? hover.turnover.toFixed(2) : "-"}%
+          </text>
+          {currentTD && (
+            <g>
+              <rect x={width - chart.margin.right - 150} y="8" width="140" height="22" rx="11" fill={currentTD.direction === "up" ? "rgba(213,0,0,0.08)" : "rgba(0,128,0,0.08)"} stroke={currentTD.direction === "up" ? "#d50000" : "#008000"} />
+              <text x={width - chart.margin.right - 80} y="23" textAnchor="middle" fontSize="12" fontWeight="700" fill={currentTD.direction === "up" ? "#d50000" : "#008000"}>
+                当前九转：{currentTD.text}
+              </text>
             </g>
-          );
-        })}
+          )}
+
+          {Array.from({ length: gridLines + 1 }).map((_, i) => {
+            const yy = chart.margin.top + (chart.mainH / gridLines) * i;
+            const price = chart.yMax - ((chart.yMax - chart.yMin) / gridLines) * i;
+            return (
+              <g key={`grid-${i}`}>
+                <line x1={chart.margin.left} x2={width - chart.margin.right} y1={yy} y2={yy} stroke="#e7e7e7" strokeDasharray="4 4" />
+                <text x={width - chart.margin.right + 8} y={yy + 4} fontSize="11" fill="#666">{price.toFixed(2)}</text>
+              </g>
+            );
+          })}
 
         <line x1={chart.margin.left} x2={chart.margin.left} y1={chart.margin.top} y2={chart.margin.top + chart.mainH} stroke="#cccccc" />
         <line x1={width - chart.margin.right} x2={width - chart.margin.right} y1={chart.margin.top} y2={chart.margin.top + chart.mainH} stroke="#cccccc" />
@@ -2355,21 +1822,22 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
         })}
         <path d={chart.makePath(chart.macdSeries.map((m) => m.dif), chart.macdY)} fill="none" stroke="#111827" strokeWidth="1.5" />
         <path d={chart.makePath(chart.macdSeries.map((m) => m.dea), chart.macdY)} fill="none" stroke="#b59f00" strokeWidth="1.3" />
-        {chart.macdCrosses.map((cross, idx) => {
-          const cx = chart.x(cross.index);
-          const cy = chart.macdY(cross.value);
-          const isGolden = cross.type === "golden";
-          const color = isGolden ? "#d50000" : "#008000";
-          const labelY = isGolden ? cy - 12 : cy + 18;
-          const labelBoxY = isGolden ? labelY - 11 : labelY - 10;
-          return (
-            <g key={`macd-cross-${idx}-${cross.index}`}>
-              <circle cx={cx} cy={cy} r="6" fill="rgba(255,255,255,0.75)" stroke={color} strokeWidth="2" />
-              <rect x={cx - 16} y={labelBoxY} width="32" height="16" rx="8" fill="rgba(255,255,255,0.9)" stroke={color} strokeWidth="1" />
-              <text x={cx} y={labelY + 1} textAnchor="middle" fontSize="10" fontWeight="700" fill={color}>{cross.label}</text>
-            </g>
-          );
-        })}
+        {showMacdSignals &&
+          chart.macdCrosses.map((cross, idx) => {
+            const cx = chart.x(cross.index);
+            const cy = chart.macdY(cross.value);
+            const isGolden = cross.type === "golden";
+            const color = isGolden ? "#d50000" : "#008000";
+            const labelY = isGolden ? cy - 12 : cy + 18;
+            const labelBoxY = isGolden ? labelY - 11 : labelY - 10;
+            return (
+              <g key={`macd-cross-${idx}-${cross.index}`}>
+                <circle cx={cx} cy={cy} r="6" fill="rgba(255,255,255,0.75)" stroke={color} strokeWidth="2" />
+                <rect x={cx - 16} y={labelBoxY} width="32" height="16" rx="8" fill="rgba(255,255,255,0.9)" stroke={color} strokeWidth="1" />
+                <text x={cx} y={labelY + 1} textAnchor="middle" fontSize="10" fontWeight="700" fill={color}>{cross.label}</text>
+              </g>
+            );
+          })}
 
         {Array.from({ length: xLabels }).map((_, i) => {
           const idx = xLabels === 1 ? 0 : Math.min(safeRows.length - 1, Math.round((safeRows.length - 1) * (i / (xLabels - 1))));
@@ -2398,7 +1866,20 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
               </g>
             );
           })()}
-      </svg>
+        </svg>
+        <button
+          type="button"
+          className="absolute bottom-4 right-[-14px] z-10 inline-flex h-8 w-8 items-center justify-center rounded-full border border-slate-200 bg-white/98 text-slate-500 shadow-sm backdrop-blur hover:border-slate-300 hover:bg-white hover:text-slate-700"
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowMacdSignals((value) => !value);
+          }}
+          title={showMacdSignals ? "隐藏金叉/死叉标记" : "显示金叉/死叉标记"}
+          aria-label={showMacdSignals ? "隐藏金叉和死叉标记" : "显示金叉和死叉标记"}
+        >
+          {showMacdSignals ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+        </button>
+      </div>
     </div>
   );
 }
@@ -2415,11 +1896,6 @@ export default function AShareTD9InteractiveChart() {
   const [meta, setMeta] = useState({ code: "", name: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [kronosModel, setKronosModel] = useState("Local-AI-base");
-  const [kronosHorizon, setKronosHorizon] = useState(20);
-  const [kronosLoading, setKronosLoading] = useState(false);
-  const [kronosError, setKronosError] = useState("");
-  const [kronosForecast, setKronosForecast] = useState(null);
   const [chartZoom, setChartZoom] = useState(1);
 
   const fullRowsWithTD = useMemo(() => calcTD9(rawRows, tdMode), [rawRows, tdMode]);
@@ -2449,8 +1925,6 @@ export default function AShareTD9InteractiveChart() {
     }
     setLoading(true);
     setError("");
-    setKronosError("");
-    setKronosForecast(null);
     try {
       const result = await fetchAshareKline({
         code: normalized,
@@ -2472,39 +1946,6 @@ export default function AShareTD9InteractiveChart() {
     } finally {
       setLoading(false);
     }
-  }
-
-  async function runKronosForecast() {
-    const normalized = String(code || "").trim();
-    if (!isSixDigitCode(normalized)) {
-      setKronosError("请输入有效的 6 位 A 股代码后再运行 AI 预测。");
-      return;
-    }
-    if (!rawRows.length) {
-      setKronosError("请先点击查询，获取当前股票 K 线数据。");
-      return;
-    }
-    setKronosLoading(true);
-    setKronosError("");
-    setKronosForecast(null);
-
-    window.setTimeout(() => {
-      try {
-        const preview = buildKronosPreviewForecast({
-          code: normalized,
-          name: meta.name,
-          rows: rawRows,
-          model: kronosModel,
-          horizon: kronosHorizon,
-          prediction,
-        });
-        setKronosForecast(preview);
-      } catch (e) {
-        setKronosError(e instanceof Error ? e.message : "AI 预测失败。");
-      } finally {
-        setKronosLoading(false);
-      }
-    }, 250);
   }
 
   useEffect(() => {
@@ -2578,59 +2019,45 @@ export default function AShareTD9InteractiveChart() {
           </div>
         )}
 
-        <div className="grid gap-4 xl:grid-cols-[230px_minmax(0,1fr)]">
-          <Card className="rounded-2xl self-start xl:sticky xl:top-4">
-            <CardContent className="max-h-[calc(100vh-2rem)] overflow-y-auto p-4">
-              <KronosForecastPanel
-                forecast={kronosForecast}
-                loading={kronosLoading}
-                error={kronosError}
-                model={kronosModel}
-                horizon={kronosHorizon}
-                onModelChange={setKronosModel}
-                onHorizonChange={setKronosHorizon}
-                onRun={runKronosForecast}
-              />
-              <TrendRegimePanel rawRows={rawRows} />
+        <div className="grid gap-4 md:grid-cols-4">
+          <Card className="rounded-2xl md:col-span-1">
+            <CardContent className="p-4">
+              <div className="text-sm text-slate-500">当前标的</div>
+              <div className="mt-1 text-2xl font-semibold">{meta.name || "-"}</div>
+              <div className="text-sm text-slate-500">{meta.code || code}</div>
+              {latest && (
+                <div className="mt-4 space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span>日期</span>
+                    <span>{latest.date}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>收盘</span>
+                    <span className={`font-semibold ${latestColor}`}>{latest.close.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>涨跌幅</span>
+                    <span className={latest.pct >= 0 ? "text-red-600" : "text-green-700"}>
+                      {Number.isFinite(latest.pct) ? latest.pct.toFixed(2) : "-"}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>成交量</span>
+                    <span>{formatNumber(latest.volume)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>总市值</span>
+                    <span>{formatNumber(meta.marketCap)}</span>
+                  </div>
+                </div>
+              )}
+              <TrendPredictionPanel prediction={prediction} />
+              <div className="mt-4">
+                <TradeConclusionPanel rawRows={rawRows} />
+              </div>
             </CardContent>
           </Card>
-
-          <div className="grid gap-4 md:grid-cols-4">
-            <Card className="rounded-2xl md:col-span-1">
-              <CardContent className="p-4">
-                <div className="text-sm text-slate-500">当前标的</div>
-                <div className="mt-1 text-2xl font-semibold">{meta.name || "-"}</div>
-                <div className="text-sm text-slate-500">{meta.code || code}</div>
-                {latest && (
-                  <div className="mt-4 space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span>日期</span>
-                      <span>{latest.date}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>收盘</span>
-                      <span className={`font-semibold ${latestColor}`}>{latest.close.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>涨跌幅</span>
-                      <span className={latest.pct >= 0 ? "text-red-600" : "text-green-700"}>
-                        {Number.isFinite(latest.pct) ? latest.pct.toFixed(2) : "-"}%
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>成交量</span>
-                      <span>{formatNumber(latest.volume)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>总市值</span>
-                      <span>{formatNumber(meta.marketCap)}</span>
-                    </div>
-                  </div>
-                )}
-                <TrendPredictionPanel prediction={prediction} />
-              </CardContent>
-            </Card>
-            <Card className="rounded-2xl md:col-span-3">
+          <Card className="rounded-2xl md:col-span-3">
               <CardContent className="p-4">
                 <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div>
@@ -2659,7 +2086,6 @@ export default function AShareTD9InteractiveChart() {
                 )}
               </CardContent>
             </Card>
-          </div>
         </div>
         <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-sm">
           说明：这是学习/研究用图表，不构成投资建议。断层基于已拉取的完整历史 K 线计算，再映射到当前显示区间；规则按相邻 K 线高低价判断：向上断层为当日最低价高于前一根最高价，向下断层为当日最高价低于前一根最低价；默认只显示未回补断层。
