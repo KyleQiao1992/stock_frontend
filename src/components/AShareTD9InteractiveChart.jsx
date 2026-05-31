@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   BarChart3,
+  Bot,
   Eye,
   EyeOff,
   Info,
   RefreshCw,
   Search,
+  Send,
   TrendingUp,
+  UserRound,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -318,7 +321,7 @@ async function fetchTencentKline({ code, period, adjust, limit }) {
       return {
         code,
         name: extractTencentName(res, code),
-        marketCap: extractTencentMarketCap(res, code),
+        ...extractTencentQuoteMeta(res, code),
         klines,
         sourceInfo: `Tencent script, lmt=${currentLimit}`,
       };
@@ -332,7 +335,7 @@ async function fetchTencentKline({ code, period, adjust, limit }) {
       return {
         code,
         name: extractTencentName(res, code),
-        marketCap: extractTencentMarketCap(res, code),
+        ...extractTencentQuoteMeta(res, code),
         klines,
         sourceInfo: `Tencent fetch, lmt=${currentLimit}`,
       };
@@ -344,17 +347,21 @@ async function fetchTencentKline({ code, period, adjust, limit }) {
   throw new Error(`腾讯行情也失败：${errors.slice(-2).join("；")}`);
 }
 
-function extractTencentMarketCap(res, code) {
+function extractTencentQuoteMeta(res, code) {
   const symbol = toTencentSymbol(code);
   const node = res?.data?.[symbol] || res?.data?.[code] || res?.[symbol] || res?.[code];
   const qt = node?.qt?.[symbol] || node?.qt?.[code];
-  if (!Array.isArray(qt)) return null;
+  if (!Array.isArray(qt)) return { marketCap: null, floatMarketCap: null, peRatio: null };
 
-  const numeric = qt.map((v) => Number(v)).filter((v) => Number.isFinite(v) && v > 1);
-  const possibleYi = numeric.filter((v) => v > 10 && v < 1000000);
-  if (!possibleYi.length) return null;
-  const candidate = possibleYi[possibleYi.length - 1];
-  return candidate * 100000000;
+  // Tencent quote fields: 39 = PE, 44 = total market cap in 100M CNY, 45 = float market cap in 100M CNY.
+  const peRatio = Number(qt[39]);
+  const totalMarketCapYi = Number(qt[44]);
+  const floatMarketCapYi = Number(qt[45]);
+  return {
+    marketCap: Number.isFinite(totalMarketCapYi) ? totalMarketCapYi * 100000000 : null,
+    floatMarketCap: Number.isFinite(floatMarketCapYi) ? floatMarketCapYi * 100000000 : null,
+    peRatio: Number.isFinite(peRatio) ? peRatio : null,
+  };
 }
 
 function extractTencentName(res, code) {
@@ -669,6 +676,16 @@ function formatNumber(v) {
   return v.toFixed(2);
 }
 
+function formatMillionValue(value) {
+  if (!Number.isFinite(value)) return "-";
+  return `${(value / 1000000).toFixed(2)}百万`;
+}
+
+function formatPercentValue(value) {
+  if (!Number.isFinite(value)) return "-";
+  return `${value.toFixed(2)}%`;
+}
+
 function calcGaps(rows) {
   const gaps = [];
   for (let i = 1; i < rows.length; i += 1) {
@@ -721,72 +738,6 @@ function calcGaps(rows) {
     }
   }
   return gaps;
-}
-
-function completedTD9Cycles(rawRows) {
-  if (!Array.isArray(rawRows) || rawRows.length < 10) return [];
-  const rows = calcSimpleTD9(rawRows);
-  const cycles = [];
-
-  for (let i = 0; i < rows.length; i += 1) {
-    if (rows[i].tdUp === 9 || rows[i].tdDown === 9) {
-      const isUp = rows[i].tdUp === 9;
-      const startIndex = Math.max(0, i - 8);
-      const turns = [];
-      for (let j = startIndex; j <= i; j += 1) {
-        turns.push({
-          turn: j - startIndex + 1,
-          index: j,
-          date: rows[j]?.date || "-",
-          open: rows[j]?.open,
-          close: rows[j]?.close,
-        });
-      }
-      cycles.push({
-        type: isUp ? "up" : "down",
-        label: isUp ? "上涨9转周期" : "下跌9转周期",
-        startIndex,
-        endIndex: i,
-        startDate: rows[startIndex]?.date || "-",
-        endDate: rows[i]?.date || "-",
-        turns,
-      });
-    }
-  }
-
-  return cycles.reverse();
-}
-
-function bestComboForSingleCycle(cycle) {
-  if (!cycle || !Array.isArray(cycle.turns) || cycle.turns.length < 9) return null;
-  const candidates = [];
-  for (let buyTurn = 1; buyTurn <= 8; buyTurn += 1) {
-    for (let sellTurn = buyTurn + 1; sellTurn <= 9; sellTurn += 1) {
-      const buy = cycle.turns.find((t) => t.turn === buyTurn);
-      const sell = cycle.turns.find((t) => t.turn === sellTurn);
-      if (!buy || !sell || !Number.isFinite(buy.close) || !Number.isFinite(sell.close)) continue;
-      candidates.push({
-        buyTurn,
-        sellTurn,
-        buyClose: buy.close,
-        sellClose: sell.close,
-        ret: sell.close / buy.close - 1,
-      });
-    }
-  }
-  if (!candidates.length) return null;
-  return candidates.sort((a, b) => b.ret - a.ret)[0];
-}
-
-function turnReturnsFromFirst(cycle) {
-  if (!cycle || !Array.isArray(cycle.turns) || cycle.turns.length < 1) return [];
-  const first = cycle.turns.find((t) => t.turn === 1);
-  const baseClose = first?.close;
-  if (!Number.isFinite(baseClose) || baseClose === 0) return [];
-  return cycle.turns.map((t) => ({
-    turn: t.turn,
-    ret: Number.isFinite(t.close) ? t.close / baseClose - 1 : null,
-  }));
 }
 
 function percentText(value) {
@@ -1375,6 +1326,85 @@ function TrendPredictionPanel({ prediction }) {
   );
 }
 
+function FinancialReportPanel({ financialInfo, loading, error, market }) {
+  if (market !== "ashare") {
+    return (
+      <div className="mt-4 rounded-2xl border bg-white p-4">
+        <div className="mb-2 flex items-center text-sm font-semibold text-slate-700">
+          财报信息
+          <InfoTip text="当前只接入 A 股财报摘要。后续如果需要，可以再扩展到美股或 Agent 统一财务数据层。" />
+        </div>
+        <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">当前市场暂未接入财报摘要。</div>
+      </div>
+    );
+  }
+
+  const reports = Array.isArray(financialInfo?.reports) ? [...financialInfo.reports].slice(0, 3).reverse() : [];
+  const metricRows = [
+    { label: "收入", key: "revenue", formatter: formatMillionValue },
+    { label: "收入增速", key: "revenueGrowth", formatter: formatPercentValue, trend: true },
+    { label: "归母净利润", key: "parentNetProfit", formatter: formatMillionValue },
+    { label: "归母净利润增速", key: "parentNetProfitGrowth", formatter: formatPercentValue, trend: true },
+    { label: "毛利率", key: "grossMargin", formatter: formatPercentValue },
+    { label: "净利率", key: "netMargin", formatter: formatPercentValue },
+  ];
+
+  return (
+    <div className="mt-4 rounded-2xl border bg-white p-4">
+      <div className="mb-3 flex items-center text-base font-semibold text-slate-700">
+        财报信息
+        <InfoTip text="数据来自东方财富 F10 财务分析页的主要指标接口。这里展示最近报告期的营业收入、收入增速、归母净利润、归母净利润增速、毛利率和净利率，金额统一换算为百万。" />
+      </div>
+      {loading ? (
+        <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">财报数据加载中</div>
+      ) : error ? (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700">{error}</div>
+      ) : reports.length ? (
+        <div className="rounded-2xl bg-slate-50 p-3">
+          <div className="mb-3 px-1 text-xs text-slate-500">始终展示最近 3 期，按时间从旧到新排列。</div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[760px] table-fixed text-sm">
+              <thead>
+                <tr className="border-b text-left text-slate-500">
+                  <th className="w-[160px] px-3 py-2 font-medium">指标</th>
+                  {reports.map((report, index) => (
+                    <th key={`${report.reportDate}-${index}`} className="px-3 py-2 font-medium">
+                      {report.reportName || "-"}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {metricRows.map((row) => (
+                  <tr key={row.key} className="border-b last:border-b-0">
+                    <td className="px-3 py-3 text-slate-700">{row.label}</td>
+                    {reports.map((report, index) => {
+                      const rawValue = report[row.key];
+                      const formattedValue = row.formatter(rawValue);
+                      const colorClass = row.trend
+                        ? Number(rawValue) >= 0
+                          ? "text-red-600"
+                          : "text-green-700"
+                        : "text-slate-800";
+                      return (
+                        <td key={`${report.reportDate}-${row.key}-${index}`} className={`px-3 py-3 font-semibold ${colorClass}`}>
+                          {formattedValue}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">暂无财报数据。</div>
+      )}
+    </div>
+  );
+}
+
 function buildTrendChecklist(rawRows) {
   if (!Array.isArray(rawRows) || rawRows.length < 80) {
     return { ready: false, summary: "历史数据不足", tradeAction: null, items: [] };
@@ -1560,109 +1590,6 @@ function TradeConclusionPanel({ rawRows }) {
             </div>
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-function TD9StatsTable({ rawRows }) {
-  const [page, setPage] = useState(0);
-  const [cycleFilter, setCycleFilter] = useState("all");
-  const pageSize = 5;
-  const cycles = useMemo(() => completedTD9Cycles(rawRows), [rawRows]);
-  const filteredCycles = useMemo(() => {
-    if (cycleFilter === "up") return cycles.filter((c) => c.type === "up");
-    if (cycleFilter === "down") return cycles.filter((c) => c.type === "down");
-    return cycles;
-  }, [cycles, cycleFilter]);
-
-  const totalPages = Math.max(1, Math.ceil(filteredCycles.length / pageSize));
-  const safePage = Math.min(page, totalPages - 1);
-  const visibleCycles = filteredCycles.slice(safePage * pageSize, safePage * pageSize + pageSize);
-
-  const visibleRows = useMemo(() => visibleCycles.map((cycle) => ({ cycle, bestInThisCycle: bestComboForSingleCycle(cycle) })), [visibleCycles]);
-
-  return (
-    <div className="mt-4 rounded-2xl border bg-white p-4">
-      <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div>
-          <div className="text-base font-semibold text-slate-800">9转周期内买卖统计</div>
-          <div className="text-xs text-slate-500">每行是一个完整 1~9 周期；第二列只展示该周期内部的最佳买卖点，不再展示历史周期胜率。</div>
-        </div>
-        <div className="flex items-center gap-2 text-xs text-slate-500">
-          <select value={cycleFilter} onChange={(e) => setCycleFilter(e.target.value)} className="rounded-xl border bg-white px-2 py-1 outline-none">
-            <option value="all">全部9转</option>
-            <option value="up">只看上涨</option>
-            <option value="down">只看下跌</option>
-          </select>
-          <span>
-            共 {filteredCycles.length} / {cycles.length} 个周期，第 {safePage + 1} / {totalPages} 页
-          </span>
-        </div>
-      </div>
-      <div className="overflow-x-auto rounded-xl border">
-        <table className="w-full min-w-[920px] table-fixed text-sm">
-          <thead>
-            <tr className="border-b bg-slate-50 text-left text-slate-600">
-              <th className="w-12 px-2 py-2">#</th>
-              <th className="w-12 px-2 py-2 text-center">涨跌</th>
-              <th className="w-[180px] px-2 py-2">开始日期 ~ 结束日期</th>
-              <th className="w-[210px] px-2 py-2">本周期最佳买卖点</th>
-              <th className="px-2 py-2">1~9转累计涨跌</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visibleRows.length === 0 ? (
-              <tr>
-                <td className="px-3 py-4 text-slate-500" colSpan={5}>暂无完成9转周期。</td>
-              </tr>
-            ) : (
-              visibleRows.map(({ cycle, bestInThisCycle }, idx) => {
-                const originalIndex = cycles.findIndex((c) => c.endIndex === cycle.endIndex && c.type === cycle.type);
-                const cycleNumber = originalIndex >= 0 ? cycles.length - originalIndex : filteredCycles.length - (safePage * pageSize + idx);
-                return (
-                  <tr key={`${cycle.endDate}-${idx}`} className="border-b last:border-0 hover:bg-slate-50">
-                    <td className="w-12 px-2 py-3 font-semibold text-slate-700">#{cycleNumber}</td>
-                    <td className="w-12 px-2 py-3 text-center">
-                      <span className={`inline-flex items-center justify-center text-lg font-bold ${cycle.type === "up" ? "text-red-600" : "text-green-700"}`} title={cycle.type === "up" ? "上涨9转周期" : "下跌9转周期"}>
-                        {cycle.type === "up" ? "▲" : "▼"}
-                      </span>
-                    </td>
-                    <td className="w-[190px] whitespace-nowrap px-2 py-3 text-xs text-slate-700">{cycle.startDate} ~ {cycle.endDate}</td>
-                    <td className="w-[210px] break-words px-2 py-3 text-xs leading-relaxed text-slate-700">
-                      {bestInThisCycle ? (
-                        <span>
-                          <span className="font-semibold text-blue-700">第{bestInThisCycle.buyTurn}转买</span>
-                          <span className="mx-1">/</span>
-                          <span className="font-semibold text-purple-700">第{bestInThisCycle.sellTurn}转卖</span>
-                          <span className="ml-2 text-slate-500">收益 {percentText(bestInThisCycle.ret)}</span>
-                          <div className="mt-1 text-[11px] text-slate-400">
-                            ({latestValid(bestInThisCycle.sellClose)} - {latestValid(bestInThisCycle.buyClose)}) / {latestValid(bestInThisCycle.buyClose)} = {percentText(bestInThisCycle.ret)}
-                          </div>
-                        </span>
-                      ) : (
-                        <span className="text-slate-500">该周期数据不足，无法计算。</span>
-                      )}
-                    </td>
-                    <td className="px-2 py-3 text-xs leading-relaxed">
-                      <div className="flex flex-wrap gap-1">
-                        {turnReturnsFromFirst(cycle).map((item) => (
-                          <span key={`${cycle.endDate}-${item.turn}`} className={`rounded-md bg-slate-50 px-1.5 py-0.5 ${Number.isFinite(item.ret) && item.ret >= 0 ? "text-red-600" : "text-green-700"}`} title={`第${item.turn}转相对第1转收盘价的累计涨跌幅`}>
-                            {item.turn}:{percentText(item.ret)}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
-      <div className="mt-3 flex justify-end gap-2">
-        <Button variant="outline" className="rounded-xl" disabled={safePage <= 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>上一页</Button>
-        <Button variant="outline" className="rounded-xl" disabled={safePage >= totalPages - 1} onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}>下一页</Button>
       </div>
     </div>
   );
@@ -2002,6 +1929,170 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
   );
 }
 
+function buildAgentPreviewReply(text, context) {
+  const query = String(text || "").trim();
+  const aCode = context?.ashare || "600519";
+  const usCode = context?.us || "AAPL";
+
+  if (/选股|筛选|找.*股票|推荐/.test(query)) {
+    return [
+      "我会把这个问题拆成三个条件：趋势结构、成交量确认、风险过滤。",
+      `当前可以先用 A股 ${aCode} 或美股 ${usCode} 做样例分析。`,
+      "接入模型和 iFinD MCP 后，这里会返回候选标的、筛选原因、排除原因和需要复核的数据点。",
+    ].join("\n");
+  }
+
+  if (/财报|ROE|利润|营收|现金流|基本面/.test(query)) {
+    return [
+      "这个问题需要财务和公告数据支持。",
+      "后续接入 iFinD MCP 后，我会优先查询财务摘要、利润表、现金流、股东结构和重大公告，再给出结论。",
+      "当前界面版先保留对话上下文，不直接生成未经数据校验的基本面判断。",
+    ].join("\n");
+  }
+
+  if (/九转|MACD|金叉|死叉|趋势|K线|技术/.test(query)) {
+    return [
+      "技术面问题可以优先结合当前图表里的九转、均线、MACD、断层和量价关系。",
+      "下一步接入后端后，我会读取当前页面的指标结果，并把它组织成偏强、偏弱、观察点和风险点。",
+      "这类输出适合做复盘，不适合当成确定性买卖信号。",
+    ].join("\n");
+  }
+
+  return [
+    "我可以按股票研究的方式处理这个问题。",
+    "第一步会识别标的和市场，第二步查询行情、公告、新闻或财务数据，第三步给出结构化分析。",
+    "当前是 Agent 对话界面原型，后续接入模型和 iFinD MCP 后会返回真实数据驱动的结果。",
+  ].join("\n");
+}
+
+function AgentChatPanel({ marketCodes }) {
+  const [messages, setMessages] = useState([
+    {
+      role: "assistant",
+      content:
+        "可以开始问股票相关问题。比如：分析一下贵州茅台最近的趋势，或者帮我筛选新能源里趋势转强的公司。",
+    },
+  ]);
+  const [input, setInput] = useState("");
+
+  const quickPrompts = [
+    "分析一下 600519 最近的趋势",
+    "帮我找短线转强的 A 股",
+    "解释一下当前 MACD 和九转信号",
+    "总结一下 MSFT 的技术面",
+  ];
+
+  function sendMessage(value = input) {
+    const text = String(value || "").trim();
+    if (!text) return;
+
+    const userMessage = { role: "user", content: text };
+    const assistantMessage = {
+      role: "assistant",
+      content: buildAgentPreviewReply(text, marketCodes),
+    };
+
+    setMessages((prev) => [...prev, userMessage, assistantMessage]);
+    setInput("");
+  }
+
+  return (
+    <div className="grid min-h-[640px] gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+      <aside className="rounded-2xl border bg-white p-4 shadow-sm">
+        <div className="text-sm font-semibold text-slate-700">研究上下文</div>
+        <div className="mt-4 space-y-3 text-sm">
+          <div className="rounded-xl bg-slate-50 p-3">
+            <div className="text-xs text-slate-500">A股代码</div>
+            <div className="mt-1 font-semibold text-slate-800">{marketCodes?.ashare || "600519"}</div>
+          </div>
+          <div className="rounded-xl bg-slate-50 p-3">
+            <div className="text-xs text-slate-500">美股代码</div>
+            <div className="mt-1 font-semibold text-slate-800">{marketCodes?.us || "AAPL"}</div>
+          </div>
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+            iFinD MCP 需要后端密钥接入。当前先保留为对话界面，避免把凭证暴露到浏览器。
+          </div>
+        </div>
+      </aside>
+
+      <section className="flex min-h-[640px] flex-col rounded-2xl border bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b px-5 py-4">
+          <div>
+            <div className="text-lg font-semibold text-slate-800">股票研究 Agent</div>
+            <div className="text-xs text-slate-500">对话草稿会保留在当前页面，刷新后清空。</div>
+          </div>
+          <div className="inline-flex items-center gap-2 rounded-full bg-slate-50 px-3 py-1 text-xs text-slate-500">
+            <Bot className="h-3.5 w-3.5" />
+            Preview
+          </div>
+        </div>
+
+        <div className="flex-1 space-y-4 overflow-y-auto bg-slate-50/70 px-5 py-5">
+          {messages.map((message, index) => {
+            const isUser = message.role === "user";
+            return (
+              <div key={`${message.role}-${index}`} className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
+                {!isUser && (
+                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white">
+                    <Bot className="h-4 w-4" />
+                  </div>
+                )}
+                <div
+                  className={`max-w-[760px] whitespace-pre-line rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${
+                    isUser
+                      ? "bg-slate-900 text-white"
+                      : "border border-slate-100 bg-white text-slate-700"
+                  }`}
+                >
+                  {message.content}
+                </div>
+                {isUser && (
+                  <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-slate-700 shadow-sm">
+                    <UserRound className="h-4 w-4" />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="border-t bg-white p-4">
+          <div className="mb-3 flex flex-wrap gap-2">
+            {quickPrompts.map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                onClick={() => sendMessage(prompt)}
+                className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600 hover:border-slate-300 hover:bg-white"
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-end gap-2 rounded-2xl border bg-slate-50 p-2">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
+              }}
+              rows={2}
+              placeholder="输入股票、行业、策略或财报问题"
+              className="max-h-40 min-h-12 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none placeholder:text-slate-400"
+            />
+            <Button type="button" onClick={() => sendMessage()} disabled={!input.trim()} className="h-10 rounded-xl px-3">
+              <Send className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export default function AShareTD9InteractiveChart() {
   const [market, setMarket] = useState("ashare");
   const [marketCodes, setMarketCodes] = useState({ ashare: "600519", us: "MSFT" });
@@ -2013,6 +2104,9 @@ export default function AShareTD9InteractiveChart() {
   const [unfilledOnly, setUnfilledOnly] = useState(true);
   const [rawRows, setRawRows] = useState([]);
   const [meta, setMeta] = useState({ code: "", name: "" });
+  const [financialInfo, setFinancialInfo] = useState(null);
+  const [financialLoading, setFinancialLoading] = useState(false);
+  const [financialError, setFinancialError] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [chartZoom, setChartZoom] = useState(1);
@@ -2041,6 +2135,8 @@ export default function AShareTD9InteractiveChart() {
     if (market === "agent") return;
     setLoading(true);
     setError("");
+    setFinancialError("");
+    setFinancialInfo(null);
     try {
       const result = market === "ashare"
         ? await (() => {
@@ -2073,11 +2169,34 @@ export default function AShareTD9InteractiveChart() {
         name: result.name,
         marketCap: result.marketCap || null,
         floatMarketCap: result.floatMarketCap || null,
+        peRatio: Number.isFinite(result.peRatio) ? result.peRatio : null,
       });
+
+      if (market === "ashare") {
+        setFinancialLoading(true);
+        try {
+          const financeRes = await fetch(`/api/ashare-finance?code=${encodeURIComponent(result.code || currentCode)}`, {
+            method: "GET",
+            cache: "no-store",
+          });
+          const financePayload = await financeRes.json().catch(() => null);
+          if (!financeRes.ok) {
+            throw new Error(financePayload?.error || `HTTP ${financeRes.status}`);
+          }
+          setFinancialInfo(financePayload);
+        } catch (financeError) {
+          setFinancialError(financeError instanceof Error ? financeError.message : "财报数据加载失败");
+        } finally {
+          setFinancialLoading(false);
+        }
+      } else {
+        setFinancialLoading(false);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载失败");
       setRawRows([]);
       setMeta({ code: currentCode, name: "" });
+      setFinancialLoading(false);
     } finally {
       setLoading(false);
     }
@@ -2108,6 +2227,8 @@ export default function AShareTD9InteractiveChart() {
                     onClick={() => {
                       setMarket(tab.value);
                       setError("");
+                      setFinancialError("");
+                      setFinancialInfo(null);
                       if (tab.value === "us") {
                         setMarketCodes((prev) => ({ ...prev, us: prev.us || "MSFT" }));
                         setRawRows([]);
@@ -2132,7 +2253,7 @@ export default function AShareTD9InteractiveChart() {
                 ? "输入股票代码后查询。默认只显示当前正在形成的九转。"
                 : market === "us"
                   ? "输入美股代码后查询。当前使用无 key 历史行情。"
-                  : "Agent 页签已预留，后续再接入智能分析工作流。"}
+                  : "和 Agent 讨论股票、行业、策略与财报问题。"}
             </p>
           </div>
           <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
@@ -2228,6 +2349,14 @@ export default function AShareTD9InteractiveChart() {
                       <span>总市值</span>
                       <span>{formatNumber(meta.marketCap)}</span>
                     </div>
+                    <div className="flex justify-between">
+                      <span>流通市值</span>
+                      <span>{formatNumber(meta.floatMarketCap)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>市盈</span>
+                      <span>{Number.isFinite(meta.peRatio) ? meta.peRatio.toFixed(2) : "-"}</span>
+                    </div>
                   </div>
                 )}
                 <TrendPredictionPanel prediction={prediction} />
@@ -2260,7 +2389,12 @@ export default function AShareTD9InteractiveChart() {
                   {rows.length > 0 ? (
                     <>
                       <Chart rows={rows} visibleGaps={visibleGaps} showGaps={showGaps} zoom={chartZoom} />
-                      <TD9StatsTable rawRows={rawRows} />
+                      <FinancialReportPanel
+                        financialInfo={financialInfo}
+                        loading={financialLoading}
+                        error={financialError}
+                        market={market}
+                      />
                     </>
                   ) : (
                     <div className="rounded-2xl bg-slate-100 p-12 text-center text-slate-500">暂无数据</div>
@@ -2268,20 +2402,8 @@ export default function AShareTD9InteractiveChart() {
                 </CardContent>
               </Card>
           </div>
-        ) : market === "us" ? (
-          <Card className="rounded-2xl">
-            <CardContent className="p-10 text-center">
-              <div className="text-2xl font-semibold text-slate-800">美股页签已创建</div>
-              <p className="mt-3 text-sm text-slate-500">当前只完成了顶部 Tab 和页面切换，占位页已就绪，后续再接入真实的美股行情与指标逻辑。</p>
-            </CardContent>
-          </Card>
         ) : (
-          <Card className="rounded-2xl">
-            <CardContent className="p-10 text-center">
-              <div className="text-2xl font-semibold text-slate-800">Agent 页签已创建</div>
-              <p className="mt-3 text-sm text-slate-500">当前只完成了顶部 Tab 和页面切换，占位页已就绪，后续可以在这里接入选股、研报总结、策略问答等 Agent 工作流。</p>
-            </CardContent>
-          </Card>
+          <AgentChatPanel marketCodes={marketCodes} />
         )}
         <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-sm">
           说明：这是学习/研究用图表，不构成投资建议。断层基于已拉取的完整历史 K 线计算，再映射到当前显示区间；规则按相邻 K 线高低价判断：向上断层为当日最低价高于前一根最高价，向下断层为当日最高价低于前一根最低价；默认只显示未回补断层。
