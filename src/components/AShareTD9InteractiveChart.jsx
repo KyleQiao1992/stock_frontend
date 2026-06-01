@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
-  BarChart3,
   Bot,
   Eye,
   EyeOff,
@@ -2244,17 +2243,6 @@ export default function AShareTD9InteractiveChart() {
                 );
               })}
             </div>
-            <div className="flex items-center gap-2 text-2xl font-semibold">
-              <BarChart3 className="h-6 w-6" />
-              {market === "ashare" ? "A股 K线" : market === "us" ? "美股 K线" : "Agent"}
-            </div>
-            <p className="mt-1 text-sm text-slate-500">
-              {market === "ashare"
-                ? "输入股票代码后查询。默认只显示当前正在形成的九转。"
-                : market === "us"
-                  ? "输入美股代码后查询。当前使用无 key 历史行情。"
-                  : "和 Agent 讨论股票、行业、策略与财报问题。"}
-            </p>
           </div>
           <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
             <div className="col-span-2 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 md:w-44">
