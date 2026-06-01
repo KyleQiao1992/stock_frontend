@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Search,
   Send,
+  Star,
   TrendingUp,
   UserRound,
 } from "lucide-react";
@@ -30,6 +31,11 @@ const MARKET_TABS = [
   { value: "ashare", label: "A股" },
   { value: "us", label: "美股" },
   { value: "agent", label: "Agent" },
+];
+
+const WATCHLIST_STYLE_OPTIONS = [
+  { value: "cards", label: "自选" },
+  { value: "rows", label: "股票清单" },
 ];
 
 function isSixDigitCode(value) {
@@ -683,6 +689,24 @@ function formatMillionValue(value) {
 function formatPercentValue(value) {
   if (!Number.isFinite(value)) return "-";
   return `${value.toFixed(2)}%`;
+}
+
+function normalizeWatchlistCodes(input, market) {
+  const parts = String(input || "")
+    .split(/[,\n，\s、;；]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  const seen = new Set();
+  const normalized = [];
+  for (const part of parts) {
+    const code = market === "ashare" ? onlyDigits(part) : normalizeUsSymbol(part);
+    const valid = market === "ashare" ? isSixDigitCode(code) : isValidUsSymbol(code);
+    if (!valid || seen.has(code)) continue;
+    seen.add(code);
+    normalized.push(code);
+  }
+  return normalized;
 }
 
 function calcGaps(rows) {
@@ -1626,6 +1650,12 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
 
   const safeRows = useMemo(() => rows.filter((r) => [r.open, r.close, r.high, r.low, r.volume].every(Number.isFinite)), [rows]);
 
+  useEffect(() => {
+    if (!scrollRef.current) return;
+    const container = scrollRef.current;
+    container.scrollLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+  }, [width, safeRows.length]);
+
   const chart = useMemo(() => {
     if (safeRows.length === 0) return null;
     const margin = { top: 40, right: 72, bottom: 36, left: 58 };
@@ -2092,9 +2122,155 @@ function AgentChatPanel({ marketCodes }) {
   );
 }
 
+function WatchlistPanel({
+  market,
+  inputValue,
+  items,
+  activeCode,
+  loading,
+  error,
+  style,
+  onInputChange,
+  onRefresh,
+  onStyleChange,
+  onPick,
+  onUpdateNote,
+}) {
+  const isAshare = market === "ashare";
+  const title = isAshare ? "A股自选" : "美股自选";
+  const helper = isAshare
+    ? "支持逗号、空格、换行分隔；一行一个 A 股代码也可以。"
+    : "支持逗号、空格、换行分隔；一行一个美股代码也可以。";
+  const placeholder = isAshare ? "例如 600519,000001\n000001\n300750" : "例如 MSFT,AAPL\nNVDA\nTSLA";
+
+  return (
+    <Card className="rounded-2xl border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.96))] shadow-sm xl:sticky xl:top-4 xl:h-[calc(100vh-2rem)] xl:max-h-[1200px]">
+      <CardContent className="flex h-full min-h-0 flex-col p-4">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <div className="text-lg font-semibold text-slate-900">{title}</div>
+            <div className="mt-1 text-xs leading-5 text-slate-500">{helper}</div>
+          </div>
+          <div className="inline-flex rounded-full border border-slate-200 bg-white p-1">
+            {WATCHLIST_STYLE_OPTIONS.map((option) => {
+              const active = style === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`rounded-full px-3 py-1 text-xs transition ${active ? "bg-slate-900 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"}`}
+                  onClick={() => onStyleChange(option.value)}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+          <textarea
+            value={inputValue}
+            onChange={(e) => onInputChange(e.target.value)}
+            placeholder={placeholder}
+            className="min-h-20 w-full resize-none bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
+          />
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <div className="text-[11px] text-slate-400">支持逗号、空格、换行分隔，也支持一行一个代码</div>
+            <Button onClick={onRefresh} disabled={loading} className="rounded-xl">
+              <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              {loading ? "生成中" : "生成列表"}
+            </Button>
+          </div>
+        </div>
+
+        {error && (
+          <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            {error}
+          </div>
+        )}
+
+        <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+          <div className="space-y-3">
+          {items.length > 0 ? (
+            items.map((item, index) => {
+              const active = item.code === activeCode;
+              const cardStyle = style === "cards";
+              return (
+                <div
+                  key={item.code}
+                  className={`overflow-hidden rounded-2xl border text-left transition ${cardStyle
+                    ? active
+                      ? "border-slate-900 bg-slate-900 text-white shadow-lg shadow-slate-200"
+                      : "border-slate-200 bg-white/95 text-slate-900 shadow-sm hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
+                    : active
+                      ? "border-emerald-300 bg-emerald-50 text-slate-900 shadow-sm"
+                      : "border-slate-200 bg-white text-slate-900 hover:border-slate-300 hover:bg-slate-50"
+                  }`}
+                >
+                  <button type="button" onClick={() => onPick(item.code)} className={`block w-full ${cardStyle ? "p-4" : "p-3"}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className={`inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-[11px] font-medium ${active ? (cardStyle ? "bg-white/15 text-white ring-1 ring-white/20" : "bg-emerald-100 text-emerald-700") : "bg-slate-100 text-slate-500"}`}>
+                          <Star className="h-3 w-3" />
+                          #{String(index + 1).padStart(2, "0")}
+                        </div>
+                        <div className={`mt-3 font-mono text-lg font-semibold ${active && cardStyle ? "text-white" : "text-slate-900"}`}>
+                          {item.code}
+                        </div>
+                        <div className={`mt-1 text-sm ${active && cardStyle ? "text-slate-200" : "text-slate-500"}`}>
+                          {item.name || "名称加载中"}
+                        </div>
+                      </div>
+                      {active && (
+                        <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${cardStyle ? "bg-emerald-400/20 text-emerald-100 ring-1 ring-emerald-300/30" : "bg-white text-emerald-700 ring-1 ring-emerald-200"}`}>
+                          当前查看
+                        </div>
+                      )}
+                    </div>
+                  </button>
+
+                  {!cardStyle && (
+                    <div className="px-4 pb-4">
+                      <div className={`rounded-xl border px-3 py-2 ${active ? "border-slate-200 bg-white/90" : "border-slate-100 bg-slate-50/90"}`}>
+                        <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                          Remark
+                        </div>
+                        <input
+                          value={item.note}
+                          onChange={(e) => onUpdateNote(item.code, e.target.value)}
+                          placeholder="例如：白酒龙头 / 财报后观察 / 等突破"
+                          className="w-full bg-transparent text-sm outline-none placeholder:text-slate-300"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+              输入股票代码后，这里会生成收藏卡片。
+            </div>
+          )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function AShareTD9InteractiveChart() {
   const [market, setMarket] = useState("ashare");
   const [marketCodes, setMarketCodes] = useState({ ashare: "600519", us: "MSFT" });
+  const [watchlistInputMap, setWatchlistInputMap] = useState({
+    ashare: "600519,000001,300750",
+    us: "MSFT,AAPL,NVDA",
+  });
+  const [watchlistItemsMap, setWatchlistItemsMap] = useState({ ashare: [], us: [] });
+  const [watchlistLoading, setWatchlistLoading] = useState(false);
+  const [watchlistError, setWatchlistError] = useState("");
+  const [watchlistStyle, setWatchlistStyle] = useState("cards");
   const [period, setPeriod] = useState("101");
   const [adjust, setAdjust] = useState("1");
   const [displayCount, setDisplayCount] = useState(120);
@@ -2129,9 +2305,60 @@ export default function AShareTD9InteractiveChart() {
   const latestColor = latest && latest.close >= latest.open ? "text-red-600" : "text-green-700";
   const prediction = useMemo(() => buildTrendPrediction(rawRows), [rawRows]);
   const currentCode = market === "us" ? marketCodes.us : marketCodes.ashare;
+  const watchlistInput = market === "us" ? watchlistInputMap.us : watchlistInputMap.ashare;
+  const watchlistItems = market === "us" ? watchlistItemsMap.us : watchlistItemsMap.ashare;
 
-  async function load() {
+  async function loadWatchlist(targetMarket = market) {
+    if (targetMarket === "agent") return;
+    const rawInput = targetMarket === "us" ? watchlistInputMap.us : watchlistInputMap.ashare;
+    const codes = normalizeWatchlistCodes(rawInput, targetMarket);
+
+    if (!codes.length) {
+      setWatchlistError(targetMarket === "ashare" ? "请先输入至少一个 6 位 A 股代码。" : "请先输入至少一个有效的美股代码。");
+      setWatchlistItemsMap((prev) => ({ ...prev, [targetMarket]: [] }));
+      return;
+    }
+
+    setWatchlistLoading(true);
+    setWatchlistError("");
+    try {
+      const previousItems = watchlistItemsMap[targetMarket] || [];
+      const noteByCode = new Map(previousItems.map((item) => [item.code, item.note || ""]));
+      const activeMeta = targetMarket === market ? meta : null;
+      const results = await Promise.allSettled(
+        codes.map(async (code) => {
+          if (activeMeta?.code === code && activeMeta?.name) {
+            return { code, name: activeMeta.name, note: noteByCode.get(code) || "" };
+          }
+          const detail = targetMarket === "ashare"
+            ? await fetchAshareKline({ code, period, adjust, limit: 60 })
+            : await fetchUsKline({ symbol: code, period, adjust, limit: 60 });
+          return {
+            code: detail.code || code,
+            name: detail.name || code,
+            note: noteByCode.get(code) || "",
+          };
+        }),
+      );
+
+      const nextItems = results
+        .filter((item) => item.status === "fulfilled")
+        .map((item) => item.value);
+      const failedCodes = results
+        .map((item, index) => ({ item, code: codes[index] }))
+        .filter(({ item }) => item.status === "rejected")
+        .map(({ code }) => code);
+
+      setWatchlistItemsMap((prev) => ({ ...prev, [targetMarket]: nextItems }));
+      setWatchlistError(failedCodes.length ? `以下代码暂时未能加载名称：${failedCodes.join("、")}` : "");
+    } finally {
+      setWatchlistLoading(false);
+    }
+  }
+
+  async function load(overrideCode) {
     if (market === "agent") return;
+    const targetCode = overrideCode || currentCode;
     setLoading(true);
     setError("");
     setFinancialError("");
@@ -2139,7 +2366,7 @@ export default function AShareTD9InteractiveChart() {
     try {
       const result = market === "ashare"
         ? await (() => {
-          const normalized = String(currentCode || "").trim();
+          const normalized = String(targetCode || "").trim();
           if (!isSixDigitCode(normalized)) {
             throw new Error("请输入 6 位 A 股代码，例如 600519、000001、300750。");
           }
@@ -2151,7 +2378,7 @@ export default function AShareTD9InteractiveChart() {
           });
         })()
         : await (() => {
-          const normalized = normalizeUsSymbol(currentCode);
+          const normalized = normalizeUsSymbol(targetCode);
           if (!isValidUsSymbol(normalized)) {
             throw new Error("请输入有效的美股代码，例如 AAPL、MSFT、NVDA、BRK.B。");
           }
@@ -2194,7 +2421,7 @@ export default function AShareTD9InteractiveChart() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载失败");
       setRawRows([]);
-      setMeta({ code: currentCode, name: "" });
+      setMeta({ code: targetCode, name: "" });
       setFinancialLoading(false);
     } finally {
       setLoading(false);
@@ -2209,6 +2436,15 @@ export default function AShareTD9InteractiveChart() {
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [market]);
+
+  useEffect(() => {
+    if (market === "agent" || watchlistItems.length > 0) return undefined;
+    const timer = window.setTimeout(() => {
+      loadWatchlist(market);
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [market, watchlistItems.length]);
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 text-slate-900">
@@ -2307,8 +2543,8 @@ export default function AShareTD9InteractiveChart() {
         )}
 
         {market !== "agent" ? (
-          <div className="grid gap-4 md:grid-cols-4">
-            <Card className="rounded-2xl md:col-span-1">
+          <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)_320px]">
+            <Card className="rounded-2xl">
               <CardContent className="p-4">
                 <div className="text-sm text-slate-500">当前标的</div>
                 <div className="mt-1 text-2xl font-semibold">{meta.name || "-"}</div>
@@ -2353,7 +2589,7 @@ export default function AShareTD9InteractiveChart() {
                 </div>
               </CardContent>
             </Card>
-            <Card className="rounded-2xl md:col-span-3">
+            <Card className="rounded-2xl">
                 <CardContent className="p-4">
                   <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                     <div>
@@ -2389,6 +2625,31 @@ export default function AShareTD9InteractiveChart() {
                   )}
                 </CardContent>
               </Card>
+            <WatchlistPanel
+              market={market}
+              inputValue={watchlistInput}
+              items={watchlistItems}
+              activeCode={meta.code || currentCode}
+              loading={watchlistLoading}
+              error={watchlistError}
+              style={watchlistStyle}
+              onInputChange={(value) => setWatchlistInputMap((prev) => ({ ...prev, [market]: value }))}
+              onRefresh={() => loadWatchlist()}
+              onStyleChange={setWatchlistStyle}
+              onPick={(code) => {
+                setMarketCodes((prev) => ({ ...prev, [market]: code }));
+                setError("");
+                window.setTimeout(() => {
+                  if (market !== "agent") load(code);
+                }, 0);
+              }}
+              onUpdateNote={(code, note) => {
+                setWatchlistItemsMap((prev) => ({
+                  ...prev,
+                  [market]: (prev[market] || []).map((item) => (item.code === code ? { ...item, note } : item)),
+                }));
+              }}
+            />
           </div>
         ) : (
           <AgentChatPanel marketCodes={marketCodes} />
