@@ -5,10 +5,15 @@ import {
   Eye,
   EyeOff,
   Info,
+  Maximize2,
+  Minimize2,
+  Minus,
+  Pencil,
   RefreshCw,
   Search,
   Send,
   Star,
+  Trash2,
   TrendingUp,
   UserRound,
 } from "lucide-react";
@@ -36,6 +41,12 @@ const MARKET_TABS = [
 const WATCHLIST_STYLE_OPTIONS = [
   { value: "cards", label: "自选" },
   { value: "rows", label: "股票清单" },
+];
+
+const WAVE_SENSITIVITY_OPTIONS = [
+  { value: "soft", label: "灵敏" },
+  { value: "standard", label: "标准" },
+  { value: "strict", label: "严格" },
 ];
 
 function isSixDigitCode(value) {
@@ -719,6 +730,12 @@ function getErrorMessage(error, fallback = "操作失败，请稍后重试。") 
   return fallback;
 }
 
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function calcGaps(rows) {
   const gaps = [];
   for (let i = 1; i < rows.length; i += 1) {
@@ -1089,6 +1106,384 @@ function calcATRState(rows, period = 14) {
     label = "低波动，可能蓄势";
   }
   return { ready: true, state, atr, atrPct, text: `ATR14 ${latestValid(atr)}，约 ${percentText(atrPct)}，${label}` };
+}
+
+function calcATRPercent(rows, period = 14) {
+  if (!Array.isArray(rows) || rows.length <= period) return null;
+  const trs = [];
+  for (let i = rows.length - period; i < rows.length; i += 1) {
+    const curr = rows[i];
+    const prev = rows[i - 1];
+    if (!curr || !prev) continue;
+    const tr = Math.max(curr.high - curr.low, Math.abs(curr.high - prev.close), Math.abs(curr.low - prev.close));
+    if (Number.isFinite(tr)) trs.push(tr);
+  }
+  if (!trs.length) return null;
+  const atr = trs.reduce((a, b) => a + b, 0) / trs.length;
+  const close = rows[rows.length - 1]?.close;
+  if (!Number.isFinite(atr) || !Number.isFinite(close) || close === 0) return null;
+  return atr / close;
+}
+
+function getWaveOptions(mode, rows) {
+  const configs = {
+    soft: { pivotSpan: 2, minMovePct: 0.04, maxPivots: 16 },
+    standard: { pivotSpan: 3, minMovePct: 0.07, maxPivots: 14 },
+    strict: { pivotSpan: 4, minMovePct: 0.1, maxPivots: 12 },
+  };
+  const base = configs[mode] || configs.standard;
+  const atrPct = calcATRPercent(rows, 14);
+  const adaptiveMinMovePct = Number.isFinite(atrPct)
+    ? Math.max(base.minMovePct, Math.min(0.18, atrPct * 1.35))
+    : base.minMovePct;
+  return {
+    ...base,
+    minMovePct: adaptiveMinMovePct,
+  };
+}
+
+function buildWavePivotCandidates(rows, pivotSpan) {
+  const candidates = [];
+  if (!Array.isArray(rows) || rows.length < pivotSpan * 2 + 1) return candidates;
+
+  for (let i = pivotSpan; i < rows.length - pivotSpan; i += 1) {
+    const curr = rows[i];
+    if (!curr) continue;
+    let isHigh = true;
+    let isLow = true;
+    let strongerHigh = false;
+    let strongerLow = false;
+
+    for (let offset = 1; offset <= pivotSpan; offset += 1) {
+      const left = rows[i - offset];
+      const right = rows[i + offset];
+      if (!left || !right) {
+        isHigh = false;
+        isLow = false;
+        break;
+      }
+      if (curr.high < left.high || curr.high < right.high) isHigh = false;
+      if (curr.low > left.low || curr.low > right.low) isLow = false;
+      if (curr.high > left.high || curr.high > right.high) strongerHigh = true;
+      if (curr.low < left.low || curr.low < right.low) strongerLow = true;
+    }
+
+    if (isHigh && strongerHigh) {
+      candidates.push({ index: i, type: "high", price: curr.high, date: curr.date });
+    }
+    if (isLow && strongerLow) {
+      candidates.push({ index: i, type: "low", price: curr.low, date: curr.date });
+    }
+  }
+
+  return candidates.sort((a, b) => a.index - b.index || (a.type === "low" ? -1 : 1));
+}
+
+function compressWavePivots(candidates, minMovePct) {
+  const pivots = [];
+  for (const candidate of candidates) {
+    const last = pivots[pivots.length - 1];
+    if (!last) {
+      pivots.push(candidate);
+      continue;
+    }
+
+    if (candidate.type === last.type) {
+      const replaceHigh = candidate.type === "high" && candidate.price >= last.price;
+      const replaceLow = candidate.type === "low" && candidate.price <= last.price;
+      if (replaceHigh || replaceLow) pivots[pivots.length - 1] = candidate;
+      continue;
+    }
+
+    const movePct = last.price === 0 ? 0 : Math.abs(candidate.price - last.price) / Math.abs(last.price);
+    if (movePct < minMovePct) continue;
+    pivots.push(candidate);
+  }
+  return pivots;
+}
+
+function detectWavePivots(rows, mode = "standard") {
+  const options = getWaveOptions(mode, rows);
+  const candidates = buildWavePivotCandidates(rows, options.pivotSpan);
+  const pivots = compressWavePivots(candidates, options.minMovePct);
+  return {
+    pivots: pivots.slice(-options.maxPivots),
+    options,
+  };
+}
+
+function describeWaveConfidence(score) {
+  if (score >= 88) return "高";
+  if (score >= 72) return "中";
+  return "低";
+}
+
+function inFibNeighborhood(value, targets, tolerance = 0.06) {
+  if (!Number.isFinite(value)) return false;
+  return targets.some((target) => Math.abs(value - target) <= tolerance);
+}
+
+function buildImpulseWave(pivots, direction) {
+  if (!Array.isArray(pivots) || pivots.length !== 6) return null;
+  const expected = direction === "bull" ? ["low", "high", "low", "high", "low", "high"] : ["high", "low", "high", "low", "high", "low"];
+  if (pivots.some((pivot, index) => pivot.type !== expected[index])) return null;
+
+  const prices = pivots.map((item) => item.price);
+  const len1 = Math.abs(prices[1] - prices[0]);
+  const len3 = Math.abs(prices[3] - prices[2]);
+  const len5 = Math.abs(prices[5] - prices[4]);
+  const upward = direction === "bull";
+  const retrace2 = len1 === 0 ? null : Math.abs(prices[1] - prices[2]) / len1;
+  const retrace4 = len3 === 0 ? null : Math.abs(prices[3] - prices[4]) / len3;
+  const ext3 = len1 === 0 ? null : len3 / len1;
+
+  const rule2 = upward ? prices[2] > prices[0] : prices[2] < prices[0];
+  const rule3 = len3 >= Math.min(len1, len5);
+  const rule4 = upward ? prices[4] > prices[1] : prices[4] < prices[1];
+  const extension = upward ? prices[3] > prices[1] && prices[5] > prices[3] : prices[3] < prices[1] && prices[5] < prices[3];
+  const higherLow = upward ? prices[4] > prices[2] : prices[4] < prices[2];
+  const fib2 = inFibNeighborhood(retrace2, [0.5, 0.618], 0.08);
+  const fib3 = inFibNeighborhood(ext3, [1.618, 2.618], 0.2);
+  const fib4 = inFibNeighborhood(retrace4, [0.236, 0.382], 0.08);
+
+  const checks = [
+    {
+      key: "rule2",
+      label: upward ? "2浪未跌破1浪起点" : "2浪未升破1浪起点",
+      ok: rule2,
+    },
+    {
+      key: "rule3",
+      label: "3浪不是最短推动浪",
+      ok: rule3,
+    },
+    {
+      key: "rule4",
+      label: upward ? "4浪未进入1浪价格区间" : "4浪未进入1浪价格区间",
+      ok: rule4,
+    },
+    {
+      key: "extension",
+      label: upward ? "推动高点持续抬升" : "推动低点持续下移",
+      ok: extension,
+    },
+    {
+      key: "structure",
+      label: upward ? "调整低点逐步抬高" : "反弹高点逐步降低",
+      ok: higherLow,
+    },
+    {
+      key: "fib2",
+      label: "2浪回撤接近 50% / 61.8%",
+      ok: fib2,
+    },
+    {
+      key: "fib3",
+      label: "3浪延展接近 161.8% / 261.8%",
+      ok: fib3,
+    },
+    {
+      key: "fib4",
+      label: "4浪回撤接近 23.6% / 38.2%",
+      ok: fib4,
+    },
+  ];
+
+  const score = checks.reduce((acc, item) => acc + (item.ok ? (item.key.startsWith("fib") ? 10 : 14) : 0), 0);
+  if (checks.filter((item) => item.ok).length < 4 || !rule2 || !rule3 || !rule4) return null;
+
+  const labels = upward ? ["起", "1", "2", "3", "4", "5"] : ["起", "A", "B", "C", "D", "E"];
+  return {
+    kind: upward ? "bullImpulse" : "bearImpulse",
+    family: "impulse",
+    direction,
+    title: upward ? "牛市推动浪" : "熊市推动浪",
+    score,
+    confidence: describeWaveConfidence(score),
+    pivots,
+    labels,
+    invalidationPrice: upward ? prices[4] : prices[4],
+    checks,
+    metrics: { retrace2, retrace4, ext3 },
+    summary: upward
+      ? `疑似牛市 1-5 推动浪，2浪回撤 ${percentText(retrace2 || 0)}，3浪约为1浪的 ${latestValid(ext3, 2)} 倍。`
+      : `疑似熊市 A-E 推动浪，B浪回撤 ${percentText(retrace2 || 0)}，C浪约为A浪的 ${latestValid(ext3, 2)} 倍。`,
+  };
+}
+
+function buildCorrectiveWave(pivots, direction, style = direction === "down" ? "bullCorrection" : "bearRebound") {
+  if (!Array.isArray(pivots) || pivots.length !== 4) return null;
+  const expected = direction === "down" ? ["high", "low", "high", "low"] : ["low", "high", "low", "high"];
+  if (pivots.some((pivot, index) => pivot.type !== expected[index])) return null;
+
+  const prices = pivots.map((item) => item.price);
+  const downward = direction === "down";
+  const ruleA = downward ? prices[1] < prices[0] : prices[1] > prices[0];
+  const ruleB = downward ? prices[2] < prices[0] : prices[2] > prices[0];
+  const ruleC = downward ? prices[3] < prices[1] : prices[3] > prices[1];
+  const retraceB = downward
+    ? prices[0] - prices[2] < prices[0] - prices[1]
+    : prices[2] - prices[0] < prices[1] - prices[0];
+  const lenA = Math.abs(prices[1] - prices[0]);
+  const lenC = Math.abs(prices[3] - prices[2]);
+  const ratioCA = lenA === 0 ? null : lenC / lenA;
+  const fibC = Number.isFinite(ratioCA) && ratioCA >= 0.618 && ratioCA <= 1.618;
+
+  const checks = [
+    { key: "ruleA", label: downward ? "A浪向下展开" : "A浪向上展开", ok: ruleA },
+    { key: "ruleB", label: downward ? "B浪未突破起点" : "B浪未跌破起点", ok: ruleB },
+    { key: "ruleC", label: downward ? "C浪跌破A浪低点" : "C浪突破A浪高点", ok: ruleC },
+    { key: "retraceB", label: downward ? "B浪回撤幅度受控" : "2浪回撤幅度受控", ok: retraceB },
+    { key: "fibC", label: downward ? "C浪长度落在 A浪 的 61.8%-161.8%" : "3浪长度落在 1浪 的 61.8%-161.8%", ok: fibC },
+  ];
+  const score = checks.reduce((acc, item) => acc + (item.ok ? (item.key === "fibC" ? 15 : 20) : 0), 0);
+  if (checks.filter((item) => item.ok).length < 3 || !ruleA || !ruleB || !ruleC) return null;
+
+  const labels = style === "bullCorrection" ? ["5", "a", "b", "c"] : ["E", "1", "2", "3"];
+  return {
+    kind: style === "bullCorrection" ? "abcDown" : "bearRebound",
+    family: "correction",
+    direction: downward ? "bear" : "bull",
+    title: style === "bullCorrection" ? "牛市调整浪" : "熊市反弹浪",
+    score,
+    confidence: describeWaveConfidence(score),
+    pivots,
+    labels,
+    invalidationPrice: downward ? prices[2] : prices[2],
+    checks,
+    metrics: { ratioCA },
+    summary: downward
+      ? `疑似牛市 a-b-c 调整，C/A 约 ${latestValid(ratioCA, 2)}，B 浪高点 ${latestValid(prices[2])} 为关键失效位。`
+      : `疑似熊市 1-2-3 反弹，3/1 约 ${latestValid(ratioCA, 2)}，2 浪低点 ${latestValid(prices[2])}。`,
+  };
+}
+
+function buildBullCycle(pivots) {
+  if (!Array.isArray(pivots) || pivots.length !== 9) return null;
+  const impulse = buildImpulseWave(pivots.slice(0, 6), "bull");
+  const correction = buildCorrectiveWave(pivots.slice(5, 9), "down", "bullCorrection");
+  if (!impulse || !correction) return null;
+
+  const cAboveWave1Start = pivots[8].price > pivots[0].price;
+  if (!cAboveWave1Start) return null;
+
+  const checks = [
+    ...impulse.checks,
+    ...correction.checks,
+    {
+      key: "cAboveStart",
+      label: "c浪终点高于1浪起点",
+      ok: cAboveWave1Start,
+    },
+  ];
+
+  const score = Math.min(100, impulse.score + correction.score + 8);
+  return {
+    kind: "bullCycle",
+    family: "cycle",
+    direction: "bull",
+    title: "牛市 8 浪周期",
+    score,
+    confidence: describeWaveConfidence(score),
+    pivots,
+    labels: ["起", "1", "2", "3", "4", "5", "a", "b", "c"],
+    invalidationPrice: pivots[8].price,
+    checks,
+    summary: `识别到牛市 1-5 + a-b-c 结构；c浪终点 ${latestValid(pivots[8].price)}，仍高于1浪起点 ${latestValid(pivots[0].price)}。`,
+  };
+}
+
+function buildBearCycle(pivots) {
+  if (!Array.isArray(pivots) || pivots.length !== 9) return null;
+  const impulse = buildImpulseWave(pivots.slice(0, 6), "bear");
+  const rebound = buildCorrectiveWave(pivots.slice(5, 9), "up", "bearRebound");
+  if (!impulse || !rebound) return null;
+
+  const checks = [...impulse.checks, ...rebound.checks];
+  const score = Math.min(100, impulse.score + rebound.score + 5);
+  return {
+    kind: "bearCycle",
+    family: "cycle",
+    direction: "bear",
+    title: "熊市 8 浪周期",
+    score,
+    confidence: describeWaveConfidence(score),
+    pivots,
+    labels: ["起", "A", "B", "C", "D", "E", "1", "2", "3"],
+    invalidationPrice: pivots[8].price,
+    checks,
+    summary: `识别到熊市 A-E + 1-3 结构；当前为3浪反弹段，终点 ${latestValid(pivots[8].price)}。`,
+  };
+}
+
+function detectElliottWave(rows, mode = "standard") {
+  if (!Array.isArray(rows) || rows.length < 30) {
+    return {
+      ready: false,
+      message: "当前显示区间太短，无法稳定识别波浪结构。",
+      pivots: [],
+      candidates: [],
+      selected: null,
+      options: getWaveOptions(mode, rows),
+    };
+  }
+
+  const { pivots, options } = detectWavePivots(rows, mode);
+  const candidates = [];
+
+  for (let i = 0; i <= pivots.length - 9; i += 1) {
+    const sample = pivots.slice(i, i + 9);
+    const bullCycle = buildBullCycle(sample);
+    const bearCycle = buildBearCycle(sample);
+    if (bullCycle) candidates.push(bullCycle);
+    if (bearCycle) candidates.push(bearCycle);
+  }
+
+  for (let i = 0; i <= pivots.length - 6; i += 1) {
+    const sample = pivots.slice(i, i + 6);
+    const bull = buildImpulseWave(sample, "bull");
+    const bear = buildImpulseWave(sample, "bear");
+    if (bull) candidates.push(bull);
+    if (bear) candidates.push(bear);
+  }
+
+  for (let i = 0; i <= pivots.length - 4; i += 1) {
+    const sample = pivots.slice(i, i + 4);
+    const down = buildCorrectiveWave(sample, "down", "bullCorrection");
+    const up = buildCorrectiveWave(sample, "up", "bearRebound");
+    if (down) candidates.push(down);
+    if (up) candidates.push(up);
+  }
+
+  candidates.sort((a, b) => {
+    const familyPriority = { cycle: 2, impulse: 1, correction: 0 };
+    const familyDiff = (familyPriority[b.family] || 0) - (familyPriority[a.family] || 0);
+    if (familyDiff !== 0) return familyDiff;
+    const endDiff = b.pivots[b.pivots.length - 1].index - a.pivots[a.pivots.length - 1].index;
+    if (endDiff !== 0) return endDiff;
+    return b.score - a.score;
+  });
+
+  const selected = candidates[0] || null;
+  if (!selected) {
+    return {
+      ready: true,
+      message: "当前区间没有识别出满足规则的高置信波浪，结构暂时不清晰。",
+      pivots,
+      candidates,
+      selected: null,
+      options,
+    };
+  }
+
+  return {
+    ready: true,
+    message: selected.summary,
+    pivots,
+    candidates,
+    selected,
+    options,
+  };
 }
 
 function calcVolumePriceState(rows) {
@@ -1628,14 +2023,195 @@ function TradeConclusionPanel({ rawRows }) {
   );
 }
 
-function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
-  const width = Math.round(1100 * zoom);
-  const height = Math.round(760 * zoom);
+function WaveStructurePanel({ analysis }) {
+  if (!analysis?.ready) {
+    return (
+      <div className="rounded-2xl border bg-white p-3 text-xs">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="font-semibold text-slate-700">波浪结构</span>
+          <InfoTip text="波浪理论模块采用拐点识别 + 规则校验的保守实现。只在当前显示区间内寻找满足规则的候选浪型，识别不到时不会强行标注。" />
+        </div>
+        <div className="rounded-xl bg-slate-50 p-3 text-slate-500">{analysis?.message || "暂无数据"}</div>
+      </div>
+    );
+  }
+
+  const selected = analysis.selected;
+  return (
+    <div className="rounded-2xl border bg-white p-3 text-xs">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-semibold text-slate-700">波浪结构</span>
+        <InfoTip text="先用分形高低点抽取拐点，再按推动浪和 ABC 调整浪的基础规则打分。这里显示的是当前显示区间内最新、分数最高的候选结构。" />
+      </div>
+      {!selected ? (
+        <div className="rounded-xl bg-slate-50 p-3 text-slate-500">{analysis.message}</div>
+      ) : (
+        <>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-slate-500">当前候选</span>
+              <span className={`font-semibold ${selected.direction === "bull" ? "text-red-600" : "text-green-700"}`}>{selected.title}</span>
+            </div>
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <span className="text-slate-500">置信度</span>
+              <span className="font-semibold text-slate-800">{selected.confidence} / {selected.score} 分</span>
+            </div>
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <span className="text-slate-500">关键失效位</span>
+              <span className="font-semibold text-slate-800">{latestValid(selected.invalidationPrice)}</span>
+            </div>
+            <div className="mt-2 leading-relaxed text-slate-600">{selected.summary}</div>
+          </div>
+
+          <div className="mt-3 rounded-xl bg-slate-50 p-2 text-slate-500">
+            拐点数 {analysis.pivots.length}；最小摆动阈值约 {percentText(analysis.options.minMovePct)}；当前仅标注满足规则的候选浪型。
+          </div>
+
+          <div className="mt-3 space-y-1.5">
+            {selected.checks.map((item) => (
+              <div key={item.key} className="rounded-xl bg-slate-50 p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-700">{item.label}</span>
+                  <span className={`font-semibold ${item.ok ? "text-red-600" : "text-green-700"}`}>{item.ok ? "满足" : "不满足"}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ChartToolbar({
+  showWaves,
+  onToggleWaves,
+  drawingTool,
+  onSelectDrawingTool,
+  onUndoDrawing,
+  onClearDrawings,
+  hasDrawings,
+  fullscreen,
+  onToggleFullscreen,
+  chartZoom,
+  setChartZoom,
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onToggleWaves}
+        className={`hidden items-center gap-2 rounded-full px-3 py-1 text-xs transition md:inline-flex ${
+          showWaves
+            ? "bg-violet-50 text-violet-700 ring-1 ring-violet-200 hover:bg-violet-100"
+            : "bg-slate-100 text-slate-500 ring-1 ring-slate-200 hover:bg-slate-200"
+        }`}
+        title={showWaves ? "点击关闭波浪叠加" : "点击开启波浪叠加"}
+        aria-pressed={showWaves}
+      >
+        <span className={`inline-block h-2.5 w-2.5 rounded-full ${showWaves ? "bg-violet-500" : "bg-slate-300"}`} />
+        波浪叠加 {showWaves ? "开启" : "关闭"}
+      </button>
+      <div className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 text-xs text-slate-600">
+        <button
+          type="button"
+          onClick={() => onSelectDrawingTool(drawingTool === "brush" ? "none" : "brush")}
+          className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 transition ${
+            drawingTool === "brush" ? "bg-emerald-50 text-emerald-700" : "hover:bg-slate-100"
+          }`}
+          title={drawingTool === "brush" ? "关闭自由画笔并清空已画线" : "开启自由画笔"}
+          aria-pressed={drawingTool === "brush"}
+        >
+          <Pencil className="h-3.5 w-3.5" />
+          画笔
+        </button>
+        <button
+          type="button"
+          onClick={() => onSelectDrawingTool(drawingTool === "trend" ? "none" : "trend")}
+          className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 transition ${
+            drawingTool === "trend" ? "bg-emerald-50 text-emerald-700" : "hover:bg-slate-100"
+          }`}
+          title={drawingTool === "trend" ? "关闭趋势线并清空已画线" : "开启趋势线工具"}
+          aria-pressed={drawingTool === "trend"}
+        >
+          <Pencil className="h-3.5 w-3.5" />
+          趋势线
+        </button>
+        <button
+          type="button"
+          onClick={() => onSelectDrawingTool(drawingTool === "horizontal" ? "none" : "horizontal")}
+          className={`inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 transition ${
+            drawingTool === "horizontal" ? "bg-emerald-50 text-emerald-700" : "hover:bg-slate-100"
+          }`}
+          title={drawingTool === "horizontal" ? "关闭水平线并清空已画线" : "开启水平线工具"}
+          aria-pressed={drawingTool === "horizontal"}
+        >
+          <Minus className="h-3.5 w-3.5" />
+          水平线
+        </button>
+        <button
+          type="button"
+          onClick={onUndoDrawing}
+          disabled={!hasDrawings}
+          className="rounded-lg px-2 py-1.5 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"
+          title="撤销上一条线"
+        >
+          撤销
+        </button>
+        <button
+          type="button"
+          onClick={onClearDrawings}
+          disabled={!hasDrawings && drawingTool === "none"}
+          className="inline-flex items-center gap-1 rounded-lg px-2 py-1.5 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"
+          title="清空已画线并退出画线模式"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          清空
+        </button>
+      </div>
+      <button
+        type="button"
+        onClick={onToggleFullscreen}
+        className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-600 transition hover:bg-slate-100"
+        title={fullscreen ? "退出全屏图表" : "全屏查看图表"}
+        aria-pressed={fullscreen}
+      >
+        {fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+        {fullscreen ? "退出全屏" : "全屏"}
+      </button>
+      <div className="flex items-center gap-1 rounded-xl border bg-white p-1 text-xs text-slate-600">
+        <button type="button" className="rounded-lg px-2 py-1 hover:bg-slate-100" onClick={() => setChartZoom((z) => Math.max(0.8, Number((z - 0.1).toFixed(2))))}>缩小</button>
+        <button type="button" className="rounded-lg px-2 py-1 font-semibold text-slate-800 hover:bg-slate-100" onClick={() => setChartZoom(1)}>{Math.round(chartZoom * 100)}%</button>
+        <button type="button" className="rounded-lg px-2 py-1 hover:bg-slate-100" onClick={() => setChartZoom((z) => Math.min(2.4, Number((z + 0.1).toFixed(2))))}>放大</button>
+      </div>
+    </>
+  );
+}
+
+function Chart({
+  rows,
+  visibleGaps,
+  showGaps,
+  zoom = 1,
+  waveAnalysis = null,
+  showWaveOverlay = true,
+  expanded = false,
+  drawingTool = "none",
+  drawnLines = [],
+  onDrawnLinesChange = null,
+}) {
+  const width = Math.round((expanded ? 1600 : 1100) * zoom);
+  const height = Math.round((expanded ? 980 : 760) * zoom);
   const [hoverIndex, setHoverIndex] = useState(null);
   const [selectedIndex, setSelectedIndex] = useState(null);
   const [showMacdSignals, setShowMacdSignals] = useState(true);
+  const [pendingLineStart, setPendingLineStart] = useState(null);
+  const [hoverPoint, setHoverPoint] = useState(null);
+  const [activeBrushPoints, setActiveBrushPoints] = useState([]);
   const scrollRef = useRef(null);
   const dragRef = useRef({ active: false, startX: 0, startScrollLeft: 0, moved: false });
+  const brushRef = useRef({ active: false });
+  const drawingEnabled = drawingTool !== "none";
 
   function beginDrag(clientX) {
     if (!scrollRef.current) return;
@@ -1656,6 +2232,32 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
 
   function endDrag() {
     dragRef.current.active = false;
+  }
+
+  function appendBrushPoint(point) {
+    if (!point) return;
+    setActiveBrushPoints((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && Math.abs(last.x - point.x) < 0.5 && Math.abs(last.y - point.y) < 0.5) return prev;
+      return [...prev, point];
+    });
+  }
+
+  function finishBrushStroke() {
+    if (!brushRef.current.active) return;
+    brushRef.current.active = false;
+    setActiveBrushPoints((prev) => {
+      if (prev.length > 1 && typeof onDrawnLinesChange === "function") {
+        onDrawnLinesChange([
+          ...drawnLines,
+          {
+            type: "brush",
+            points: prev,
+          },
+        ]);
+      }
+      return [];
+    });
   }
 
   const safeRows = useMemo(() => rows.filter((r) => [r.open, r.close, r.high, r.low, r.volume].every(Number.isFinite)), [rows]);
@@ -1750,41 +2352,136 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
   const gridLines = 5;
   const xLabels = Math.min(6, safeRows.length);
 
+  function pointFromEvent(e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const scaleX = width / Math.max(rect.width, 1);
+    const scaleY = height / Math.max(rect.height, 1);
+    const mouseX = (e.clientX - rect.left) * scaleX;
+    const mouseY = (e.clientY - rect.top) * scaleY;
+    const clampedX = Math.max(0, Math.min(width, mouseX));
+    const clampedY = Math.max(0, Math.min(height, mouseY));
+    return { x: clampedX, y: clampedY };
+  }
+
+  function makeOverlayPath(points) {
+    let started = false;
+    return points
+      .map((point) => {
+        if (!point) return null;
+        const cmd = started ? "L" : "M";
+        started = true;
+        return `${cmd}${point.x},${point.y}`;
+      })
+      .filter(Boolean)
+      .join(" ");
+  }
+
   return (
     <div
       ref={scrollRef}
-      className="w-full cursor-grab overflow-x-auto rounded-2xl border bg-white p-3 shadow-sm active:cursor-grabbing"
+      className={`w-full overflow-x-auto rounded-2xl border bg-white p-3 shadow-sm ${drawingEnabled ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"}`}
       onMouseDown={(e) => {
+        if (drawingTool === "brush") return;
+        if (drawingEnabled) return;
         if (e.button !== 0) return;
         beginDrag(e.clientX);
       }}
-      onMouseMove={(e) => moveDrag(e.clientX)}
-      onMouseUp={endDrag}
-      onMouseLeave={endDrag}
-      onTouchStart={(e) => beginDrag(e.touches[0]?.clientX || 0)}
-      onTouchMove={(e) => moveDrag(e.touches[0]?.clientX || 0)}
-      onTouchEnd={endDrag}
+      onMouseMove={(e) => {
+        if (drawingTool === "brush") return;
+        if (drawingEnabled) return;
+        moveDrag(e.clientX);
+      }}
+      onMouseUp={() => {
+        endDrag();
+        finishBrushStroke();
+      }}
+      onMouseLeave={() => {
+        endDrag();
+        finishBrushStroke();
+      }}
+      onTouchStart={(e) => {
+        if (drawingTool === "brush") return;
+        if (drawingEnabled) return;
+        beginDrag(e.touches[0]?.clientX || 0);
+      }}
+      onTouchMove={(e) => {
+        if (drawingTool === "brush") return;
+        if (drawingEnabled) return;
+        moveDrag(e.touches[0]?.clientX || 0);
+      }}
+      onTouchEnd={() => {
+        endDrag();
+        finishBrushStroke();
+      }}
     >
       <div className="relative" style={{ width: `${width}px` }}>
         <svg
           viewBox={`0 0 ${width} ${height}`}
           style={{ width: `${width}px`, height: `${height}px` }}
           className="cursor-pointer select-none"
-          onMouseLeave={() => setHoverIndex(null)}
+          onMouseLeave={() => {
+            setHoverIndex(null);
+            setHoverPoint(null);
+          }}
           onMouseMove={(e) => {
+            const point = pointFromEvent(e);
             const rect = e.currentTarget.getBoundingClientRect();
             const scaleX = width / Math.max(rect.width, 1);
             const mouseX = (e.clientX - rect.left) * scaleX;
             const idx = Math.floor((mouseX - chart.margin.left) / chart.xStep);
             if (idx >= 0 && idx < safeRows.length) setHoverIndex(idx);
+            setHoverPoint(point);
+            if (drawingTool === "brush" && brushRef.current.active) appendBrushPoint(point);
+          }}
+          onMouseDown={(e) => {
+            if (drawingTool !== "brush") return;
+            const point = pointFromEvent(e);
+            if (!point) return;
+            brushRef.current.active = true;
+            setActiveBrushPoints([point]);
+            setHoverPoint(point);
+          }}
+          onMouseUp={() => {
+            if (drawingTool !== "brush") return;
+            finishBrushStroke();
           }}
           onClick={(e) => {
             if (dragRef.current.moved) return;
-            const rect = e.currentTarget.getBoundingClientRect();
-            const scaleX = width / Math.max(rect.width, 1);
-            const mouseX = (e.clientX - rect.left) * scaleX;
-            const idx = Math.floor((mouseX - chart.margin.left) / chart.xStep);
-            if (idx >= 0 && idx < safeRows.length) setSelectedIndex(idx);
+            if (drawingEnabled) {
+              if (drawingTool === "brush") return;
+              const point = pointFromEvent(e);
+              if (!point) return;
+              if (drawingTool === "horizontal") {
+                if (typeof onDrawnLinesChange === "function") {
+                  onDrawnLinesChange([
+                    ...drawnLines,
+                    {
+                      type: "horizontal",
+                      y: point.y,
+                    },
+                  ]);
+                }
+                return;
+              }
+              if (!pendingLineStart) {
+                setPendingLineStart(point);
+                return;
+              }
+              if (typeof onDrawnLinesChange === "function") {
+                onDrawnLinesChange([
+                  ...drawnLines,
+                  {
+                    type: "trend",
+                    start: pendingLineStart,
+                    end: point,
+                  },
+                ]);
+              }
+              setPendingLineStart(null);
+              return;
+            }
+            const point = pointFromEvent(e);
+            if (point) setSelectedIndex(point.index);
           }}
         >
           <rect x="0" y="0" width={width} height={height} fill="#ffffff" />
@@ -1878,6 +2575,112 @@ function Chart({ rows, visibleGaps, showGaps, zoom = 1 }) {
             </g>
           );
         })}
+
+        {drawnLines.map((line, idx) => (
+          <g key={`drawn-line-${idx}`}>
+            {line.type === "horizontal" ? (
+              <line
+                x1={0}
+                y1={line.y}
+                x2={width}
+                y2={line.y}
+                stroke="#0f172a"
+                strokeWidth="2"
+                opacity="0.82"
+              />
+            ) : line.type === "brush" ? (
+              <path d={makeOverlayPath(line.points)} fill="none" stroke="#0f172a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.88" />
+            ) : (
+              <>
+                <line
+                  x1={line.start.x}
+                  y1={line.start.y}
+                  x2={line.end.x}
+                  y2={line.end.y}
+                  stroke="#0f172a"
+                  strokeWidth="2"
+                  opacity="0.85"
+                />
+                <circle cx={line.start.x} cy={line.start.y} r="3.5" fill="#0f172a" />
+                <circle cx={line.end.x} cy={line.end.y} r="3.5" fill="#0f172a" />
+              </>
+            )}
+          </g>
+        ))}
+        {drawingTool === "brush" && activeBrushPoints.length > 1 && (
+          <g pointerEvents="none">
+            <path d={makeOverlayPath(activeBrushPoints)} fill="none" stroke="#0f172a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" opacity="0.5" />
+          </g>
+        )}
+        {drawingTool === "trend" && pendingLineStart && hoverPoint && (
+          <g pointerEvents="none">
+            <line
+              x1={pendingLineStart.x}
+              y1={pendingLineStart.y}
+              x2={hoverPoint.x}
+              y2={hoverPoint.y}
+              stroke="#0f172a"
+              strokeWidth="1.5"
+              strokeDasharray="6 4"
+              opacity="0.45"
+            />
+            <circle cx={pendingLineStart.x} cy={pendingLineStart.y} r="4" fill="#0f172a" opacity="0.7" />
+          </g>
+        )}
+        {drawingTool === "horizontal" && hoverPoint && (
+          <g pointerEvents="none">
+            <line
+              x1={0}
+              y1={hoverPoint.y}
+              x2={width}
+              y2={hoverPoint.y}
+              stroke="#0f172a"
+              strokeWidth="1.5"
+              strokeDasharray="6 4"
+              opacity="0.45"
+            />
+          </g>
+        )}
+        {drawingEnabled && (
+          <g pointerEvents="none">
+            <rect x={chart.margin.left} y={chart.margin.top + 6} width="156" height="22" rx="11" fill="rgba(15,23,42,0.06)" stroke="rgba(15,23,42,0.16)" />
+            <text x={chart.margin.left + 78} y={chart.margin.top + 21} textAnchor="middle" fontSize="11" fontWeight="600" fill="#334155">
+              {drawingTool === "brush" ? "画笔: 按住拖动画线" : drawingTool === "trend" ? "趋势线: 点两次完成" : "水平线: 点一次落线"}
+            </text>
+          </g>
+        )}
+
+        {showWaveOverlay &&
+          waveAnalysis?.selected &&
+          (() => {
+            const wave = waveAnalysis.selected;
+            const lineColor = wave.direction === "bull" ? "#7c3aed" : "#0f766e";
+            const fillColor = wave.direction === "bull" ? "rgba(124,58,237,0.12)" : "rgba(15,118,110,0.12)";
+            const path = wave.pivots
+              .map((pivot, index) => `${index === 0 ? "M" : "L"}${chart.x(pivot.index)},${chart.y(pivot.price)}`)
+              .join(" ");
+
+            return (
+              <g>
+                <path d={path} fill="none" stroke={lineColor} strokeWidth="2.2" strokeDasharray={wave.family === "correction" ? "7 5" : "none"} />
+                {wave.pivots.map((pivot, index) => {
+                  const px = chart.x(pivot.index);
+                  const py = chart.y(pivot.price);
+                  const label = wave.labels[index] || `${index}`;
+                  const labelOffsetY = pivot.type === "high" ? -14 : 18;
+                  return (
+                    <g key={`wave-${pivot.index}-${label}`}>
+                      <circle cx={px} cy={py} r="5" fill="#ffffff" stroke={lineColor} strokeWidth="2" />
+                      <rect x={px - 14} y={py + labelOffsetY - 11} width="28" height="16" rx="8" fill={fillColor} stroke={lineColor} strokeWidth="1" />
+                      <text x={px} y={py + labelOffsetY + 1} textAnchor="middle" fontSize="10" fontWeight="700" fill={lineColor}>
+                        {label}
+                      </text>
+                    </g>
+                  );
+                })}
+              </g>
+            );
+          })()}
 
         <line x1={chart.margin.left} x2={width - chart.margin.right} y1={chart.margin.top + chart.mainH + chart.gap} y2={chart.margin.top + chart.mainH + chart.gap} stroke="#cccccc" />
         <line x1={chart.margin.left} x2={width - chart.margin.right} y1={chart.volBase} y2={chart.volBase} stroke="#cccccc" />
@@ -2145,8 +2948,13 @@ function WatchlistPanel({
   onStyleChange,
   onPick,
   onUpdateNote,
+  preloadEnabled = false,
+  onTogglePreload = null,
+  preloadStatus = null,
+  onClearPreloadCache = null,
 }) {
   const isAshare = market === "ashare";
+  const isUs = market === "us";
   const title = isAshare ? "A股自选" : "美股自选";
   const helper = isAshare
     ? "支持逗号、空格、换行分隔；一行一个 A 股代码也可以。"
@@ -2197,6 +3005,53 @@ function WatchlistPanel({
         {error && (
           <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
             {error}
+          </div>
+        )}
+
+        {isUs && (
+          <div className="mt-3 rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-semibold text-slate-900">预加载</div>
+                <div className="mt-1 pr-2 text-[11px] leading-5 text-slate-500">
+                  默认开启。后台按顺序缓存自选美股数据，请求间隔至少 0.5s，点击时优先使用缓存。
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={onTogglePreload}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition ${
+                  preloadEnabled ? "bg-emerald-500" : "bg-slate-300"
+                }`}
+                aria-pressed={preloadEnabled}
+                title={preloadEnabled ? "关闭美股预加载" : "开启美股预加载"}
+              >
+                <span
+                  className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition ${
+                    preloadEnabled ? "translate-x-5" : "translate-x-0.5"
+                  }`}
+                />
+              </button>
+            </div>
+            <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+              <span className="min-w-0 flex-1">
+                {preloadStatus?.running
+                  ? `后台预加载中 ${preloadStatus.done}/${preloadStatus.total}`
+                  : preloadStatus?.total
+                    ? `已缓存 ${preloadStatus.done}/${preloadStatus.total}`
+                    : "等待生成自选后开始预加载"}
+              </span>
+              {preloadStatus?.current && <span className="shrink-0 font-mono text-slate-700">{preloadStatus.current}</span>}
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                onClick={onClearPreloadCache}
+                className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+              >
+                清空缓存
+              </button>
+            </div>
           </div>
         )}
 
@@ -2287,6 +3142,13 @@ export default function AShareTD9InteractiveChart() {
   const [tdMode, setTdMode] = useState("current");
   const [showGaps, setShowGaps] = useState(true);
   const [unfilledOnly, setUnfilledOnly] = useState(true);
+  const [showWaves, setShowWaves] = useState(false);
+  const [waveSensitivity, setWaveSensitivity] = useState("standard");
+  const [chartFullscreen, setChartFullscreen] = useState(false);
+  const [drawingTool, setDrawingTool] = useState("none");
+  const [drawnLines, setDrawnLines] = useState([]);
+  const [usPreloadEnabled, setUsPreloadEnabled] = useState(true);
+  const [usPreloadStatus, setUsPreloadStatus] = useState({ running: false, total: 0, done: 0, current: "" });
   const [rawRows, setRawRows] = useState([]);
   const [meta, setMeta] = useState({ code: "", name: "" });
   const [financialInfo, setFinancialInfo] = useState(null);
@@ -2314,9 +3176,77 @@ export default function AShareTD9InteractiveChart() {
   const latest = rows.length > 0 ? rows[rows.length - 1] : null;
   const latestColor = latest && latest.close >= latest.open ? "text-red-600" : "text-green-700";
   const prediction = useMemo(() => buildTrendPrediction(rawRows), [rawRows]);
+  const waveAnalysis = useMemo(() => detectElliottWave(rows, waveSensitivity), [rows, waveSensitivity]);
   const currentCode = market === "us" ? marketCodes.us : marketCodes.ashare;
   const watchlistInput = market === "us" ? watchlistInputMap.us : watchlistInputMap.ashare;
   const watchlistItems = market === "us" ? watchlistItemsMap.us : watchlistItemsMap.ashare;
+  const usKlineCacheRef = useRef(new Map());
+  const usPreloadRunRef = useRef(0);
+
+  async function fetchUsKlineCached({ symbol, period: targetPeriod, adjust: targetAdjust, limit, force = false }) {
+    const normalized = normalizeUsSymbol(symbol);
+    const cacheKey = `${normalized}|${targetPeriod}|${targetAdjust}|${limit}`;
+    const cached = usKlineCacheRef.current.get(cacheKey);
+    if (!force && cached?.data) return cached.data;
+    if (!force && cached?.promise) return cached.promise;
+
+    const promise = fetchUsKline({
+      symbol: normalized,
+      period: targetPeriod,
+      adjust: targetAdjust,
+      limit,
+    }).then((data) => {
+      usKlineCacheRef.current.set(cacheKey, { data, ts: Date.now() });
+      return data;
+    }).catch((error) => {
+      usKlineCacheRef.current.delete(cacheKey);
+      throw error;
+    });
+
+    usKlineCacheRef.current.set(cacheKey, { promise, ts: Date.now() });
+    return promise;
+  }
+
+  function handleSelectDrawingTool(nextTool) {
+    setDrawingTool(nextTool);
+    if (nextTool === "none") setDrawnLines([]);
+  }
+
+  function clearDrawings() {
+    setDrawnLines([]);
+    setDrawingTool("none");
+  }
+
+  function undoLastDrawing() {
+    setDrawnLines((prev) => prev.slice(0, -1));
+  }
+
+  function clearUsPreloadCache() {
+    const nextCache = new Map();
+    for (const [key, value] of usKlineCacheRef.current.entries()) {
+      if (!String(key).includes("|")) {
+        nextCache.set(key, value);
+        continue;
+      }
+      const [symbol] = String(key).split("|");
+      if (!isValidUsSymbol(symbol)) nextCache.set(key, value);
+    }
+    usKlineCacheRef.current = nextCache;
+    setUsPreloadStatus((prev) => ({
+      ...prev,
+      done: 0,
+      current: "",
+    }));
+  }
+
+  useEffect(() => {
+    if (!chartFullscreen) return undefined;
+    function handleKeydown(event) {
+      if (event.key === "Escape") setChartFullscreen(false);
+    }
+    window.addEventListener("keydown", handleKeydown);
+    return () => window.removeEventListener("keydown", handleKeydown);
+  }, [chartFullscreen]);
 
   async function loadWatchlist(targetMarket = market) {
     const requestedMarket = targetMarket === "us" ? "us" : targetMarket === "ashare" ? "ashare" : market;
@@ -2343,7 +3273,7 @@ export default function AShareTD9InteractiveChart() {
           }
           const detail = requestedMarket === "ashare"
             ? await fetchAshareKline({ code, period, adjust, limit: 60 })
-            : await fetchUsKline({ symbol: code, period, adjust, limit: 60 });
+            : await fetchUsKlineCached({ symbol: code, period, adjust, limit: 60 });
           return {
             code: detail.code || code,
             name: detail.name || code,
@@ -2395,7 +3325,7 @@ export default function AShareTD9InteractiveChart() {
           if (!isValidUsSymbol(normalized)) {
             throw new Error("请输入有效的美股代码，例如 AAPL、MSFT、NVDA、BRK.B。");
           }
-          return fetchUsKline({
+          return fetchUsKlineCached({
             symbol: normalized,
             period,
             adjust,
@@ -2458,6 +3388,69 @@ export default function AShareTD9InteractiveChart() {
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [market, watchlistItems.length]);
+
+  useEffect(() => {
+    if (market !== "us" || !usPreloadEnabled) {
+      Promise.resolve().then(() => {
+        setUsPreloadStatus((prev) => ({ ...prev, running: false, current: "" }));
+      });
+      return undefined;
+    }
+
+    const codes = normalizeWatchlistCodes(watchlistInputMap.us, "us");
+    if (!codes.length) {
+      Promise.resolve().then(() => {
+        setUsPreloadStatus({ running: false, total: 0, done: 0, current: "" });
+      });
+      return undefined;
+    }
+
+    const limit = Math.max(5000, Number(displayCount) + 120);
+    const runId = usPreloadRunRef.current + 1;
+    usPreloadRunRef.current = runId;
+    let cancelled = false;
+
+    (async () => {
+      await Promise.resolve();
+      if (cancelled || usPreloadRunRef.current !== runId) return;
+      setUsPreloadStatus({ running: true, total: codes.length, done: 0, current: "" });
+
+      let done = 0;
+      for (const code of codes) {
+        if (cancelled || usPreloadRunRef.current !== runId) return;
+        const cacheKey = `${normalizeUsSymbol(code)}|${period}|${adjust}|${limit}`;
+        const cached = usKlineCacheRef.current.get(cacheKey);
+        if (cached?.data) {
+          done += 1;
+          setUsPreloadStatus({ running: true, total: codes.length, done, current: code });
+          continue;
+        }
+
+        setUsPreloadStatus({ running: true, total: codes.length, done, current: code });
+        try {
+          await fetchUsKlineCached({
+            symbol: code,
+            period,
+            adjust,
+            limit,
+          });
+        } catch {
+          // Ignore individual preload failures and keep the queue moving.
+        }
+        done += 1;
+        setUsPreloadStatus({ running: true, total: codes.length, done, current: code });
+        if (done < codes.length) await delay(600);
+      }
+
+      if (!cancelled && usPreloadRunRef.current === runId) {
+        setUsPreloadStatus({ running: false, total: codes.length, done: codes.length, current: "" });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [market, usPreloadEnabled, watchlistInputMap.us, period, adjust, displayCount]);
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 text-slate-900">
@@ -2545,6 +3538,15 @@ export default function AShareTD9InteractiveChart() {
               <input type="checkbox" checked={unfilledOnly} disabled={market === "agent"} onChange={(e) => setUnfilledOnly(e.target.checked)} />
               未回补
             </label>
+            <label className="flex items-center gap-1 rounded-xl border bg-white px-3 py-2 text-sm">
+              <input type="checkbox" checked={showWaves} disabled={market === "agent"} onChange={(e) => setShowWaves(e.target.checked)} />
+              波浪
+            </label>
+            <select value={waveSensitivity} onChange={(e) => setWaveSensitivity(e.target.value)} disabled={market === "agent"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
+              {WAVE_SENSITIVITY_OPTIONS.map((item) => (
+                <option key={item.value} value={item.value}>{item.label}</option>
+              ))}
+            </select>
             <Button onClick={() => load()} disabled={loading || market === "agent"} className="rounded-xl">
               <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               {loading ? "加载中" : "查询"}
@@ -2604,6 +3606,9 @@ export default function AShareTD9InteractiveChart() {
                 <div className="mt-4">
                   <TradeConclusionPanel rawRows={rawRows} />
                 </div>
+                <div className="mt-4">
+                  <WaveStructurePanel analysis={waveAnalysis} />
+                </div>
               </CardContent>
             </Card>
             <Card className="rounded-2xl">
@@ -2620,16 +3625,35 @@ export default function AShareTD9InteractiveChart() {
                         <TrendingUp className="h-3.5 w-3.5" />
                         绿字=上涨九结构；红字=下跌九结构
                       </div>
-                      <div className="flex items-center gap-1 rounded-xl border bg-white p-1 text-xs text-slate-600">
-                        <button type="button" className="rounded-lg px-2 py-1 hover:bg-slate-100" onClick={() => setChartZoom((z) => Math.max(0.8, Number((z - 0.1).toFixed(2))))}>缩小</button>
-                        <button type="button" className="rounded-lg px-2 py-1 font-semibold text-slate-800 hover:bg-slate-100" onClick={() => setChartZoom(1)}>{Math.round(chartZoom * 100)}%</button>
-                        <button type="button" className="rounded-lg px-2 py-1 hover:bg-slate-100" onClick={() => setChartZoom((z) => Math.min(1.8, Number((z + 0.1).toFixed(2))))}>放大</button>
-                      </div>
+                      <ChartToolbar
+                        showWaves={showWaves}
+                        onToggleWaves={() => setShowWaves((value) => !value)}
+                        drawingTool={drawingTool}
+                        onSelectDrawingTool={handleSelectDrawingTool}
+                        onUndoDrawing={undoLastDrawing}
+                        onClearDrawings={clearDrawings}
+                        hasDrawings={drawnLines.length > 0}
+                        fullscreen={chartFullscreen}
+                        onToggleFullscreen={() => setChartFullscreen((value) => !value)}
+                        chartZoom={chartZoom}
+                        setChartZoom={setChartZoom}
+                      />
                     </div>
                   </div>
                   {rows.length > 0 ? (
                     <>
-                      <Chart rows={rows} visibleGaps={visibleGaps} showGaps={showGaps} zoom={chartZoom} />
+                      <Chart
+                        key={`inline-chart-${drawingTool}`}
+                        rows={rows}
+                        visibleGaps={visibleGaps}
+                        showGaps={showGaps}
+                        zoom={chartZoom}
+                        waveAnalysis={waveAnalysis}
+                        showWaveOverlay={showWaves}
+                        drawingTool={drawingTool}
+                        drawnLines={drawnLines}
+                        onDrawnLinesChange={setDrawnLines}
+                      />
                       <FinancialReportPanel
                         financialInfo={financialInfo}
                         loading={financialLoading}
@@ -2653,6 +3677,10 @@ export default function AShareTD9InteractiveChart() {
               onInputChange={(value) => setWatchlistInputMap((prev) => ({ ...prev, [market]: value }))}
               onRefresh={() => loadWatchlist()}
               onStyleChange={setWatchlistStyle}
+              preloadEnabled={usPreloadEnabled}
+              onTogglePreload={() => setUsPreloadEnabled((value) => !value)}
+              preloadStatus={usPreloadStatus}
+              onClearPreloadCache={clearUsPreloadCache}
               onPick={(code) => {
                 setMarketCodes((prev) => ({ ...prev, [market]: code }));
                 setError("");
@@ -2670,6 +3698,50 @@ export default function AShareTD9InteractiveChart() {
           </div>
         ) : (
           <AgentChatPanel marketCodes={marketCodes} />
+        )}
+        {chartFullscreen && market !== "agent" && rows.length > 0 && (
+          <div className="fixed inset-0 z-50 bg-slate-950/40 p-3 backdrop-blur-sm md:p-5">
+            <div className="flex h-full flex-col rounded-2xl bg-white shadow-2xl">
+              <div className="flex flex-col gap-3 border-b px-4 py-4 md:flex-row md:items-start md:justify-between md:px-5">
+                <div>
+                  <div className="text-xl font-semibold">{meta.code ? `${meta.code} ${meta.name}` : market === "us" ? "美股 K线图" : "K线图"}</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    全屏模式下可查看更多图表细节；按 `Esc` 也可以退出全屏。
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <ChartToolbar
+                    showWaves={showWaves}
+                    onToggleWaves={() => setShowWaves((value) => !value)}
+                    drawingTool={drawingTool}
+                    onSelectDrawingTool={handleSelectDrawingTool}
+                    onUndoDrawing={undoLastDrawing}
+                    onClearDrawings={clearDrawings}
+                    hasDrawings={drawnLines.length > 0}
+                    fullscreen={chartFullscreen}
+                    onToggleFullscreen={() => setChartFullscreen(false)}
+                    chartZoom={chartZoom}
+                    setChartZoom={setChartZoom}
+                  />
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto p-4 md:p-5">
+                <Chart
+                  key={`fullscreen-chart-${drawingTool}`}
+                  rows={rows}
+                  visibleGaps={visibleGaps}
+                  showGaps={showGaps}
+                  zoom={chartZoom}
+                  waveAnalysis={waveAnalysis}
+                  showWaveOverlay={showWaves}
+                  expanded
+                  drawingTool={drawingTool}
+                  drawnLines={drawnLines}
+                  onDrawnLinesChange={setDrawnLines}
+                />
+              </div>
+            </div>
+          </div>
         )}
         <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-sm">
           说明：这是学习/研究用图表，不构成投资建议。断层基于已拉取的完整历史 K 线计算，再映射到当前显示区间；规则按相邻 K 线高低价判断：向上断层为当日最低价高于前一根最高价，向下断层为当日最高价低于前一根最低价；默认只显示未回补断层。
