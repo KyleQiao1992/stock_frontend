@@ -218,6 +218,9 @@ async function loadUsKline({ symbol, period = "101", limit = 600 }) {
     if (intradayRow && (!latestHistorical || intradayRow.date > latestHistorical.date)) {
       dailyRows.push(intradayRow);
       sourceInfo += ", intraday-merged";
+    } else if (intradayRow && latestHistorical && intradayRow.date === latestHistorical.date) {
+      dailyRows[dailyRows.length - 1] = intradayRow;
+      sourceInfo += ", intraday-replaced";
     }
   } catch {
     // Keep the historical series usable even when the quote snapshot is unavailable.

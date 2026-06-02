@@ -709,6 +709,16 @@ function normalizeWatchlistCodes(input, market) {
   return normalized;
 }
 
+function normalizeCodeForMarket(value, market) {
+  return market === "ashare" ? onlyDigits(value) : normalizeUsSymbol(value);
+}
+
+function getErrorMessage(error, fallback = "操作失败，请稍后重试。") {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  return fallback;
+}
+
 function calcGaps(rows) {
   const gaps = [];
   for (let i = 1; i < rows.length; i += 1) {
@@ -2309,28 +2319,29 @@ export default function AShareTD9InteractiveChart() {
   const watchlistItems = market === "us" ? watchlistItemsMap.us : watchlistItemsMap.ashare;
 
   async function loadWatchlist(targetMarket = market) {
-    if (targetMarket === "agent") return;
-    const rawInput = targetMarket === "us" ? watchlistInputMap.us : watchlistInputMap.ashare;
-    const codes = normalizeWatchlistCodes(rawInput, targetMarket);
+    const requestedMarket = targetMarket === "us" ? "us" : targetMarket === "ashare" ? "ashare" : market;
+    if (requestedMarket === "agent") return;
+    const rawInput = requestedMarket === "us" ? watchlistInputMap.us : watchlistInputMap.ashare;
+    const codes = normalizeWatchlistCodes(rawInput, requestedMarket);
 
     if (!codes.length) {
-      setWatchlistError(targetMarket === "ashare" ? "请先输入至少一个 6 位 A 股代码。" : "请先输入至少一个有效的美股代码。");
-      setWatchlistItemsMap((prev) => ({ ...prev, [targetMarket]: [] }));
+      setWatchlistError(requestedMarket === "ashare" ? "请先输入至少一个 6 位 A 股代码。" : "请先输入至少一个有效的美股代码。");
+      setWatchlistItemsMap((prev) => ({ ...prev, [requestedMarket]: [] }));
       return;
     }
 
     setWatchlistLoading(true);
     setWatchlistError("");
     try {
-      const previousItems = watchlistItemsMap[targetMarket] || [];
+      const previousItems = watchlistItemsMap[requestedMarket] || [];
       const noteByCode = new Map(previousItems.map((item) => [item.code, item.note || ""]));
-      const activeMeta = targetMarket === market ? meta : null;
+      const activeMeta = requestedMarket === market ? meta : null;
       const results = await Promise.allSettled(
         codes.map(async (code) => {
           if (activeMeta?.code === code && activeMeta?.name) {
             return { code, name: activeMeta.name, note: noteByCode.get(code) || "" };
           }
-          const detail = targetMarket === "ashare"
+          const detail = requestedMarket === "ashare"
             ? await fetchAshareKline({ code, period, adjust, limit: 60 })
             : await fetchUsKline({ symbol: code, period, adjust, limit: 60 });
           return {
@@ -2349,8 +2360,10 @@ export default function AShareTD9InteractiveChart() {
         .filter(({ item }) => item.status === "rejected")
         .map(({ code }) => code);
 
-      setWatchlistItemsMap((prev) => ({ ...prev, [targetMarket]: nextItems }));
+      setWatchlistItemsMap((prev) => ({ ...prev, [requestedMarket]: nextItems }));
       setWatchlistError(failedCodes.length ? `以下代码暂时未能加载名称：${failedCodes.join("、")}` : "");
+    } catch (e) {
+      setWatchlistError(getErrorMessage(e, "自选列表生成失败，请检查代码后重试。"));
     } finally {
       setWatchlistLoading(false);
     }
@@ -2358,7 +2371,7 @@ export default function AShareTD9InteractiveChart() {
 
   async function load(overrideCode) {
     if (market === "agent") return;
-    const targetCode = overrideCode || currentCode;
+    const targetCode = normalizeCodeForMarket(typeof overrideCode === "string" ? overrideCode : currentCode, market);
     setLoading(true);
     setError("");
     setFinancialError("");
@@ -2366,7 +2379,7 @@ export default function AShareTD9InteractiveChart() {
     try {
       const result = market === "ashare"
         ? await (() => {
-          const normalized = String(targetCode || "").trim();
+          const normalized = targetCode;
           if (!isSixDigitCode(normalized)) {
             throw new Error("请输入 6 位 A 股代码，例如 600519、000001、300750。");
           }
@@ -2378,7 +2391,7 @@ export default function AShareTD9InteractiveChart() {
           });
         })()
         : await (() => {
-          const normalized = normalizeUsSymbol(targetCode);
+          const normalized = targetCode;
           if (!isValidUsSymbol(normalized)) {
             throw new Error("请输入有效的美股代码，例如 AAPL、MSFT、NVDA、BRK.B。");
           }
@@ -2419,7 +2432,7 @@ export default function AShareTD9InteractiveChart() {
         setFinancialLoading(false);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "加载失败");
+      setError(getErrorMessage(e, "行情加载失败，请稍后重试。"));
       setRawRows([]);
       setMeta({ code: targetCode, name: "" });
       setFinancialLoading(false);
@@ -2486,10 +2499,14 @@ export default function AShareTD9InteractiveChart() {
               <input
                 value={currentCode}
                 onChange={(e) => {
-                  const value = market === "ashare" ? onlyDigits(e.target.value) : normalizeUsSymbol(e.target.value);
+                  const value = normalizeCodeForMarket(e.target.value, market);
                   setMarketCodes((prev) => ({ ...prev, [market]: value }));
                 }}
-                onKeyDown={(e) => { if (e.key === "Enter" && market !== "agent") load(); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && market !== "agent") {
+                    load(normalizeCodeForMarket(e.currentTarget.value, market));
+                  }
+                }}
                 placeholder={market === "ashare" ? "如 600519" : market === "us" ? "如 AAPL" : "Agent 功能待接入"}
                 disabled={market === "agent"}
                 className="w-full bg-transparent outline-none disabled:cursor-not-allowed disabled:text-slate-400"
@@ -2528,7 +2545,7 @@ export default function AShareTD9InteractiveChart() {
               <input type="checkbox" checked={unfilledOnly} disabled={market === "agent"} onChange={(e) => setUnfilledOnly(e.target.checked)} />
               未回补
             </label>
-            <Button onClick={load} disabled={loading || market === "agent"} className="rounded-xl">
+            <Button onClick={() => load()} disabled={loading || market === "agent"} className="rounded-xl">
               <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               {loading ? "加载中" : "查询"}
             </Button>
@@ -2553,7 +2570,7 @@ export default function AShareTD9InteractiveChart() {
                   <div className="mt-4 space-y-2 text-sm">
                     <div className="flex justify-between">
                       <span>日期</span>
-                      <span>{latest.date}</span>
+                      <span>{latest.date}{latest.isIntradayEstimate ? " 盘中" : ""}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>收盘</span>
