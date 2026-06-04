@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Bot,
+  ChevronDown,
+  ChevronUp,
   Eye,
   EyeOff,
   Info,
@@ -40,7 +42,37 @@ const MARKET_TABS = [
 
 const WATCHLIST_STYLE_OPTIONS = [
   { value: "cards", label: "自选" },
-  { value: "rows", label: "股票清单" },
+  { value: "rows", label: "推荐" },
+];
+
+const RECOMMENDATION_FACTOR_OPTIONS = [
+  { value: "factor1", label: "因子1" },
+  { value: "factor2", label: "因子2" },
+  { value: "factor3", label: "因子3" },
+  { value: "factor4", label: "因子4" },
+  { value: "factor5", label: "因子5" },
+];
+
+const RECOMMENDATION_TD_OPTIONS = [
+  { value: "td1", label: "九转第一转" },
+  { value: "td2", label: "九转第二转" },
+  { value: "td3", label: "九转第三转" },
+  { value: "td4", label: "九转第四转" },
+];
+
+const RECOMMENDATION_MACD_OPTIONS = [
+  { value: "all", label: "ALL" },
+  { value: "none", label: "无明显信号" },
+  { value: "golden", label: "金叉" },
+  { value: "near-golden", label: "即将金叉" },
+];
+
+const RECOMMENDATION_SAFETY_OPTIONS = [
+  { value: "all", label: "ALL" },
+  { value: "high", label: "高" },
+  { value: "higher", label: "较高" },
+  { value: "medium", label: "中" },
+  { value: "low", label: "低" },
 ];
 
 const WAVE_SENSITIVITY_OPTIONS = [
@@ -728,6 +760,94 @@ function getErrorMessage(error, fallback = "操作失败，请稍后重试。") 
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === "string" && error.trim()) return error;
   return fallback;
+}
+
+function formatRecommendationDateInput(value) {
+  const digits = String(value || "").replace(/\D/g, "").slice(0, 8);
+  if (digits.length !== 8) return "";
+  return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+}
+
+function normalizeRecommendationDate(value) {
+  return String(value || "").replace(/\D/g, "").slice(0, 8);
+}
+
+function getDefaultRecommendationDate() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}${month}${day}`;
+}
+
+async function fetchRecommendationList({ market, factor, date }) {
+  const params = new URLSearchParams({ market, factor, date });
+  const res = await fetch(`/api/recommendations?${params.toString()}`, {
+    method: "GET",
+    cache: "no-store",
+  });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(payload?.error || `HTTP ${res.status}`);
+  }
+  return payload;
+}
+
+async function fetchFavorites({ market, userId = 0 }) {
+  const params = new URLSearchParams({ market, userId: String(userId) });
+  const res = await fetch(`/api/favorites?${params.toString()}`, {
+    method: "GET",
+    cache: "no-store",
+  });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(payload?.error || `HTTP ${res.status}`);
+  }
+  return payload;
+}
+
+async function addFavorite({ market, code, name, userId = 0 }) {
+  const res = await fetch("/api/favorites", {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ market, code, name, userId }),
+  });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(payload?.error || `HTTP ${res.status}`);
+  }
+  return payload;
+}
+
+async function removeFavorite({ market, code, userId = 0 }) {
+  const params = new URLSearchParams({ market, code, userId: String(userId) });
+  const res = await fetch(`/api/favorites?${params.toString()}`, {
+    method: "DELETE",
+    cache: "no-store",
+  });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(payload?.error || `HTTP ${res.status}`);
+  }
+  return payload;
+}
+
+function formatFavoriteTime(value) {
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "-";
+
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "-";
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
 function delay(ms) {
@@ -1655,6 +1775,25 @@ function ProbabilityLine({ label, stat, info }) {
   );
 }
 
+function CollapsibleDetailBlock({ title = "查看明细", defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div className="mt-3">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="inline-flex items-center gap-1 rounded-lg px-1 py-1 text-xs font-medium text-slate-500 transition hover:text-slate-700"
+        aria-expanded={open}
+      >
+        <span>{title}</span>
+        {open ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+      </button>
+      {open ? <div className="mt-1">{children}</div> : null}
+    </div>
+  );
+}
+
 function TrendPredictionPanel({ prediction }) {
   if (!prediction?.ready) {
     return (
@@ -1698,58 +1837,60 @@ function TrendPredictionPanel({ prediction }) {
         <div className="mt-1 text-right text-xs text-slate-500">趋势分 {prediction.score}/100</div>
       </div>
 
-      <div className="mt-3 space-y-2 text-xs">
-        <div className="flex justify-between rounded-xl bg-slate-50 p-2">
-          <span className="inline-flex items-center">
-            当前九转
-            <InfoTip text="九转方向按当前收盘价与 4 根 K 线前收盘价比较：close[i] > close[i-4] 记为上涨九转计数；close[i] < close[i-4] 记为下跌九转计数。这里显示当前正在形成或已经确认的计数。" />
-          </span>
-          <span>{prediction.tdText}</span>
-        </div>
-        <div className="rounded-xl bg-slate-50 p-2">
-          <div className="inline-flex items-center">
-            均线结构
-            <InfoTip text="均线使用收盘价简单移动平均：MA5/MA10/MA20/MA60。若短期均线在中长期均线上方，且价格站上 MA20，会给趋势评分加分；反之会扣分。" />
+      <CollapsibleDetailBlock title="查看趋势明细">
+        <div className="space-y-2 text-xs">
+          <div className="flex justify-between rounded-xl bg-slate-50 p-2">
+            <span className="inline-flex items-center">
+              当前九转
+              <InfoTip text="九转方向按当前收盘价与 4 根 K 线前收盘价比较：close[i] > close[i-4] 记为上涨九转计数；close[i] < close[i-4] 记为下跌九转计数。这里显示当前正在形成或已经确认的计数。" />
+            </span>
+            <span>{prediction.tdText}</span>
           </div>
-          <div className="mt-1 text-slate-500">{prediction.maText}</div>
-        </div>
-        <div className="rounded-xl bg-slate-50 p-2">
-          <div className="inline-flex items-center">
-            断层状态
-            <InfoTip text="断层按相邻 K 线判断：向上断层为当日最低价高于前一根最高价；向下断层为当日最高价低于前一根最低价。若后续价格完全回到缺口边界，则视为已回补；未回补向上断层偏强，未回补向下断层偏弱。" />
+          <div className="rounded-xl bg-slate-50 p-2">
+            <div className="inline-flex items-center">
+              均线结构
+              <InfoTip text="均线使用收盘价简单移动平均：MA5/MA10/MA20/MA60。若短期均线在中长期均线上方，且价格站上 MA20，会给趋势评分加分；反之会扣分。" />
+            </div>
+            <div className="mt-1 text-slate-500">{prediction.maText}</div>
           </div>
-          <div className="mt-1 text-slate-500">{prediction.gapText}</div>
-        </div>
-        <div className="rounded-xl bg-slate-50 p-2">
-          <div className="inline-flex items-center">
-            量价关系
-            <InfoTip text="量价关系比较近 5 日价格涨跌与近 5 日/20 日平均成交量。上涨放量偏确认趋势，上涨缩量可能是量价背离；下跌放量说明抛压偏强，下跌缩量说明抛压可能减弱。" />
+          <div className="rounded-xl bg-slate-50 p-2">
+            <div className="inline-flex items-center">
+              断层状态
+              <InfoTip text="断层按相邻 K 线判断：向上断层为当日最低价高于前一根最高价；向下断层为当日最高价低于前一根最低价。若后续价格完全回到缺口边界，则视为已回补；未回补向上断层偏强，未回补向下断层偏弱。" />
+            </div>
+            <div className="mt-1 text-slate-500">{prediction.gapText}</div>
           </div>
-          <div className="mt-1 text-slate-500">{prediction.volumePriceText}</div>
-        </div>
-        <ProbabilityLine
-          label="未来5日历史上涨概率"
-          stat={prediction.stats5}
-          info="计算历史上与当前状态相似的样本：趋势分类相同、九转方向相同、九转阶段桶相同（早期 1-5、后期 6-9、或无九转），然后统计这些样本 5 个交易日后收盘价高于当前收盘价的比例，以及平均收益。"
-        />
-        <ProbabilityLine
-          label="未来10日历史上涨概率"
-          stat={prediction.stats10}
-          info="计算逻辑同未来 5 日，但观察窗口改为 10 个交易日后。上涨概率=历史相似样本中 10 日后收益为正的比例；平均收益=这些样本的 10 日收益均值。"
-        />
-        <ProbabilityLine
-          label="未来20日历史上涨概率"
-          stat={prediction.stats20}
-          info="计算逻辑同未来 5/10 日，但观察窗口改为 20 个交易日后。该指标更偏中短期，不适合解释为短线明日涨跌预测。"
-        />
-        <div className="rounded-xl bg-slate-50 p-2">
-          <div className="inline-flex items-center">
-            提示
-            <InfoTip text="提示文字是对主要加减分原因的摘要，例如是否站上 MA20、均线是否偏多、九转是否进入后段、是否存在未回补断层。它用于解释趋势分来源。" />
+          <div className="rounded-xl bg-slate-50 p-2">
+            <div className="inline-flex items-center">
+              量价关系
+              <InfoTip text="量价关系比较近 5 日价格涨跌与近 5 日/20 日平均成交量。上涨放量偏确认趋势，上涨缩量可能是量价背离；下跌放量说明抛压偏强，下跌缩量说明抛压可能减弱。" />
+            </div>
+            <div className="mt-1 text-slate-500">{prediction.volumePriceText}</div>
           </div>
-          <div className="mt-1 text-slate-500">{prediction.notes.slice(0, 3).join("；")}</div>
+          <ProbabilityLine
+            label="未来5日历史上涨概率"
+            stat={prediction.stats5}
+            info="计算历史上与当前状态相似的样本：趋势分类相同、九转方向相同、九转阶段桶相同（早期 1-5、后期 6-9、或无九转），然后统计这些样本 5 个交易日后收盘价高于当前收盘价的比例，以及平均收益。"
+          />
+          <ProbabilityLine
+            label="未来10日历史上涨概率"
+            stat={prediction.stats10}
+            info="计算逻辑同未来 5 日，但观察窗口改为 10 个交易日后。上涨概率=历史相似样本中 10 日后收益为正的比例；平均收益=这些样本的 10 日收益均值。"
+          />
+          <ProbabilityLine
+            label="未来20日历史上涨概率"
+            stat={prediction.stats20}
+            info="计算逻辑同未来 5/10 日，但观察窗口改为 20 个交易日后。该指标更偏中短期，不适合解释为短线明日涨跌预测。"
+          />
+          <div className="rounded-xl bg-slate-50 p-2">
+            <div className="inline-flex items-center">
+              提示
+              <InfoTip text="提示文字是对主要加减分原因的摘要，例如是否站上 MA20、均线是否偏多、九转是否进入后段、是否存在未回补断层。它用于解释趋势分来源。" />
+            </div>
+            <div className="mt-1 text-slate-500">{prediction.notes.slice(0, 3).join("；")}</div>
+          </div>
         </div>
-      </div>
+      </CollapsibleDetailBlock>
     </div>
   );
 }
@@ -1829,6 +1970,110 @@ function FinancialReportPanel({ financialInfo, loading, error, market }) {
       ) : (
         <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">暂无财报数据。</div>
       )}
+    </div>
+  );
+}
+
+function normalizeCollapsedText(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text;
+}
+
+function ExpandableText({ value, maxLength = 90, className = "" }) {
+  const [expanded, setExpanded] = useState(false);
+  const text = normalizeCollapsedText(value);
+
+  if (!text) return null;
+
+  const collapsible = text.length > maxLength;
+  const displayText = collapsible && !expanded ? `${text.slice(0, maxLength)}...` : text;
+
+  return (
+    <div className={className}>
+      <div>{displayText}</div>
+      {collapsible ? (
+        <button
+          type="button"
+          onClick={() => setExpanded((current) => !current)}
+          className="mt-1 text-[11px] font-medium text-slate-500 transition hover:text-slate-800"
+        >
+          {expanded ? "收起" : "展开"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function AshareProfileSection({ title, loading, error, children, info }) {
+  return (
+    <div className="mt-4 rounded-xl bg-slate-50 p-3">
+      <div className="mb-2 inline-flex items-center text-sm font-semibold text-slate-700">
+        {title}
+        {info ? <InfoTip text={info} /> : null}
+      </div>
+      {loading ? (
+        <div className="text-xs text-slate-500">加载中</div>
+      ) : error ? (
+        <div className="text-xs text-amber-700">{error}</div>
+      ) : (
+        children
+      )}
+    </div>
+  );
+}
+
+function ThemeSourceBlock({ source }) {
+  const concepts = Array.isArray(source?.concepts) ? source.concepts.filter(Boolean) : [];
+  const supplemental = Array.isArray(source?.supplemental) ? source.supplemental.filter(Boolean) : [];
+  const details = Array.isArray(source?.details) ? source.details.filter((item) => item?.name || item?.detail) : [];
+  const highlights = Array.isArray(source?.highlights) ? source.highlights.filter((item) => item?.keyword || item?.title || item?.content) : [];
+  const hasData = concepts.length > 0 || details.length > 0 || highlights.length > 0;
+
+  return (
+    <div className="rounded-lg bg-white px-2.5 py-2 ring-1 ring-slate-200">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-xs font-semibold text-slate-800">{source?.name || "数据源"}</span>
+        {source?.status === "error" ? <span className="text-[11px] text-amber-700">暂不可用</span> : null}
+      </div>
+      {concepts.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {concepts.slice(0, 10).map((item) => (
+            <span key={`${source?.key || "source"}-${item}`} className="rounded-full bg-slate-50 px-2 py-1 text-[11px] text-slate-600 ring-1 ring-slate-200">
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {supplemental.length > 0 ? (
+        <div className="mt-2 text-[11px] leading-relaxed text-slate-500">
+          补充标签：{supplemental.slice(0, 6).join(" / ")}
+        </div>
+      ) : null}
+      {details.length > 0 ? (
+        <div className="mt-2 space-y-1.5 text-xs text-slate-600">
+          {details.slice(0, 2).map((item, index) => (
+            <div key={`${source?.key || "source"}-detail-${item.name || index}`} className="rounded-md bg-slate-50 px-2 py-1.5">
+              <div className="font-medium text-slate-800">{item.name || `概念 ${index + 1}`}</div>
+              <ExpandableText value={item.detail} maxLength={72} className="mt-1" />
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {highlights.length > 0 ? (
+        <div className="mt-2 space-y-1.5 text-xs text-slate-600">
+          {highlights.slice(0, 2).map((item, index) => (
+            <div key={`${source?.key || "source"}-highlight-${item.keyword || index}`} className="rounded-md bg-slate-50 px-2 py-1.5">
+              <div className="font-medium text-slate-800">
+                {item.keyword || item.title || `题材 ${index + 1}`}
+              </div>
+              <ExpandableText value={item.content || item.title} maxLength={72} className="mt-1" />
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {!hasData ? (
+        <div className="text-xs text-slate-500">{source?.status === "error" ? source.error || "该来源暂时无法获取。" : "暂无题材概念。"}</div>
+      ) : null}
     </div>
   );
 }
@@ -2003,22 +2248,25 @@ function TradeConclusionPanel({ rawRows }) {
         <div className={`mt-2 font-semibold ${summaryClass}`}>{checklist.summary}</div>
         <div className="mt-2 leading-relaxed text-slate-600">{action.reason}</div>
       </div>
-      <div className={`mt-3 rounded-xl bg-slate-50 p-2 font-semibold ${summaryClass}`}>{checklist.summary}</div>
-      <div className="mt-3 space-y-1.5">
-        {checklist.items.map((item) => {
-          const color = item.ok ? "text-red-600" : item.neutral ? "text-slate-600" : "text-green-700";
-          const badge = item.ok ? "是" : item.neutral ? item.status : "否";
-          return (
-            <div key={item.key} className="rounded-xl bg-slate-50 p-2">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-slate-700">{item.title}</span>
-                <span className={`shrink-0 font-semibold ${color}`}>{badge}</span>
+
+      <CollapsibleDetailBlock title="查看结论明细">
+        <div className={`rounded-xl bg-slate-50 p-2 font-semibold ${summaryClass}`}>{checklist.summary}</div>
+        <div className="mt-3 space-y-1.5">
+          {checklist.items.map((item) => {
+            const color = item.ok ? "text-red-600" : item.neutral ? "text-slate-600" : "text-green-700";
+            const badge = item.ok ? "是" : item.neutral ? item.status : "否";
+            return (
+              <div key={item.key} className="rounded-xl bg-slate-50 p-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-700">{item.title}</span>
+                  <span className={`shrink-0 font-semibold ${color}`}>{badge}</span>
+                </div>
+                <div className="mt-1 leading-relaxed text-slate-500">{item.detail}</div>
               </div>
-              <div className="mt-1 leading-relaxed text-slate-500">{item.detail}</div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      </CollapsibleDetailBlock>
     </div>
   );
 }
@@ -2943,10 +3191,25 @@ function WatchlistPanel({
   loading,
   error,
   style,
+  recommendationFactor = "factor1",
+  recommendationDate = "",
+  recommendationTd = "td1",
+  recommendationTdDate = "",
+  recommendationMacd = "all",
+  recommendationSafety = "all",
+  favoriteCodeSet,
+  favoritePendingCodeSet,
   onInputChange,
   onRefresh,
   onStyleChange,
+  onRecommendationFactorChange,
+  onRecommendationDateChange,
+  onRecommendationTdChange,
+  onRecommendationTdDateChange,
+  onRecommendationMacdChange,
+  onRecommendationSafetyChange,
   onPick,
+  onToggleFavorite,
   onUpdateNote,
   preloadEnabled = false,
   onTogglePreload = null,
@@ -2960,23 +3223,51 @@ function WatchlistPanel({
     ? "支持逗号、空格、换行分隔；一行一个 A 股代码也可以。"
     : "支持逗号、空格、换行分隔；一行一个美股代码也可以。";
   const placeholder = isAshare ? "例如 600519,000001\n000001\n300750" : "例如 MSFT,AAPL\nNVDA\nTSLA";
+  const isRecommendationMode = style === "rows";
+  const panelTitle = isRecommendationMode ? `${isAshare ? "A股" : "美股"}推荐列表` : title;
+
+  function renderFavoriteButton(item) {
+    const favorited = favoriteCodeSet?.has(item.code);
+    const pending = favoritePendingCodeSet?.has(item.code);
+
+    return (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggleFavorite?.(item);
+        }}
+        disabled={pending}
+        className={`inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-[11px] font-medium transition ${
+          favorited
+            ? "bg-amber-50 text-amber-500 ring-1 ring-amber-200 hover:bg-amber-100"
+            : "bg-slate-100 text-slate-500 hover:bg-slate-200 hover:text-slate-700"
+        } disabled:cursor-not-allowed disabled:opacity-60`}
+        title={favorited ? "取消收藏" : "加入收藏"}
+        aria-label={favorited ? `取消收藏 ${item.code}` : `加入收藏 ${item.code}`}
+      >
+        <Star className="h-3 w-3" fill={favorited ? "currentColor" : "none"} />
+        <span>#{item.rankLabel}</span>
+      </button>
+    );
+  }
 
   return (
     <Card className="rounded-2xl border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.96))] shadow-sm xl:sticky xl:top-4 xl:h-[calc(100vh-2rem)] xl:max-h-[1200px]">
       <CardContent className="flex h-full min-h-0 flex-col p-4">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
-            <div className="text-lg font-semibold text-slate-900">{title}</div>
-            <div className="mt-1 text-xs leading-5 text-slate-500">{helper}</div>
+            <div className="text-lg font-semibold text-slate-900">{panelTitle}</div>
+            <div className="mt-1 text-xs leading-5 text-slate-500">{isRecommendationMode ? `共 ${items.length} 个标的` : helper}</div>
           </div>
-          <div className="inline-flex rounded-full border border-slate-200 bg-white p-1">
+          <div className="grid w-[132px] grid-cols-2 rounded-full border border-slate-200 bg-white p-1">
             {WATCHLIST_STYLE_OPTIONS.map((option) => {
               const active = style === option.value;
               return (
                 <button
                   key={option.value}
                   type="button"
-                  className={`rounded-full px-3 py-1 text-xs transition ${active ? "bg-slate-900 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"}`}
+                  className={`whitespace-nowrap rounded-full px-0 py-1 text-center text-xs transition ${active ? "bg-slate-900 text-white shadow-sm" : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"}`}
                   onClick={() => onStyleChange(option.value)}
                 >
                   {option.label}
@@ -2986,7 +3277,104 @@ function WatchlistPanel({
           </div>
         </div>
 
-        <div className="rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+        {isRecommendationMode ? (
+          <div className="space-y-3">
+            <div className="rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+              <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">因子</div>
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={recommendationFactor}
+                  onChange={(e) => onRecommendationFactorChange?.(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none"
+                >
+                  {RECOMMENDATION_FACTOR_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <div className="relative">
+                  <input
+                    type="date"
+                    value={formatRecommendationDateInput(recommendationDate)}
+                    onChange={(e) => onRecommendationDateChange?.(normalizeRecommendationDate(e.target.value))}
+                    className="absolute inset-0 z-10 cursor-pointer opacity-0"
+                    onFocus={(e) => e.target.showPicker()}
+                    onClick={(e) => e.target.showPicker()}
+                  />
+                  <input
+                    type="text"
+                    readOnly
+                    value={formatRecommendationDateInput(recommendationDate)}
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none"
+                    placeholder="YYYY-MM-DD"
+                  />
+                </div>
+                <div className="col-span-2 flex justify-end">
+                  <Button onClick={onRefresh} disabled={loading} className="rounded-xl px-3">
+                    <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                    {loading ? "读取中" : "查询"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
+              <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">9转</div>
+              <div className="grid grid-cols-2 gap-2">
+                <select
+                  value={recommendationTd}
+                  onChange={(e) => onRecommendationTdChange?.(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none"
+                >
+                  {RECOMMENDATION_TD_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <div className="relative">
+                  <input
+                    type="date"
+                    value={formatRecommendationDateInput(recommendationTdDate)}
+                    onChange={(e) => onRecommendationTdDateChange?.(normalizeRecommendationDate(e.target.value))}
+                    className="absolute inset-0 z-10 cursor-pointer opacity-0"
+                    onFocus={(e) => e.target.showPicker()}
+                    onClick={(e) => e.target.showPicker()}
+                  />
+                  <input
+                    type="text"
+                    readOnly
+                    value={formatRecommendationDateInput(recommendationTdDate)}
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none"
+                    placeholder="YYYY-MM-DD"
+                  />
+                </div>
+                <select
+                  value={recommendationMacd}
+                  onChange={(e) => onRecommendationMacdChange?.(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none"
+                >
+                  {RECOMMENDATION_MACD_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <select
+                  value={recommendationSafety}
+                  onChange={(e) => onRecommendationSafetyChange?.(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none"
+                >
+                  {RECOMMENDATION_SAFETY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <div className="col-span-2 flex justify-end">
+                  <Button onClick={onRefresh} disabled={loading} className="rounded-xl px-3">
+                    <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                    {loading ? "读取中" : "查询"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
           <textarea
             value={inputValue}
             onChange={(e) => onInputChange(e.target.value)}
@@ -3001,6 +3389,7 @@ function WatchlistPanel({
             </Button>
           </div>
         </div>
+        )}
 
         {error && (
           <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
@@ -3060,62 +3449,82 @@ function WatchlistPanel({
           {items.length > 0 ? (
             items.map((item, index) => {
               const active = item.code === activeCode;
+              const rankLabel = String(index + 1).padStart(2, "0");
               const cardStyle = style === "cards";
+              if (cardStyle) {
+                return (
+                  <div
+                    key={item.code}
+                    className={`overflow-hidden rounded-2xl border text-left transition ${active
+                      ? "border-slate-900 bg-slate-900 text-white shadow-lg shadow-slate-200"
+                      : "border-slate-200 bg-white/95 text-slate-900 shadow-sm hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"}`}
+                  >
+                    <button type="button" onClick={() => onPick(item.code)} className="block w-full p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          {renderFavoriteButton({ ...item, rankLabel })}
+                          <div className={`mt-3 font-mono text-lg font-semibold ${active ? "text-white" : "text-slate-900"}`}>
+                            {item.code}
+                          </div>
+                          {!isRecommendationMode && (
+                            <div className={`mt-1 text-sm ${active ? "text-slate-200" : "text-slate-500"}`}>
+                              {item.name || "名称加载中"}
+                            </div>
+                          )}
+                        </div>
+                        {active && (
+                          <div className="rounded-full bg-emerald-400/20 px-2.5 py-1 text-[11px] font-medium text-emerald-100 ring-1 ring-emerald-300/30">
+                            当前查看
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                    {!isRecommendationMode && (
+                      <div className="px-4 pb-4">
+                        <div className={`rounded-xl border px-3 py-2 ${active ? "border-slate-200 bg-white/90" : "border-slate-100 bg-slate-50/90"}`}>
+                          <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-slate-400">Remark</div>
+                          <input
+                            value={item.note}
+                            onChange={(e) => onUpdateNote(item.code, e.target.value)}
+                            placeholder="例如：白酒龙头 / 财报后观察 / 等突破"
+                            className="w-full bg-transparent text-sm outline-none placeholder:text-slate-300"
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
               return (
                 <div
                   key={item.code}
-                  className={`overflow-hidden rounded-2xl border text-left transition ${cardStyle
-                    ? active
+                  className={`overflow-hidden rounded-2xl border text-left transition ${
+                    active
                       ? "border-slate-900 bg-slate-900 text-white shadow-lg shadow-slate-200"
                       : "border-slate-200 bg-white/95 text-slate-900 shadow-sm hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
-                    : active
-                      ? "border-emerald-300 bg-emerald-50 text-slate-900 shadow-sm"
-                      : "border-slate-200 bg-white text-slate-900 hover:border-slate-300 hover:bg-slate-50"
                   }`}
                 >
-                  <button type="button" onClick={() => onPick(item.code)} className={`block w-full ${cardStyle ? "p-4" : "p-3"}`}>
+                  <button type="button" onClick={() => onPick(item.code)} className="block w-full p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <div className={`inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-[11px] font-medium ${active ? (cardStyle ? "bg-white/15 text-white ring-1 ring-white/20" : "bg-emerald-100 text-emerald-700") : "bg-slate-100 text-slate-500"}`}>
-                          <Star className="h-3 w-3" />
-                          #{String(index + 1).padStart(2, "0")}
-                        </div>
-                        <div className={`mt-3 font-mono text-lg font-semibold ${active && cardStyle ? "text-white" : "text-slate-900"}`}>
+                        {renderFavoriteButton({ ...item, rankLabel })}
+                        <div className={`mt-3 font-mono text-lg font-semibold ${active ? "text-white" : "text-slate-900"}`}>
                           {item.code}
-                        </div>
-                        <div className={`mt-1 text-sm ${active && cardStyle ? "text-slate-200" : "text-slate-500"}`}>
-                          {item.name || "名称加载中"}
                         </div>
                       </div>
                       {active && (
-                        <div className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${cardStyle ? "bg-emerald-400/20 text-emerald-100 ring-1 ring-emerald-300/30" : "bg-white text-emerald-700 ring-1 ring-emerald-200"}`}>
+                        <div className="rounded-full bg-emerald-400/20 px-2.5 py-1 text-[11px] font-medium text-emerald-100 ring-1 ring-emerald-300/30">
                           当前查看
                         </div>
                       )}
                     </div>
                   </button>
-
-                  {!cardStyle && (
-                    <div className="px-4 pb-4">
-                      <div className={`rounded-xl border px-3 py-2 ${active ? "border-slate-200 bg-white/90" : "border-slate-100 bg-slate-50/90"}`}>
-                        <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-slate-400">
-                          Remark
-                        </div>
-                        <input
-                          value={item.note}
-                          onChange={(e) => onUpdateNote(item.code, e.target.value)}
-                          placeholder="例如：白酒龙头 / 财报后观察 / 等突破"
-                          className="w-full bg-transparent text-sm outline-none placeholder:text-slate-300"
-                        />
-                      </div>
-                    </div>
-                  )}
                 </div>
               );
             })
           ) : (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-              输入股票代码后，这里会生成收藏卡片。
+              {isRecommendationMode ? "当前 Redis 推荐 key 还没有可展示的标的。" : "输入股票代码后，这里会生成收藏卡片。"}
             </div>
           )}
           </div>
@@ -3125,7 +3534,127 @@ function WatchlistPanel({
   );
 }
 
+function FavoritesToolbar({
+  market,
+  items,
+  open,
+  loading,
+  error,
+  pendingCodeSet,
+  onToggleOpen,
+  onRefresh,
+  onPick,
+  onRemove,
+}) {
+  const title = market === "us" ? "我的美股收藏夹" : "我的股票收藏夹";
+
+  return (
+    <>
+      {open && <button type="button" aria-label="关闭收藏夹" className="fixed inset-0 z-30 cursor-default bg-transparent" onClick={onToggleOpen} />}
+
+      <div className="fixed bottom-4 right-3 z-40 flex flex-col gap-3 md:bottom-auto md:top-1/2 md:-translate-y-1/2">
+        <button
+          type="button"
+          onClick={onToggleOpen}
+          className={`group flex min-h-16 w-14 flex-col items-center justify-center rounded-2xl border px-2 py-3 text-xs shadow-lg backdrop-blur transition ${
+            open
+              ? "border-slate-900 bg-slate-900 text-white"
+              : "border-slate-200 bg-white/92 text-slate-600 hover:border-slate-300 hover:text-slate-900"
+          }`}
+          title={title}
+        >
+          <Star className="h-4 w-4" fill={open ? "currentColor" : "none"} />
+          <span className="mt-2 leading-4">收藏夹</span>
+          <span className={`mt-1 rounded-full px-1.5 py-0.5 text-[10px] ${open ? "bg-white/15 text-white" : "bg-slate-100 text-slate-500"}`}>
+            {items.length}
+          </span>
+        </button>
+      </div>
+
+      {open && (
+        <div className="fixed bottom-24 right-3 z-40 w-[320px] max-w-[calc(100vw-1.5rem)] md:bottom-auto md:top-1/2 md:right-20 md:max-h-[70vh] md:-translate-y-1/2">
+          <Card className="overflow-hidden rounded-[28px] border-slate-200 bg-white/95 shadow-2xl backdrop-blur">
+            <CardContent className="p-0">
+              <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4">
+                <div>
+                  <div className="text-base font-semibold text-slate-900">{title}</div>
+                  <div className="mt-1 text-xs text-slate-500">按添加顺序展示，当前用户 `0`</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={onRefresh}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:border-slate-300 hover:text-slate-900"
+                    title="刷新收藏夹"
+                  >
+                    <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onToggleOpen}
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:border-slate-300 hover:text-slate-900"
+                    title="收起收藏夹"
+                  >
+                    <Minus className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+
+              {error ? (
+                <div className="border-b border-amber-100 bg-amber-50 px-4 py-3 text-xs text-amber-700">{error}</div>
+              ) : null}
+
+              <div className="max-h-[55vh] space-y-3 overflow-y-auto p-4">
+                {items.length ? (
+                  items.map((item, index) => {
+                    const pending = pendingCodeSet?.has(item.code);
+
+                    return (
+                      <div
+                        key={`${item.code}-${item.createdAt || index}`}
+                        className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-300 hover:shadow-md"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <button type="button" onClick={() => onPick(item.code)} className="min-w-0 flex-1 text-left">
+                            <div className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] text-slate-500">
+                              <Star className="h-3 w-3" fill="currentColor" />
+                              #{String(index + 1).padStart(2, "0")}
+                            </div>
+                            <div className="mt-3 font-mono text-lg font-semibold text-slate-900">{item.code}</div>
+                            <div className="mt-1 truncate text-sm text-slate-500">{item.name || item.code}</div>
+                            <div className="mt-3 text-[11px] text-slate-400">
+                              收藏于 {formatFavoriteTime(item.createdAt)}
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onRemove(item)}
+                            disabled={pending}
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 text-slate-400 transition hover:border-red-200 hover:bg-red-50 hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                            title="删除收藏"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
+                    还没有收藏股票，点击列表里的星星后会出现在这里。
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function AShareTD9InteractiveChart() {
+  const favoriteUserId = 0;
   const [market, setMarket] = useState("ashare");
   const [marketCodes, setMarketCodes] = useState({ ashare: "600519", us: "MSFT" });
   const [watchlistInputMap, setWatchlistInputMap] = useState({
@@ -3135,6 +3664,26 @@ export default function AShareTD9InteractiveChart() {
   const [watchlistItemsMap, setWatchlistItemsMap] = useState({ ashare: [], us: [] });
   const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [watchlistError, setWatchlistError] = useState("");
+  const [favoriteItemsMap, setFavoriteItemsMap] = useState({ ashare: [], us: [] });
+  const [favoriteLoadingMap, setFavoriteLoadingMap] = useState({ ashare: false, us: false });
+  const [favoriteErrorMap, setFavoriteErrorMap] = useState({ ashare: "", us: "" });
+  const [favoritePendingMap, setFavoritePendingMap] = useState({ ashare: [], us: [] });
+  const [favoritesPanelOpen, setFavoritesPanelOpen] = useState(false);
+  const [recommendationItemsMap, setRecommendationItemsMap] = useState({ ashare: [], us: [] });
+  const [recommendationLoading, setRecommendationLoading] = useState(false);
+  const [recommendationError, setRecommendationError] = useState("");
+  const [recommendationFactorMap, setRecommendationFactorMap] = useState({ ashare: "factor1", us: "factor1" });
+  const [recommendationTdMap, setRecommendationTdMap] = useState({ ashare: "td1", us: "td1" });
+  const [recommendationDateMap, setRecommendationDateMap] = useState({
+    ashare: getDefaultRecommendationDate(),
+    us: getDefaultRecommendationDate(),
+  });
+  const [recommendationTdDateMap, setRecommendationTdDateMap] = useState({
+    ashare: getDefaultRecommendationDate(),
+    us: getDefaultRecommendationDate(),
+  });
+  const [recommendationMacdMap, setRecommendationMacdMap] = useState({ ashare: "all", us: "all" });
+  const [recommendationSafetyMap, setRecommendationSafetyMap] = useState({ ashare: "all", us: "all" });
   const [watchlistStyle, setWatchlistStyle] = useState("cards");
   const [period, setPeriod] = useState("101");
   const [adjust, setAdjust] = useState("1");
@@ -3154,6 +3703,9 @@ export default function AShareTD9InteractiveChart() {
   const [financialInfo, setFinancialInfo] = useState(null);
   const [financialLoading, setFinancialLoading] = useState(false);
   const [financialError, setFinancialError] = useState("");
+  const [profileInfo, setProfileInfo] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [chartZoom, setChartZoom] = useState(1);
@@ -3179,9 +3731,34 @@ export default function AShareTD9InteractiveChart() {
   const waveAnalysis = useMemo(() => detectElliottWave(rows, waveSensitivity), [rows, waveSensitivity]);
   const currentCode = market === "us" ? marketCodes.us : marketCodes.ashare;
   const watchlistInput = market === "us" ? watchlistInputMap.us : watchlistInputMap.ashare;
-  const watchlistItems = market === "us" ? watchlistItemsMap.us : watchlistItemsMap.ashare;
+  const favoriteItems = market === "us" ? favoriteItemsMap.us : favoriteItemsMap.ashare;
+  const favoriteLoading = market === "us" ? favoriteLoadingMap.us : favoriteLoadingMap.ashare;
+  const favoriteError = market === "us" ? favoriteErrorMap.us : favoriteErrorMap.ashare;
+  const favoritePendingCodes = market === "us" ? favoritePendingMap.us : favoritePendingMap.ashare;
+  const favoriteCodeSet = useMemo(() => new Set(favoriteItems.map((item) => item.code)), [favoriteItems]);
+  const favoritePendingCodeSet = useMemo(() => new Set(favoritePendingCodes), [favoritePendingCodes]);
+  const manualWatchlistItems = market === "us" ? watchlistItemsMap.us : watchlistItemsMap.ashare;
+  const recommendationItems = market === "us" ? recommendationItemsMap.us : recommendationItemsMap.ashare;
+  const watchlistItems = watchlistStyle === "rows" ? recommendationItems : manualWatchlistItems;
+  const watchlistLoadingState = watchlistStyle === "rows" ? recommendationLoading : watchlistLoading;
+  const watchlistErrorState = watchlistStyle === "rows" ? recommendationError : watchlistError;
+  const recommendationFactor = market === "us" ? recommendationFactorMap.us : recommendationFactorMap.ashare;
+  const recommendationTd = market === "us" ? recommendationTdMap.us : recommendationTdMap.ashare;
+  const recommendationDate = market === "us" ? recommendationDateMap.us : recommendationDateMap.ashare;
+  const recommendationTdDate = market === "us" ? recommendationTdDateMap.us : recommendationTdDateMap.ashare;
+  const recommendationMacd = market === "us" ? recommendationMacdMap.us : recommendationMacdMap.ashare;
+  const recommendationSafety = market === "us" ? recommendationSafetyMap.us : recommendationSafetyMap.ashare;
   const usKlineCacheRef = useRef(new Map());
   const usPreloadRunRef = useRef(0);
+
+  function setFavoritePending(marketKey, code, active) {
+    setFavoritePendingMap((prev) => {
+      const current = new Set(prev[marketKey] || []);
+      if (active) current.add(code);
+      else current.delete(code);
+      return { ...prev, [marketKey]: Array.from(current) };
+    });
+  }
 
   async function fetchUsKlineCached({ symbol, period: targetPeriod, adjust: targetAdjust, limit, force = false }) {
     const normalized = normalizeUsSymbol(symbol);
@@ -3299,6 +3876,70 @@ export default function AShareTD9InteractiveChart() {
     }
   }
 
+  async function loadRecommendations(targetMarket = market) {
+    const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    const factor = requestedMarket === "us" ? recommendationFactorMap.us : recommendationFactorMap.ashare;
+    const date = requestedMarket === "us" ? recommendationDateMap.us : recommendationDateMap.ashare;
+    setRecommendationLoading(true);
+    setRecommendationError("");
+
+    try {
+      const payload = await fetchRecommendationList({ market: requestedMarket, factor, date });
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      setRecommendationItemsMap((prev) => ({ ...prev, [requestedMarket]: items }));
+      if (!items.length) {
+        setRecommendationError("Redis 推荐列表为空，或当前 key 下没有可识别的标的。");
+      }
+    } catch (e) {
+      setRecommendationError(getErrorMessage(e, "推荐列表读取失败，请检查 Redis key 或数据格式。"));
+      setRecommendationItemsMap((prev) => ({ ...prev, [requestedMarket]: [] }));
+    } finally {
+      setRecommendationLoading(false);
+    }
+  }
+
+  async function loadFavorites(targetMarket = market) {
+    const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    setFavoriteLoadingMap((prev) => ({ ...prev, [requestedMarket]: true }));
+    setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: "" }));
+
+    try {
+      const payload = await fetchFavorites({ market: requestedMarket, userId: favoriteUserId });
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      setFavoriteItemsMap((prev) => ({ ...prev, [requestedMarket]: items }));
+    } catch (e) {
+      setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: getErrorMessage(e, "收藏夹读取失败，请稍后重试。") }));
+    } finally {
+      setFavoriteLoadingMap((prev) => ({ ...prev, [requestedMarket]: false }));
+    }
+  }
+
+  async function toggleFavorite(item, targetMarket = market) {
+    const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    const code = normalizeCodeForMarket(item?.code, requestedMarket);
+    if (!code) return;
+
+    setFavoritePending(requestedMarket, code, true);
+
+    try {
+      const payload = favoriteCodeSet.has(code)
+        ? await removeFavorite({ market: requestedMarket, code, userId: favoriteUserId })
+        : await addFavorite({
+          market: requestedMarket,
+          code,
+          name: item?.name || (meta.code === code ? meta.name : "") || code,
+          userId: favoriteUserId,
+        });
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      setFavoriteItemsMap((prev) => ({ ...prev, [requestedMarket]: items }));
+      setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: "" }));
+    } catch (e) {
+      setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: getErrorMessage(e, "收藏操作失败，请稍后重试。") }));
+    } finally {
+      setFavoritePending(requestedMarket, code, false);
+    }
+  }
+
   async function load(overrideCode) {
     if (market === "agent") return;
     const targetCode = normalizeCodeForMarket(typeof overrideCode === "string" ? overrideCode : currentCode, market);
@@ -3306,6 +3947,8 @@ export default function AShareTD9InteractiveChart() {
     setError("");
     setFinancialError("");
     setFinancialInfo(null);
+    setProfileError("");
+    setProfileInfo(null);
     try {
       const result = market === "ashare"
         ? await (() => {
@@ -3343,29 +3986,53 @@ export default function AShareTD9InteractiveChart() {
 
       if (market === "ashare") {
         setFinancialLoading(true);
+        setProfileLoading(true);
         try {
-          const financeRes = await fetch(`/api/ashare-finance?code=${encodeURIComponent(result.code || currentCode)}`, {
-            method: "GET",
-            cache: "no-store",
-          });
-          const financePayload = await financeRes.json().catch(() => null);
-          if (!financeRes.ok) {
-            throw new Error(financePayload?.error || `HTTP ${financeRes.status}`);
+          const target = result.code || currentCode;
+          const [financeResult, profileResult] = await Promise.allSettled([
+            fetch(`/api/ashare-finance?code=${encodeURIComponent(target)}`, {
+              method: "GET",
+              cache: "no-store",
+            }).then(async (res) => {
+              const payload = await res.json().catch(() => null);
+              if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+              return payload;
+            }),
+            fetch(`/api/ashare-profile?code=${encodeURIComponent(target)}`, {
+              method: "GET",
+              cache: "no-store",
+            }).then(async (res) => {
+              const payload = await res.json().catch(() => null);
+              if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+              return payload;
+            }),
+          ]);
+
+          if (financeResult.status === "fulfilled") {
+            setFinancialInfo(financeResult.value);
+          } else {
+            setFinancialError(financeResult.reason instanceof Error ? financeResult.reason.message : "财报数据加载失败");
           }
-          setFinancialInfo(financePayload);
-        } catch (financeError) {
-          setFinancialError(financeError instanceof Error ? financeError.message : "财报数据加载失败");
+
+          if (profileResult.status === "fulfilled") {
+            setProfileInfo(profileResult.value);
+          } else {
+            setProfileError(profileResult.reason instanceof Error ? profileResult.reason.message : "公司概况数据加载失败");
+          }
         } finally {
           setFinancialLoading(false);
+          setProfileLoading(false);
         }
       } else {
         setFinancialLoading(false);
+        setProfileLoading(false);
       }
     } catch (e) {
       setError(getErrorMessage(e, "行情加载失败，请稍后重试。"));
       setRawRows([]);
       setMeta({ code: targetCode, name: "" });
       setFinancialLoading(false);
+      setProfileLoading(false);
     } finally {
       setLoading(false);
     }
@@ -3381,13 +4048,26 @@ export default function AShareTD9InteractiveChart() {
   }, [market]);
 
   useEffect(() => {
-    if (market === "agent" || watchlistItems.length > 0) return undefined;
+    if (market === "agent") return undefined;
     const timer = window.setTimeout(() => {
-      loadWatchlist(market);
+      loadFavorites(market);
     }, 0);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [market, watchlistItems.length]);
+  }, [market]);
+
+  useEffect(() => {
+    if (market === "agent" || watchlistItems.length > 0) return undefined;
+    const timer = window.setTimeout(() => {
+      if (watchlistStyle === "rows") {
+        loadRecommendations(market);
+      } else {
+        loadWatchlist(market);
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [market, watchlistItems.length, watchlistStyle]);
 
   useEffect(() => {
     if (market !== "us" || !usPreloadEnabled) {
@@ -3602,12 +4282,65 @@ export default function AShareTD9InteractiveChart() {
                     </div>
                   </div>
                 )}
+                {market === "ashare" && (
+                  <>
+                    <AshareProfileSection
+                      title="公司基本介绍"
+                      loading={profileLoading}
+                      error={profileError}
+                      info="数据来自东方财富 F10 公司概况与经营分析页。这里优先展示公司全称、行业、市场、经营范围和经营评述摘要。"
+                    >
+                      <div className="space-y-2 text-xs text-slate-600">
+                        {profileInfo?.company?.orgName ? (
+                          <div className="font-medium text-slate-800">{profileInfo.company.orgName}</div>
+                        ) : null}
+                        {(profileInfo?.company?.industry || profileInfo?.company?.market) ? (
+                          <div>{[profileInfo?.company?.industry, profileInfo?.company?.market].filter(Boolean).join(" / ")}</div>
+                        ) : null}
+                        {profileInfo?.company?.businessScope ? (
+                          <ExpandableText value={profileInfo.company.businessScope} maxLength={90} />
+                        ) : profileInfo?.company?.businessReview ? (
+                          <ExpandableText value={profileInfo.company.businessReview} maxLength={90} />
+                        ) : (
+                          <div className="text-slate-500">暂无公司介绍。</div>
+                        )}
+                      </div>
+                    </AshareProfileSection>
+                    <AshareProfileSection
+                      title="目前炒作主题概念"
+                      loading={profileLoading}
+                      error={profileError}
+                      info="综合展示东方财富 F10 和同花顺 F10 的概念题材。东财优先展示精确概念，同花顺补充概念题材解析，便于交叉核对当前市场交易标签。"
+                    >
+                      <div className="space-y-2">
+                        {(Array.isArray(profileInfo?.themes?.sources) && profileInfo.themes.sources.length > 0
+                          ? profileInfo.themes.sources
+                          : [
+                              {
+                                key: "eastmoney",
+                                name: "东方财富 F10",
+                                status: "ok",
+                                concepts: profileInfo?.themes?.preciseConcepts || profileInfo?.themes?.boards || [],
+                                supplemental: profileInfo?.themes?.supplementalBoards || [],
+                                highlights: profileInfo?.themes?.highlights || [],
+                              },
+                            ]
+                        ).map((source) => (
+                          <ThemeSourceBlock key={source.key || source.name} source={source} />
+                        ))}
+                        {(!profileInfo?.themes ||
+                          ((!Array.isArray(profileInfo.themes.sources) || profileInfo.themes.sources.length === 0) &&
+                            (!Array.isArray(profileInfo.themes.boards) || profileInfo.themes.boards.length === 0) &&
+                            (!Array.isArray(profileInfo.themes.highlights) || profileInfo.themes.highlights.length === 0))) ? (
+                          <div className="text-xs text-slate-500">暂无题材概念。</div>
+                        ) : null}
+                      </div>
+                    </AshareProfileSection>
+                  </>
+                )}
                 <TrendPredictionPanel prediction={prediction} />
                 <div className="mt-4">
                   <TradeConclusionPanel rawRows={rawRows} />
-                </div>
-                <div className="mt-4">
-                  <WaveStructurePanel analysis={waveAnalysis} />
                 </div>
               </CardContent>
             </Card>
@@ -3671,12 +4404,40 @@ export default function AShareTD9InteractiveChart() {
               inputValue={watchlistInput}
               items={watchlistItems}
               activeCode={meta.code || currentCode}
-              loading={watchlistLoading}
-              error={watchlistError}
+              loading={watchlistLoadingState}
+              error={watchlistErrorState}
               style={watchlistStyle}
+              recommendationFactor={recommendationFactor}
+              recommendationTd={recommendationTd}
+              recommendationDate={recommendationDate}
+              recommendationTdDate={recommendationTdDate}
+              recommendationMacd={recommendationMacd}
+              recommendationSafety={recommendationSafety}
+              favoriteCodeSet={favoriteCodeSet}
+              favoritePendingCodeSet={favoritePendingCodeSet}
               onInputChange={(value) => setWatchlistInputMap((prev) => ({ ...prev, [market]: value }))}
-              onRefresh={() => loadWatchlist()}
+              onRefresh={() => (watchlistStyle === "rows" ? loadRecommendations() : loadWatchlist())}
               onStyleChange={setWatchlistStyle}
+              onRecommendationFactorChange={(value) => {
+                setRecommendationFactorMap((prev) => ({ ...prev, [market]: value }));
+                setRecommendationItemsMap((prev) => ({ ...prev, [market]: [] }));
+              }}
+              onRecommendationTdChange={(value) => {
+                setRecommendationTdMap((prev) => ({ ...prev, [market]: value }));
+              }}
+              onRecommendationTdDateChange={(value) => {
+                setRecommendationTdDateMap((prev) => ({ ...prev, [market]: value }));
+              }}
+              onRecommendationMacdChange={(value) => {
+                setRecommendationMacdMap((prev) => ({ ...prev, [market]: value }));
+              }}
+              onRecommendationSafetyChange={(value) => {
+                setRecommendationSafetyMap((prev) => ({ ...prev, [market]: value }));
+              }}
+              onRecommendationDateChange={(value) => {
+                setRecommendationDateMap((prev) => ({ ...prev, [market]: value }));
+                setRecommendationItemsMap((prev) => ({ ...prev, [market]: [] }));
+              }}
               preloadEnabled={usPreloadEnabled}
               onTogglePreload={() => setUsPreloadEnabled((value) => !value)}
               preloadStatus={usPreloadStatus}
@@ -3688,7 +4449,11 @@ export default function AShareTD9InteractiveChart() {
                   if (market !== "agent") load(code);
                 }, 0);
               }}
+              onToggleFavorite={(item) => {
+                toggleFavorite(item, market);
+              }}
               onUpdateNote={(code, note) => {
+                if (watchlistStyle === "rows") return;
                 setWatchlistItemsMap((prev) => ({
                   ...prev,
                   [market]: (prev[market] || []).map((item) => (item.code === code ? { ...item, note } : item)),
@@ -3698,6 +4463,28 @@ export default function AShareTD9InteractiveChart() {
           </div>
         ) : (
           <AgentChatPanel marketCodes={marketCodes} />
+        )}
+        {market !== "agent" && (
+          <FavoritesToolbar
+            market={market}
+            items={favoriteItems}
+            open={favoritesPanelOpen}
+            loading={favoriteLoading}
+            error={favoriteError}
+            pendingCodeSet={favoritePendingCodeSet}
+            onToggleOpen={() => setFavoritesPanelOpen((value) => !value)}
+            onRefresh={() => loadFavorites(market)}
+            onPick={(code) => {
+              setMarketCodes((prev) => ({ ...prev, [market]: code }));
+              setError("");
+              window.setTimeout(() => {
+                load(code);
+              }, 0);
+            }}
+            onRemove={(item) => {
+              toggleFavorite(item, market);
+            }}
+          />
         )}
         {chartFullscreen && market !== "agent" && rows.length > 0 && (
           <div className="fixed inset-0 z-50 bg-slate-950/40 p-3 backdrop-blur-sm md:p-5">

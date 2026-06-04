@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>自选面板设计方案</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root { color-scheme: light; }
+  body { background: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+</style>
+</head>
+<body class="p-8 flex flex-col gap-10">
+
+<!-- 方案 A: 极简行列表 -->
+<div class="max-w-sm mx-auto">
+  <h3 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">方案 A — 极简行列表</h3>
+  <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
+    <div class="px-4 py-3 flex items-center justify-between border-b border-slate-100">
+      <div>
+        <div class="text-sm font-semibold text-slate-900">A股推荐列表</div>
+        <div class="text-[11px] text-slate-400">共 12 个标的</div>
+      </div>
+      <div class="flex gap-1">
+        <span class="px-2 py-0.5 text-[11px] rounded-full bg-slate-900 text-white">推荐</span>
+        <span class="px-2 py-0.5 text-[11px] rounded-full bg-slate-100 text-slate-500">自选</span>
+      </div>
+    </div>
+    <div class="px-4 py-2 flex gap-2 border-b border-slate-50">
+      <select class="flex-1 text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-slate-50 outline-none">
+        <option>因子1 (12个)</option><option>因子2</option><option>因子3</option>
+      </select>
+      <input type="text" value="2026-06-03" class="flex-1 text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-slate-50 outline-none text-slate-700" />
+      <button class="text-xs bg-slate-900 text-white rounded-lg px-3 py-1.5">刷新</button>
+    </div>
+    <div class="divide-y divide-slate-50">
+      <div class="px-4 py-2.5 flex items-center gap-3 hover:bg-slate-50 cursor-pointer">
+        <span class="text-[11px] font-medium text-slate-400 w-5">01</span>
+        <span class="text-sm font-mono font-medium text-slate-900">600519</span>
+        <span class="text-xs text-slate-400 ml-auto">贵州茅台</span>
+      </div>
+      <div class="px-4 py-2.5 flex items-center gap-3 hover:bg-slate-50 cursor-pointer bg-amber-50">
+        <span class="text-[11px] font-medium text-amber-600 w-5">02</span>
+        <span class="text-sm font-mono font-medium text-slate-900">000001</span>
+        <span class="text-xs text-slate-400 ml-auto">平安银行</span>
+      </div>
+      <div class="px-4 py-2.5 flex items-center gap-3 hover:bg-slate-50 cursor-pointer">
+        <span class="text-[11px] font-medium text-slate-400 w-5">03</span>
+        <span class="text-sm font-mono font-medium text-slate-900">300750</span>
+        <span class="text-xs text-slate-400 ml-auto">宁德时代</span>
+      </div>
+      <div class="px-4 py-2.5 flex items-center gap-3 hover:bg-slate-50 cursor-pointer">
+        <span class="text-[11px] font-medium text-slate-400 w-5">04</span>
+        <span class="text-sm font-mono font-medium text-slate-900">000858</span>
+        <span class="text-xs text-slate-400 ml-auto">五粮液</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 方案 B: 标签芯片风 -->
+<div class="max-w-sm mx-auto">
+  <h3 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">方案 B — 标签芯片风</h3>
+  <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm p-4">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <div class="text-base font-semibold text-slate-900">A股推荐</div>
+        <div class="text-[11px] text-slate-400 mt-0.5">因子1 · 2026-06-03</div>
+      </div>
+      <div class="flex gap-1">
+        <span class="px-2.5 py-1 text-[11px] rounded-full bg-slate-900 text-white">推荐</span>
+        <span class="px-2.5 py-1 text-[11px] rounded-full bg-slate-100 text-slate-400">自选</span>
+      </div>
+    </div>
+    <div class="flex gap-2 mb-4">
+      <select class="flex-1 text-xs border border-slate-200 rounded-full px-3 py-1.5 outline-none"><option>因子1</option></select>
+      <input type="text" value="2026-06-03" class="flex-1 text-xs border border-slate-200 rounded-full px-3 py-1.5 outline-none text-slate-700" />
+    </div>
+    <div class="flex flex-wrap gap-2">
+      <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-sm font-mono text-slate-900 cursor-pointer hover:bg-amber-50 hover:text-amber-700 transition">
+        <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+        600519
+      </span>
+      <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-sm font-mono text-slate-900 cursor-pointer hover:bg-amber-50 hover:text-amber-700 transition">
+        000001
+      </span>
+      <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-sm font-mono text-slate-900 cursor-pointer hover:bg-amber-50 hover:text-amber-700 transition">
+        300750
+      </span>
+      <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-sm font-mono text-slate-900 cursor-pointer hover:bg-amber-50 hover:text-amber-700 transition">
+        000858
+      </span>
+      <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-sm font-mono text-slate-900 cursor-pointer hover:bg-amber-50 hover:text-amber-700 transition">
+        002415
+      </span>
+      <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-sm font-mono text-slate-900 cursor-pointer hover:bg-amber-50 hover:text-amber-700 transition">
+        601318
+      </span>
+      <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-sm font-mono text-slate-900 cursor-pointer hover:bg-amber-50 hover:text-amber-700 transition">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+        600030
+      </span>
+      <span class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-100 text-sm font-mono text-slate-900 cursor-pointer hover:bg-amber-50 hover:text-amber-700 transition">
+        000333
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- 方案 C: 精致小卡片 -->
+<div class="max-w-sm mx-auto">
+  <h3 class="text-sm font-semibold text-slate-500 uppercase tracking-wide mb-3">方案 C — 精致小卡片</h3>
+  <div class="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm p-4">
+    <div class="flex items-center justify-between mb-3">
+      <div class="text-sm font-semibold text-slate-900">A股推荐列表</div>
+      <div class="flex items-center gap-2">
+        <span class="text-[11px] text-slate-400">12 个标的</span>
+        <div class="flex bg-slate-100 rounded-full p-0.5">
+          <span class="px-2 py-0.5 text-[11px] rounded-full bg-white text-slate-900 shadow-sm">推荐</span>
+          <span class="px-2 py-0.5 text-[11px] rounded-full text-slate-400">自选</span>
+        </div>
+      </div>
+    </div>
+    <div class="flex gap-2 mb-3">
+      <select class="flex-1 text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-slate-50 outline-none"><option>因子1</option></select>
+      <input type="text" value="2026-06-03" class="flex-1 text-xs border border-slate-200 rounded-lg px-2 py-1.5 bg-slate-50 outline-none text-slate-700" />
+    </div>
+    <div class="grid grid-cols-2 gap-2">
+      <div class="rounded-xl border border-slate-100 p-3 cursor-pointer hover:border-amber-200 hover:bg-amber-50/50 transition">
+        <div class="flex items-center gap-1.5 mb-1">
+          <span class="text-[10px] font-medium text-amber-500 bg-amber-50 px-1.5 py-0.5 rounded">#1</span>
+          <span class="text-[10px] text-slate-400">得分 92</span>
+        </div>
+        <div class="text-sm font-mono font-semibold text-slate-900">600519</div>
+        <div class="text-[11px] text-slate-400 mt-0.5">贵州茅台</div>
+      </div>
+      <div class="rounded-xl border border-slate-100 p-3 cursor-pointer hover:border-amber-200 hover:bg-amber-50/50 transition">
+        <div class="flex items-center gap-1.5 mb-1">
+          <span class="text-[10px] font-medium text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded">#2</span>
+          <span class="text-[10px] text-slate-400">得分 88</span>
+        </div>
+        <div class="text-sm font-mono font-semibold text-slate-900">000001</div>
+        <div class="text-[11px] text-slate-400 mt-0.5">平安银行</div>
+      </div>
+      <div class="rounded-xl border border-slate-100 p-3 cursor-pointer hover:border-amber-200 hover:bg-amber-50/50 transition">
+        <div class="flex items-center gap-1.5 mb-1">
+          <span class="text-[10px] font-medium text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded">#3</span>
+          <span class="text-[10px] text-slate-400">得分 85</span>
+        </div>
+        <div class="text-sm font-mono font-semibold text-slate-900">300750</div>
+        <div class="text-[11px] text-slate-400 mt-0.5">宁德时代</div>
+      </div>
+      <div class="rounded-xl border border-slate-100 p-3 cursor-pointer hover:border-amber-200 hover:bg-amber-50/50 transition">
+        <div class="flex items-center gap-1.5 mb-1">
+          <span class="text-[10px] font-medium text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded">#4</span>
+          <span class="text-[10px] text-slate-400">得分 81</span>
+        </div>
+        <div class="text-sm font-mono font-semibold text-slate-900">000858</div>
+        <div class="text-[11px] text-slate-400 mt-0.5">五粮液</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

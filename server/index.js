@@ -1,8 +1,14 @@
 import path from "node:path";
 import express from "express";
 import { fileURLToPath } from "node:url";
+import { loadServerEnv } from "./env.js";
 import { createAshareFinanceHandler } from "./ashareFinance.js";
+import { createAshareProfileHandler } from "./ashareProfile.js";
+import { createFavoritesHandler } from "./favoritesHandlers.js";
+import { createRedisRecommendationsHandler } from "./redisHandlers.js";
 import { createUsKlineHandler } from "./usKline.js";
+
+loadServerEnv();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,6 +19,9 @@ const port = Number(process.env.PORT) || 80;
 
 app.get("/api/us-kline", createUsKlineHandler());
 app.get("/api/ashare-finance", createAshareFinanceHandler());
+app.get("/api/ashare-profile", createAshareProfileHandler());
+app.get("/api/recommendations", createRedisRecommendationsHandler());
+app.use("/api/favorites", createFavoritesHandler());
 
 app.use(
   express.static(distDir, {
