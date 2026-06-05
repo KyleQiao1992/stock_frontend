@@ -401,10 +401,10 @@ function extractTencentQuoteMeta(res, code) {
   const qt = node?.qt?.[symbol] || node?.qt?.[code];
   if (!Array.isArray(qt)) return { marketCap: null, floatMarketCap: null, peRatio: null };
 
-  // Tencent quote fields: 39 = PE, 44 = total market cap in 100M CNY, 45 = float market cap in 100M CNY.
+  // Tencent quote fields: 39 = PE, 44 = float market cap in 100M CNY, 45 = total market cap in 100M CNY.
   const peRatio = Number(qt[39]);
-  const totalMarketCapYi = Number(qt[44]);
-  const floatMarketCapYi = Number(qt[45]);
+  const floatMarketCapYi = Number(qt[44]);
+  const totalMarketCapYi = Number(qt[45]);
   return {
     marketCap: Number.isFinite(totalMarketCapYi) ? totalMarketCapYi * 100000000 : null,
     floatMarketCap: Number.isFinite(floatMarketCapYi) ? floatMarketCapYi * 100000000 : null,
@@ -791,6 +791,22 @@ async function fetchRecommendationList({ market, factor, date }) {
     throw new Error(payload?.error || `HTTP ${res.status}`);
   }
   return payload;
+}
+
+async function fetchAshareSuggestions(query, options = {}) {
+  const keyword = String(query || "").trim();
+  if (!keyword) return [];
+  const params = new URLSearchParams({ q: keyword });
+  const res = await fetch(`/api/ashare-search?${params.toString()}`, {
+    method: "GET",
+    cache: "no-store",
+    signal: options.signal,
+  });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(payload?.error || `HTTP ${res.status}`);
+  }
+  return Array.isArray(payload?.items) ? payload.items : [];
 }
 
 async function fetchFavorites({ market, userId = 0 }) {
@@ -3210,7 +3226,6 @@ function WatchlistPanel({
   onRecommendationSafetyChange,
   onPick,
   onToggleFavorite,
-  onUpdateNote,
   preloadEnabled = false,
   onTogglePreload = null,
   preloadStatus = null,
@@ -3403,7 +3418,7 @@ function WatchlistPanel({
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-semibold text-slate-900">预加载</div>
                 <div className="mt-1 pr-2 text-[11px] leading-5 text-slate-500">
-                  默认开启。后台按顺序缓存自选美股数据，请求间隔至少 0.5s，点击时优先使用缓存。
+                  默认开启。后台按顺序缓存当前列表里的美股数据，请求间隔至少 0.5s，点击时优先使用缓存。
                 </div>
               </div>
               <button
@@ -3428,7 +3443,7 @@ function WatchlistPanel({
                   ? `后台预加载中 ${preloadStatus.done}/${preloadStatus.total}`
                   : preloadStatus?.total
                     ? `已缓存 ${preloadStatus.done}/${preloadStatus.total}`
-                    : "等待生成自选后开始预加载"}
+                    : "等待当前列表生成后开始预加载"}
               </span>
               {preloadStatus?.current && <span className="shrink-0 font-mono text-slate-700">{preloadStatus.current}</span>}
             </div>
@@ -3479,19 +3494,7 @@ function WatchlistPanel({
                         )}
                       </div>
                     </button>
-                    {!isRecommendationMode && (
-                      <div className="px-4 pb-4">
-                        <div className={`rounded-xl border px-3 py-2 ${active ? "border-slate-200 bg-white/90" : "border-slate-100 bg-slate-50/90"}`}>
-                          <div className="mb-1 text-[11px] uppercase tracking-[0.18em] text-slate-400">Remark</div>
-                          <input
-                            value={item.note}
-                            onChange={(e) => onUpdateNote(item.code, e.target.value)}
-                            placeholder="例如：白酒龙头 / 财报后观察 / 等突破"
-                            className="w-full bg-transparent text-sm outline-none placeholder:text-slate-300"
-                          />
-                        </div>
-                      </div>
-                    )}
+                    {!isRecommendationMode ? <div className="pb-4" /> : null}
                   </div>
                 );
               }
@@ -3657,6 +3660,11 @@ export default function AShareTD9InteractiveChart() {
   const favoriteUserId = 0;
   const [market, setMarket] = useState("ashare");
   const [marketCodes, setMarketCodes] = useState({ ashare: "600519", us: "MSFT" });
+  const [ashareSuggestions, setAshareSuggestions] = useState([]);
+  const [ashareSuggestLoading, setAshareSuggestLoading] = useState(false);
+  const [ashareSuggestOpen, setAshareSuggestOpen] = useState(false);
+  const [ashareSuggestFocused, setAshareSuggestFocused] = useState(false);
+  const [ashareSuggestIndex, setAshareSuggestIndex] = useState(0);
   const [watchlistInputMap, setWatchlistInputMap] = useState({
     ashare: "600519,000001,300750",
     us: "MSFT,AAPL,NVDA",
@@ -3748,6 +3756,19 @@ export default function AShareTD9InteractiveChart() {
   const recommendationTdDate = market === "us" ? recommendationTdDateMap.us : recommendationTdDateMap.ashare;
   const recommendationMacd = market === "us" ? recommendationMacdMap.us : recommendationMacdMap.ashare;
   const recommendationSafety = market === "us" ? recommendationSafetyMap.us : recommendationSafetyMap.ashare;
+  const usPreloadCodes = useMemo(() => {
+    if (market !== "us") return [];
+
+    const seen = new Set();
+    const codes = [];
+    for (const item of watchlistItems) {
+      const code = normalizeUsSymbol(item?.code);
+      if (!isValidUsSymbol(code) || seen.has(code)) continue;
+      seen.add(code);
+      codes.push(code);
+    }
+    return codes;
+  }, [market, watchlistItems]);
   const usKlineCacheRef = useRef(new Map());
   const usPreloadRunRef = useRef(0);
 
@@ -3816,6 +3837,16 @@ export default function AShareTD9InteractiveChart() {
     }));
   }
 
+  function selectAshareSuggestion(item) {
+    const code = onlyDigits(item?.code);
+    if (!isSixDigitCode(code)) return;
+    setMarketCodes((prev) => ({ ...prev, ashare: code }));
+    setAshareSuggestions([]);
+    setAshareSuggestOpen(false);
+    setAshareSuggestIndex(0);
+    load(code);
+  }
+
   useEffect(() => {
     if (!chartFullscreen) return undefined;
     function handleKeydown(event) {
@@ -3824,6 +3855,47 @@ export default function AShareTD9InteractiveChart() {
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
   }, [chartFullscreen]);
+
+  useEffect(() => {
+    if (market !== "ashare" || !ashareSuggestFocused) {
+      setAshareSuggestions([]);
+      setAshareSuggestOpen(false);
+      setAshareSuggestLoading(false);
+      return undefined;
+    }
+
+    const query = String(currentCode || "").trim();
+    if (!query) {
+      setAshareSuggestions([]);
+      setAshareSuggestOpen(false);
+      setAshareSuggestLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setAshareSuggestLoading(true);
+      try {
+        const items = await fetchAshareSuggestions(query, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setAshareSuggestions(items);
+        setAshareSuggestIndex(0);
+        setAshareSuggestOpen(items.length > 0 && ashareSuggestFocused);
+      } catch {
+        if (!controller.signal.aborted) {
+          setAshareSuggestions([]);
+          setAshareSuggestOpen(false);
+        }
+      } finally {
+        if (!controller.signal.aborted) setAshareSuggestLoading(false);
+      }
+    }, 220);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [market, currentCode, ashareSuggestFocused]);
 
   async function loadWatchlist(targetMarket = market) {
     const requestedMarket = targetMarket === "us" ? "us" : targetMarket === "ashare" ? "ashare" : market;
@@ -3840,13 +3912,11 @@ export default function AShareTD9InteractiveChart() {
     setWatchlistLoading(true);
     setWatchlistError("");
     try {
-      const previousItems = watchlistItemsMap[requestedMarket] || [];
-      const noteByCode = new Map(previousItems.map((item) => [item.code, item.note || ""]));
       const activeMeta = requestedMarket === market ? meta : null;
       const results = await Promise.allSettled(
         codes.map(async (code) => {
           if (activeMeta?.code === code && activeMeta?.name) {
-            return { code, name: activeMeta.name, note: noteByCode.get(code) || "" };
+            return { code, name: activeMeta.name };
           }
           const detail = requestedMarket === "ashare"
             ? await fetchAshareKline({ code, period, adjust, limit: 60 })
@@ -3854,7 +3924,6 @@ export default function AShareTD9InteractiveChart() {
           return {
             code: detail.code || code,
             name: detail.name || code,
-            note: noteByCode.get(code) || "",
           };
         }),
       );
@@ -3942,7 +4011,8 @@ export default function AShareTD9InteractiveChart() {
 
   async function load(overrideCode) {
     if (market === "agent") return;
-    const targetCode = normalizeCodeForMarket(typeof overrideCode === "string" ? overrideCode : currentCode, market);
+    const rawTargetCode = typeof overrideCode === "string" ? overrideCode : currentCode;
+    let targetCode = normalizeCodeForMarket(rawTargetCode, market);
     setLoading(true);
     setError("");
     setFinancialError("");
@@ -3951,10 +4021,21 @@ export default function AShareTD9InteractiveChart() {
     setProfileInfo(null);
     try {
       const result = market === "ashare"
-        ? await (() => {
-          const normalized = targetCode;
+        ? await (async () => {
+          let normalized = onlyDigits(rawTargetCode);
           if (!isSixDigitCode(normalized)) {
-            throw new Error("请输入 6 位 A 股代码，例如 600519、000001、300750。");
+            const matches = await fetchAshareSuggestions(rawTargetCode);
+            normalized = onlyDigits(matches[0]?.code);
+            if (isSixDigitCode(normalized)) {
+              setMarketCodes((prev) => ({ ...prev, ashare: normalized }));
+              setAshareSuggestions([]);
+              setAshareSuggestOpen(false);
+              setAshareSuggestIndex(0);
+              targetCode = normalized;
+            }
+          }
+          if (!isSixDigitCode(normalized)) {
+            throw new Error("请输入 6 位 A 股代码，或输入股票简称 / 拼音首字母后从联想结果中选择。");
           }
           return fetchAshareKline({
             code: normalized,
@@ -4077,8 +4158,7 @@ export default function AShareTD9InteractiveChart() {
       return undefined;
     }
 
-    const codes = normalizeWatchlistCodes(watchlistInputMap.us, "us");
-    if (!codes.length) {
+    if (!usPreloadCodes.length) {
       Promise.resolve().then(() => {
         setUsPreloadStatus({ running: false, total: 0, done: 0, current: "" });
       });
@@ -4093,20 +4173,20 @@ export default function AShareTD9InteractiveChart() {
     (async () => {
       await Promise.resolve();
       if (cancelled || usPreloadRunRef.current !== runId) return;
-      setUsPreloadStatus({ running: true, total: codes.length, done: 0, current: "" });
+      setUsPreloadStatus({ running: true, total: usPreloadCodes.length, done: 0, current: "" });
 
       let done = 0;
-      for (const code of codes) {
+      for (const code of usPreloadCodes) {
         if (cancelled || usPreloadRunRef.current !== runId) return;
         const cacheKey = `${normalizeUsSymbol(code)}|${period}|${adjust}|${limit}`;
         const cached = usKlineCacheRef.current.get(cacheKey);
         if (cached?.data) {
           done += 1;
-          setUsPreloadStatus({ running: true, total: codes.length, done, current: code });
+          setUsPreloadStatus({ running: true, total: usPreloadCodes.length, done, current: code });
           continue;
         }
 
-        setUsPreloadStatus({ running: true, total: codes.length, done, current: code });
+        setUsPreloadStatus({ running: true, total: usPreloadCodes.length, done, current: code });
         try {
           await fetchUsKlineCached({
             symbol: code,
@@ -4118,19 +4198,19 @@ export default function AShareTD9InteractiveChart() {
           // Ignore individual preload failures and keep the queue moving.
         }
         done += 1;
-        setUsPreloadStatus({ running: true, total: codes.length, done, current: code });
-        if (done < codes.length) await delay(600);
+        setUsPreloadStatus({ running: true, total: usPreloadCodes.length, done, current: code });
+        if (done < usPreloadCodes.length) await delay(600);
       }
 
       if (!cancelled && usPreloadRunRef.current === runId) {
-        setUsPreloadStatus({ running: false, total: codes.length, done: codes.length, current: "" });
+        setUsPreloadStatus({ running: false, total: usPreloadCodes.length, done: usPreloadCodes.length, current: "" });
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [market, usPreloadEnabled, watchlistInputMap.us, period, adjust, displayCount]);
+  }, [market, usPreloadEnabled, usPreloadCodes, period, adjust, displayCount]);
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 text-slate-900">
@@ -4167,23 +4247,85 @@ export default function AShareTD9InteractiveChart() {
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
-            <div className="col-span-2 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 md:w-44">
+            <div className="relative col-span-2 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 md:w-56">
               <Search className="h-4 w-4 text-slate-400" />
               <input
                 value={currentCode}
                 onChange={(e) => {
-                  const value = normalizeCodeForMarket(e.target.value, market);
+                  const value = market === "ashare" ? e.target.value.slice(0, 30) : normalizeCodeForMarket(e.target.value, market);
                   setMarketCodes((prev) => ({ ...prev, [market]: value }));
+                  if (market === "ashare") setAshareSuggestOpen(Boolean(e.target.value.trim()));
                 }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && market !== "agent") {
-                    load(normalizeCodeForMarket(e.currentTarget.value, market));
+                onFocus={() => {
+                  if (market === "ashare") setAshareSuggestFocused(true);
+                  if (market === "ashare" && ashareSuggestions.length) setAshareSuggestOpen(true);
+                }}
+                onBlur={() => {
+                  if (market === "ashare") {
+                    window.setTimeout(() => {
+                      setAshareSuggestFocused(false);
+                      setAshareSuggestOpen(false);
+                    }, 120);
                   }
                 }}
-                placeholder={market === "ashare" ? "如 600519" : market === "us" ? "如 AAPL" : "Agent 功能待接入"}
+                onKeyDown={(e) => {
+                  if (market === "ashare" && ashareSuggestOpen && ashareSuggestions.length) {
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setAshareSuggestIndex((prev) => Math.min(prev + 1, ashareSuggestions.length - 1));
+                      return;
+                    }
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setAshareSuggestIndex((prev) => Math.max(prev - 1, 0));
+                      return;
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setAshareSuggestOpen(false);
+                      return;
+                    }
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      selectAshareSuggestion(ashareSuggestions[ashareSuggestIndex] || ashareSuggestions[0]);
+                      return;
+                    }
+                  }
+                  if (e.key === "Enter" && market !== "agent") {
+                    load(e.currentTarget.value);
+                  }
+                }}
+                placeholder={market === "ashare" ? "代码 / 简称 / 拼音首字母" : market === "us" ? "如 AAPL" : "Agent 功能待接入"}
                 disabled={market === "agent"}
                 className="w-full bg-transparent outline-none disabled:cursor-not-allowed disabled:text-slate-400"
               />
+              {market === "ashare" && (ashareSuggestOpen || ashareSuggestLoading) && (
+                <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+                  {ashareSuggestLoading && !ashareSuggestions.length ? (
+                    <div className="px-3 py-2 text-sm text-slate-500">搜索中...</div>
+                  ) : (
+                    ashareSuggestions.map((item, index) => {
+                      const active = index === ashareSuggestIndex;
+                      return (
+                        <button
+                          key={`${item.code}-${item.quoteId || index}`}
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setAshareSuggestIndex(index)}
+                          onClick={() => selectAshareSuggestion(item)}
+                          className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-semibold">{item.name}</span>
+                            <span className={`block text-xs ${active ? "text-slate-200" : "text-slate-400"}`}>{item.market || "A股"} · {item.pinyin || "-"}</span>
+                          </span>
+                          <span className="shrink-0 font-mono text-sm">{item.code}</span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              )}
             </div>
             <select value={period} onChange={(e) => setPeriod(e.target.value)} disabled={market === "agent"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               {PERIOD_OPTIONS.map((item) => (
@@ -4451,13 +4593,6 @@ export default function AShareTD9InteractiveChart() {
               }}
               onToggleFavorite={(item) => {
                 toggleFavorite(item, market);
-              }}
-              onUpdateNote={(code, note) => {
-                if (watchlistStyle === "rows") return;
-                setWatchlistItemsMap((prev) => ({
-                  ...prev,
-                  [market]: (prev[market] || []).map((item) => (item.code === code ? { ...item, note } : item)),
-                }));
               }}
             />
           </div>

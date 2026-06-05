@@ -5,6 +5,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { loadServerEnv } from "./server/env.js";
 import { createAshareFinanceHandler } from "./server/ashareFinance.js";
 import { createAshareProfileHandler } from "./server/ashareProfile.js";
+import { createAshareSearchHandler } from "./server/ashareSearch.js";
 import { createFavoritesHandler } from "./server/favoritesHandlers.js";
 import { createRedisRecommendationsHandler } from "./server/redisHandlers.js";
 import { createUsKlineHandler } from "./server/usKline.js";
@@ -14,6 +15,7 @@ function usKlinePlugin() {
   const handler = createUsKlineHandler();
   const ashareFinanceHandler = createAshareFinanceHandler();
   const ashareProfileHandler = createAshareProfileHandler();
+  const ashareSearchHandler = createAshareSearchHandler();
   const redisRecommendationsHandler = createRedisRecommendationsHandler();
   const favoritesHandler = createFavoritesHandler();
 
@@ -21,6 +23,7 @@ function usKlinePlugin() {
     middlewares.use("/api/us-kline", handler);
     middlewares.use("/api/ashare-finance", ashareFinanceHandler);
     middlewares.use("/api/ashare-profile", ashareProfileHandler);
+    middlewares.use("/api/ashare-search", ashareSearchHandler);
     middlewares.use("/api/recommendations", redisRecommendationsHandler);
     middlewares.use("/api/favorites", favoritesHandler);
   }

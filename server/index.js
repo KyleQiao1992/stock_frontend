@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { loadServerEnv } from "./env.js";
 import { createAshareFinanceHandler } from "./ashareFinance.js";
 import { createAshareProfileHandler } from "./ashareProfile.js";
+import { createAshareSearchHandler } from "./ashareSearch.js";
 import { createFavoritesHandler } from "./favoritesHandlers.js";
 import { createRedisRecommendationsHandler } from "./redisHandlers.js";
 import { createUsKlineHandler } from "./usKline.js";
@@ -20,6 +21,7 @@ const port = Number(process.env.PORT) || 80;
 app.get("/api/us-kline", createUsKlineHandler());
 app.get("/api/ashare-finance", createAshareFinanceHandler());
 app.get("/api/ashare-profile", createAshareProfileHandler());
+app.get("/api/ashare-search", createAshareSearchHandler());
 app.get("/api/recommendations", createRedisRecommendationsHandler());
 app.use("/api/favorites", createFavoritesHandler());
 
