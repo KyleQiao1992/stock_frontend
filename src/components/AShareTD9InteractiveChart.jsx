@@ -399,9 +399,10 @@ function extractTencentQuoteMeta(res, code) {
   const symbol = toTencentSymbol(code);
   const node = res?.data?.[symbol] || res?.data?.[code] || res?.[symbol] || res?.[code];
   const qt = node?.qt?.[symbol] || node?.qt?.[code];
-  if (!Array.isArray(qt)) return { marketCap: null, floatMarketCap: null, peRatio: null };
+  if (!Array.isArray(qt)) return { marketCap: null, floatMarketCap: null, peRatio: null, turnoverRate: null };
 
-  // Tencent quote fields: 39 = PE, 44 = float market cap in 100M CNY, 45 = total market cap in 100M CNY.
+  // Tencent quote fields: 38 = turnover rate %, 39 = PE, 44 = float market cap in 100M CNY, 45 = total market cap in 100M CNY.
+  const turnoverRate = Number(qt[38]);
   const peRatio = Number(qt[39]);
   const floatMarketCapYi = Number(qt[44]);
   const totalMarketCapYi = Number(qt[45]);
@@ -409,6 +410,7 @@ function extractTencentQuoteMeta(res, code) {
     marketCap: Number.isFinite(totalMarketCapYi) ? totalMarketCapYi * 100000000 : null,
     floatMarketCap: Number.isFinite(floatMarketCapYi) ? floatMarketCapYi * 100000000 : null,
     peRatio: Number.isFinite(peRatio) ? peRatio : null,
+    turnoverRate: Number.isFinite(turnoverRate) ? turnoverRate : null,
   };
 }
 
@@ -768,16 +770,49 @@ function formatRecommendationDateInput(value) {
   return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
 }
 
+function shiftDateToPreviousTradingDay(date) {
+  const next = new Date(date);
+  while (next.getDay() === 0 || next.getDay() === 6) {
+    next.setDate(next.getDate() - 1);
+  }
+  return next;
+}
+
+function parseRecommendationDate(value) {
+  const digits = String(value || "").replace(/\D/g, "").slice(0, 8);
+  if (digits.length !== 8) return null;
+  const year = Number(digits.slice(0, 4));
+  const month = Number(digits.slice(4, 6));
+  const day = Number(digits.slice(6, 8));
+  const date = new Date(year, month - 1, day);
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return date;
+}
+
+function toRecommendationDateDigits(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}${month}${day}`;
+}
+
 function normalizeRecommendationDate(value) {
-  return String(value || "").replace(/\D/g, "").slice(0, 8);
+  const parsed = parseRecommendationDate(value);
+  if (!parsed) return "";
+  return toRecommendationDateDigits(shiftDateToPreviousTradingDay(parsed));
 }
 
 function getDefaultRecommendationDate() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}${month}${day}`;
+  return toRecommendationDateDigits(shiftDateToPreviousTradingDay(new Date()));
 }
 
 async function fetchRecommendationList({ market, factor, date }) {
@@ -2454,6 +2489,7 @@ function ChartToolbar({
 
 function Chart({
   rows,
+  fullRows = rows,
   visibleGaps,
   showGaps,
   zoom = 1,
@@ -2525,6 +2561,10 @@ function Chart({
   }
 
   const safeRows = useMemo(() => rows.filter((r) => [r.open, r.close, r.high, r.low, r.volume].every(Number.isFinite)), [rows]);
+  const fullSafeRows = useMemo(
+    () => fullRows.filter((r) => [r.open, r.close, r.high, r.low, r.volume].every(Number.isFinite)),
+    [fullRows],
+  );
 
   useEffect(() => {
     if (!scrollRef.current) return;
@@ -2546,10 +2586,19 @@ function Chart({
     const yMax = priceMax + rawRange * 0.08;
     const yMin = Math.max(0, priceMin - rawRange * 0.08);
     const maxVol = Math.max(...safeRows.map((d) => d.volume), 1);
-    const macdSeries = calcMACDSeries(safeRows);
+    // Calculate MACD from the complete history, then project it onto the visible
+    // window. Changing "近N根" must not change DIF/DEA or their zero-axis position.
+    const fullMacdByDate = new Map(calcMACDSeries(fullSafeRows).map((item) => [item.date, item]));
+    const macdSeries = safeRows.map((row) => fullMacdByDate.get(row.date) || {
+      date: row.date,
+      dif: null,
+      dea: null,
+      hist: null,
+    });
     const macdValues = macdSeries.flatMap((m) => [m.dif, m.dea, m.hist]).filter(Number.isFinite);
     const macdAbsMax = Math.max(...macdValues.map((v) => Math.abs(v)), 0.01);
     const macdCrosses = [];
+    const zeroAxisCrosses = [];
     for (let i = 1; i < macdSeries.length; i += 1) {
       const prev = macdSeries[i - 1];
       const curr = macdSeries[i];
@@ -2572,6 +2621,11 @@ function Chart({
           value: (curr.dif + curr.dea) / 2,
           zone: curr.dif > 0 && curr.dea > 0 ? "water" : curr.dif < 0 && curr.dea < 0 ? "under" : "near",
         });
+      }
+      if (prev.dif <= 0 && curr.dif > 0) {
+        zeroAxisCrosses.push({ index: i, type: "zeroUp", label: "上0轴", value: curr.dif });
+      } else if (prev.dif >= 0 && curr.dif < 0) {
+        zeroAxisCrosses.push({ index: i, type: "zeroDown", label: "下0轴", value: curr.dif });
       }
     }
     const xStep = plotW / Math.max(safeRows.length, 1);
@@ -2599,8 +2653,8 @@ function Chart({
         .filter(Boolean)
         .join(" ");
     };
-    return { margin, mainH, gap, volH, macdH, plotW, xStep, candleW, x, y, vy, volBase, macdTop, macdBase, macdY, macdAbsMax, yMax, yMin, maxVol, ma5, ma10, ma20, macdSeries, macdCrosses, gaps, makePath };
-  }, [safeRows, width, height, visibleGaps]);
+    return { margin, mainH, gap, volH, macdH, plotW, xStep, candleW, x, y, vy, volBase, macdTop, macdBase, macdY, macdAbsMax, yMax, yMin, maxVol, ma5, ma10, ma20, macdSeries, macdCrosses, zeroAxisCrosses, gaps, makePath };
+  }, [safeRows, fullSafeRows, width, height, visibleGaps]);
 
   if (!chart || safeRows.length === 0) {
     return <div className="rounded-2xl bg-slate-100 p-12 text-center text-slate-500">暂无可绘制数据</div>;
@@ -2989,6 +3043,21 @@ function Chart({
               </g>
             );
           })}
+        {showMacdSignals &&
+          chart.zeroAxisCrosses.map((cross, idx) => {
+            const cx = chart.x(cross.index);
+            const cy = chart.macdY(0);
+            const isUp = cross.type === "zeroUp";
+            const color = isUp ? "#2563eb" : "#7c3aed";
+            const labelY = isUp ? cy - 28 : cy + 32;
+            return (
+              <g key={`macd-zero-cross-${idx}-${cross.index}`}>
+                <line x1={cx} x2={cx} y1={cy - 7} y2={cy + 7} stroke={color} strokeWidth="2" />
+                <rect x={cx - 19} y={labelY - 11} width="38" height="16" rx="8" fill="rgba(255,255,255,0.92)" stroke={color} strokeWidth="1" />
+                <text x={cx} y={labelY + 1} textAnchor="middle" fontSize="9" fontWeight="700" fill={color}>{cross.label}</text>
+              </g>
+            );
+          })}
 
         {Array.from({ length: xLabels }).map((_, i) => {
           const idx = xLabels === 1 ? 0 : Math.min(safeRows.length - 1, Math.round((safeRows.length - 1) * (i / (xLabels - 1))));
@@ -3240,6 +3309,7 @@ function WatchlistPanel({
   const placeholder = isAshare ? "例如 600519,000001\n000001\n300750" : "例如 MSFT,AAPL\nNVDA\nTSLA";
   const isRecommendationMode = style === "rows";
   const panelTitle = isRecommendationMode ? `${isAshare ? "A股" : "美股"}推荐列表` : title;
+  const recommendationMaxDate = formatRecommendationDateInput(getDefaultRecommendationDate());
 
   function renderFavoriteButton(item) {
     const favorited = favoriteCodeSet?.has(item.code);
@@ -3310,6 +3380,7 @@ function WatchlistPanel({
                   <input
                     type="date"
                     value={formatRecommendationDateInput(recommendationDate)}
+                    max={recommendationMaxDate}
                     onChange={(e) => onRecommendationDateChange?.(normalizeRecommendationDate(e.target.value))}
                     className="absolute inset-0 z-10 cursor-pointer opacity-0"
                     onFocus={(e) => e.target.showPicker()}
@@ -3348,6 +3419,7 @@ function WatchlistPanel({
                   <input
                     type="date"
                     value={formatRecommendationDateInput(recommendationTdDate)}
+                    max={recommendationMaxDate}
                     onChange={(e) => onRecommendationTdDateChange?.(normalizeRecommendationDate(e.target.value))}
                     className="absolute inset-0 z-10 cursor-pointer opacity-0"
                     onFocus={(e) => e.target.showPicker()}
@@ -3695,7 +3767,7 @@ export default function AShareTD9InteractiveChart() {
   const [watchlistStyle, setWatchlistStyle] = useState("cards");
   const [period, setPeriod] = useState("101");
   const [adjust, setAdjust] = useState("1");
-  const [displayCount, setDisplayCount] = useState(120);
+  const [displayCount, setDisplayCount] = useState(240);
   const [tdMode, setTdMode] = useState("current");
   const [showGaps, setShowGaps] = useState(true);
   const [unfilledOnly, setUnfilledOnly] = useState(true);
@@ -3745,6 +3817,9 @@ export default function AShareTD9InteractiveChart() {
   const favoritePendingCodes = market === "us" ? favoritePendingMap.us : favoritePendingMap.ashare;
   const favoriteCodeSet = useMemo(() => new Set(favoriteItems.map((item) => item.code)), [favoriteItems]);
   const favoritePendingCodeSet = useMemo(() => new Set(favoritePendingCodes), [favoritePendingCodes]);
+  const activeMetaCode = normalizeCodeForMarket(meta.code || currentCode, market);
+  const activeMetaFavoritePending = favoritePendingCodeSet.has(activeMetaCode);
+  const activeMetaFavorited = favoriteCodeSet.has(activeMetaCode);
   const manualWatchlistItems = market === "us" ? watchlistItemsMap.us : watchlistItemsMap.ashare;
   const recommendationItems = market === "us" ? recommendationItemsMap.us : recommendationItemsMap.ashare;
   const watchlistItems = watchlistStyle === "rows" ? recommendationItems : manualWatchlistItems;
@@ -4063,6 +4138,7 @@ export default function AShareTD9InteractiveChart() {
         marketCap: result.marketCap || null,
         floatMarketCap: result.floatMarketCap || null,
         peRatio: Number.isFinite(result.peRatio) ? result.peRatio : null,
+        turnoverRate: Number.isFinite(result.turnoverRate) ? result.turnoverRate : null,
       });
 
       if (market === "ashare") {
@@ -4388,7 +4464,25 @@ export default function AShareTD9InteractiveChart() {
             <Card className="rounded-2xl">
               <CardContent className="p-4">
                 <div className="text-sm text-slate-500">当前标的</div>
-                <div className="mt-1 text-2xl font-semibold">{meta.name || "-"}</div>
+                <div className="mt-1 flex items-center gap-2">
+                  <div className="text-2xl font-semibold">{meta.name || "-"}</div>
+                  {activeMetaCode ? (
+                    <button
+                      type="button"
+                      onClick={() => toggleFavorite({ code: activeMetaCode, name: meta.name || activeMetaCode }, market)}
+                      disabled={activeMetaFavoritePending}
+                      className={`inline-flex h-8 w-8 items-center justify-center rounded-full border transition ${
+                        activeMetaFavorited
+                          ? "border-amber-200 bg-amber-50 text-amber-500 hover:bg-amber-100"
+                          : "border-slate-200 bg-white text-slate-400 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-600"
+                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                      title={activeMetaFavorited ? "取消收藏" : "加入收藏"}
+                      aria-label={activeMetaFavorited ? `取消收藏 ${activeMetaCode}` : `加入收藏 ${activeMetaCode}`}
+                    >
+                      <Star className="h-4 w-4" fill={activeMetaFavorited ? "currentColor" : "none"} />
+                    </button>
+                  ) : null}
+                </div>
                 <div className="text-sm text-slate-500">{meta.code || currentCode}</div>
                 {latest && (
                   <div className="mt-4 space-y-2 text-sm">
@@ -4421,6 +4515,10 @@ export default function AShareTD9InteractiveChart() {
                     <div className="flex justify-between">
                       <span>市盈</span>
                       <span>{Number.isFinite(meta.peRatio) ? meta.peRatio.toFixed(2) : "-"}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>换手率</span>
+                      <span>{Number.isFinite(meta.turnoverRate) ? `${meta.turnoverRate.toFixed(2)}%` : "-"}</span>
                     </div>
                   </div>
                 )}
@@ -4486,11 +4584,31 @@ export default function AShareTD9InteractiveChart() {
                 </div>
               </CardContent>
             </Card>
-            <Card className="rounded-2xl">
-                <CardContent className="p-4">
+            <div className="xl:min-w-0">
+              <div className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
+                <Card className="self-start rounded-2xl">
+                  <CardContent className="p-4">
                   <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                     <div>
-                      <div className="text-lg font-semibold">{meta.code ? `${meta.code} ${meta.name}` : market === "us" ? "美股 K线图" : "K线图"}</div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-lg font-semibold">{meta.code ? `${meta.code} ${meta.name}` : market === "us" ? "美股 K线图" : "K线图"}</div>
+                        {activeMetaCode ? (
+                          <button
+                            type="button"
+                            onClick={() => toggleFavorite({ code: activeMetaCode, name: meta.name || activeMetaCode }, market)}
+                            disabled={activeMetaFavoritePending}
+                            className={`inline-flex h-8 w-8 items-center justify-center rounded-full border transition ${
+                              activeMetaFavorited
+                                ? "border-amber-200 bg-amber-50 text-amber-500 hover:bg-amber-100"
+                                : "border-slate-200 bg-white text-slate-400 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-600"
+                            } disabled:cursor-not-allowed disabled:opacity-60`}
+                            title={activeMetaFavorited ? "取消收藏" : "加入收藏"}
+                            aria-label={activeMetaFavorited ? `取消收藏 ${activeMetaCode}` : `加入收藏 ${activeMetaCode}`}
+                          >
+                            <Star className="h-4 w-4" fill={activeMetaFavorited ? "currentColor" : "none"} />
+                          </button>
+                        ) : null}
+                      </div>
                       <div className="text-xs text-slate-500">
                         九转规则：上涨结构 close[i] &gt; close[i-4]；下跌结构 close[i] &lt; close[i-4]。当前默认只显示最新正在形成的九转；可切换为全部1~9转或同花顺显示逻辑。
                       </div>
@@ -4516,31 +4634,32 @@ export default function AShareTD9InteractiveChart() {
                     </div>
                   </div>
                   {rows.length > 0 ? (
-                    <>
-                      <Chart
-                        key={`inline-chart-${drawingTool}`}
-                        rows={rows}
-                        visibleGaps={visibleGaps}
-                        showGaps={showGaps}
-                        zoom={chartZoom}
-                        waveAnalysis={waveAnalysis}
-                        showWaveOverlay={showWaves}
-                        drawingTool={drawingTool}
-                        drawnLines={drawnLines}
-                        onDrawnLinesChange={setDrawnLines}
-                      />
-                      <FinancialReportPanel
-                        financialInfo={financialInfo}
-                        loading={financialLoading}
-                        error={financialError}
-                        market={market}
-                      />
-                    </>
+                    <Chart
+                      key={`inline-chart-${drawingTool}`}
+                      rows={rows}
+                      fullRows={fullRowsWithTD}
+                      visibleGaps={visibleGaps}
+                      showGaps={showGaps}
+                      zoom={chartZoom}
+                      waveAnalysis={waveAnalysis}
+                      showWaveOverlay={showWaves}
+                      drawingTool={drawingTool}
+                      drawnLines={drawnLines}
+                      onDrawnLinesChange={setDrawnLines}
+                    />
                   ) : (
                     <div className="rounded-2xl bg-slate-100 p-12 text-center text-slate-500">暂无数据</div>
                   )}
-                </CardContent>
-              </Card>
+                  </CardContent>
+                </Card>
+                <FinancialReportPanel
+                  financialInfo={financialInfo}
+                  loading={financialLoading}
+                  error={financialError}
+                  market={market}
+                />
+              </div>
+            </div>
             <WatchlistPanel
               market={market}
               inputValue={watchlistInput}
@@ -4626,7 +4745,25 @@ export default function AShareTD9InteractiveChart() {
             <div className="flex h-full flex-col rounded-2xl bg-white shadow-2xl">
               <div className="flex flex-col gap-3 border-b px-4 py-4 md:flex-row md:items-start md:justify-between md:px-5">
                 <div>
-                  <div className="text-xl font-semibold">{meta.code ? `${meta.code} ${meta.name}` : market === "us" ? "美股 K线图" : "K线图"}</div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-xl font-semibold">{meta.code ? `${meta.code} ${meta.name}` : market === "us" ? "美股 K线图" : "K线图"}</div>
+                    {activeMetaCode ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleFavorite({ code: activeMetaCode, name: meta.name || activeMetaCode }, market)}
+                        disabled={activeMetaFavoritePending}
+                        className={`inline-flex h-8 w-8 items-center justify-center rounded-full border transition ${
+                          activeMetaFavorited
+                            ? "border-amber-200 bg-amber-50 text-amber-500 hover:bg-amber-100"
+                            : "border-slate-200 bg-white text-slate-400 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-600"
+                        } disabled:cursor-not-allowed disabled:opacity-60`}
+                        title={activeMetaFavorited ? "取消收藏" : "加入收藏"}
+                        aria-label={activeMetaFavorited ? `取消收藏 ${activeMetaCode}` : `加入收藏 ${activeMetaCode}`}
+                      >
+                        <Star className="h-4 w-4" fill={activeMetaFavorited ? "currentColor" : "none"} />
+                      </button>
+                    ) : null}
+                  </div>
                   <div className="mt-1 text-xs text-slate-500">
                     全屏模式下可查看更多图表细节；按 `Esc` 也可以退出全屏。
                   </div>
@@ -4651,6 +4788,7 @@ export default function AShareTD9InteractiveChart() {
                 <Chart
                   key={`fullscreen-chart-${drawingTool}`}
                   rows={rows}
+                  fullRows={fullRowsWithTD}
                   visibleGaps={visibleGaps}
                   showGaps={showGaps}
                   zoom={chartZoom}
