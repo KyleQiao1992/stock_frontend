@@ -38,6 +38,7 @@ const MARKET_TABS = [
   { value: "ashare", label: "A股" },
   { value: "us", label: "美股" },
   { value: "agent", label: "Agent" },
+  { value: "factor-research", label: "因子研究" },
 ];
 
 const WATCHLIST_STYLE_OPTIONS = [
@@ -51,6 +52,7 @@ const RECOMMENDATION_FACTOR_OPTIONS = [
   { value: "factor3", label: "因子3" },
   { value: "factor4", label: "因子4" },
   { value: "factor5", label: "因子5" },
+  { value: "factor6", label: "因子6" },
 ];
 
 const RECOMMENDATION_TD_OPTIONS = [
@@ -3268,6 +3270,127 @@ function AgentChatPanel({ marketCodes }) {
   );
 }
 
+const FACTOR_RETURN_PERIODS = [
+  { key: "1d",  label: "近1天收益率" },
+  { key: "3d",  label: "近3天收益率" },
+  { key: "1w",  label: "近1周收益率" },
+  { key: "2w",  label: "近2周收益率" },
+  { key: "1m",  label: "近1月收益率" },
+  { key: "3m",  label: "近3月收益率" },
+];
+
+const FACTOR_RETURNS_MOCK = {
+  "1d": [
+    { factor: "因子1", value:  1.23 },
+    { factor: "因子2", value: -0.87 },
+    { factor: "因子3", value:  2.15 },
+    { factor: "因子4", value: -1.45 },
+    { factor: "因子5", value:  0.63 },
+    { factor: "因子6", value: -2.01 },
+  ],
+  "3d": [
+    { factor: "因子1", value:  3.41 },
+    { factor: "因子2", value:  1.05 },
+    { factor: "因子3", value: -2.30 },
+    { factor: "因子4", value:  4.78 },
+    { factor: "因子5", value: -1.12 },
+    { factor: "因子6", value:  0.55 },
+  ],
+  "1w": [
+    { factor: "因子1", value: -4.20 },
+    { factor: "因子2", value:  6.33 },
+    { factor: "因子3", value:  2.87 },
+    { factor: "因子4", value: -1.95 },
+    { factor: "因子5", value:  5.10 },
+    { factor: "因子6", value: -3.44 },
+  ],
+  "2w": [
+    { factor: "因子1", value:  7.65 },
+    { factor: "因子2", value: -5.20 },
+    { factor: "因子3", value:  3.90 },
+    { factor: "因子4", value:  9.12 },
+    { factor: "因子5", value: -2.78 },
+    { factor: "因子6", value:  1.34 },
+  ],
+  "1m": [
+    { factor: "因子1", value: -8.45 },
+    { factor: "因子2", value: 12.30 },
+    { factor: "因子3", value:  5.67 },
+    { factor: "因子4", value: -3.21 },
+    { factor: "因子5", value: 10.88 },
+    { factor: "因子6", value: -6.54 },
+  ],
+  "3m": [
+    { factor: "因子1", value: 18.72 },
+    { factor: "因子2", value: -9.30 },
+    { factor: "因子3", value: 22.45 },
+    { factor: "因子4", value:  6.18 },
+    { factor: "因子5", value: -14.60 },
+    { factor: "因子6", value: 11.03 },
+  ],
+};
+
+function FactorBarChart({ data, label }) {
+  const maxAbs = Math.max(...data.map((d) => Math.abs(d.value)), 0.01);
+  return (
+    <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+      <div className="mb-4 text-sm font-semibold text-slate-700">{label}</div>
+      <div className="space-y-2.5">
+        {data.map((item) => {
+          const isPos = item.value >= 0;
+          const pct = (Math.abs(item.value) / maxAbs) * 100;
+          return (
+            <div key={item.factor} className="flex items-center gap-2 text-xs">
+              <div className="w-10 shrink-0 text-right text-slate-500">{item.factor}</div>
+              <div className="flex flex-1 items-center">
+                <div className="flex flex-1 justify-end pr-px">
+                  {!isPos && (
+                    <div
+                      className="h-5 rounded-l-sm bg-emerald-500"
+                      style={{ width: `${pct}%` }}
+                    />
+                  )}
+                </div>
+                <div className="h-4 w-px shrink-0 bg-slate-300" />
+                <div className="flex flex-1 pl-px">
+                  {isPos && (
+                    <div
+                      className="h-5 rounded-r-sm bg-red-500"
+                      style={{ width: `${pct}%` }}
+                    />
+                  )}
+                </div>
+              </div>
+              <div
+                className={`w-16 shrink-0 text-right font-mono ${isPos ? "text-red-500" : "text-emerald-600"}`}
+              >
+                {isPos ? "+" : ""}{item.value.toFixed(2)}%
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function FactorResearchPanel() {
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-3 gap-4">
+        {FACTOR_RETURN_PERIODS.slice(0, 3).map((p) => (
+          <FactorBarChart key={p.key} data={FACTOR_RETURNS_MOCK[p.key]} label={p.label} />
+        ))}
+      </div>
+      <div className="grid grid-cols-3 gap-4">
+        {FACTOR_RETURN_PERIODS.slice(3).map((p) => (
+          <FactorBarChart key={p.key} data={FACTOR_RETURNS_MOCK[p.key]} label={p.label} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function WatchlistPanel({
   market,
   inputValue,
@@ -4085,7 +4208,7 @@ export default function AShareTD9InteractiveChart() {
   }
 
   async function load(overrideCode) {
-    if (market === "agent") return;
+    if (market === "agent" || market === "factor-research") return;
     const rawTargetCode = typeof overrideCode === "string" ? overrideCode : currentCode;
     let targetCode = normalizeCodeForMarket(rawTargetCode, market);
     setLoading(true);
@@ -4196,7 +4319,7 @@ export default function AShareTD9InteractiveChart() {
   }
 
   useEffect(() => {
-    if (market === "agent") return undefined;
+    if (market === "agent" || market === "factor-research") return undefined;
     const timer = window.setTimeout(() => {
       load();
     }, 0);
@@ -4205,7 +4328,7 @@ export default function AShareTD9InteractiveChart() {
   }, [market]);
 
   useEffect(() => {
-    if (market === "agent") return undefined;
+    if (market === "agent" || market === "factor-research") return undefined;
     const timer = window.setTimeout(() => {
       loadFavorites(market);
     }, 0);
@@ -4214,7 +4337,7 @@ export default function AShareTD9InteractiveChart() {
   }, [market]);
 
   useEffect(() => {
-    if (market === "agent" || watchlistItems.length > 0) return undefined;
+    if (market === "agent" || market === "factor-research" || watchlistItems.length > 0) return undefined;
     const timer = window.setTimeout(() => {
       if (watchlistStyle === "rows") {
         loadRecommendations(market);
@@ -4310,7 +4433,7 @@ export default function AShareTD9InteractiveChart() {
                         setMarketCodes((prev) => ({ ...prev, us: prev.us || "MSFT" }));
                         setRawRows([]);
                         setMeta({ code: marketCodes.us || "MSFT", name: "" });
-                      } else if (tab.value === "agent") {
+                      } else if (tab.value === "agent" || tab.value === "factor-research") {
                         setRawRows([]);
                         setMeta({ code: "", name: "" });
                       }
@@ -4322,7 +4445,7 @@ export default function AShareTD9InteractiveChart() {
               })}
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
+          {market !== "factor-research" && <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
             <div className="relative col-span-2 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 md:w-56">
               <Search className="h-4 w-4 text-slate-400" />
               <input
@@ -4367,12 +4490,12 @@ export default function AShareTD9InteractiveChart() {
                       return;
                     }
                   }
-                  if (e.key === "Enter" && market !== "agent") {
+                  if (e.key === "Enter" && market !== "agent" && market !== "factor-research") {
                     load(e.currentTarget.value);
                   }
                 }}
-                placeholder={market === "ashare" ? "代码 / 简称 / 拼音首字母" : market === "us" ? "如 AAPL" : "Agent 功能待接入"}
-                disabled={market === "agent"}
+                placeholder={market === "ashare" ? "代码 / 简称 / 拼音首字母" : market === "us" ? "如 AAPL" : market === "agent" ? "Agent 功能待接入" : "因子研究页暂不支持代码查询"}
+                disabled={market === "agent" || market === "factor-research"}
                 className="w-full bg-transparent outline-none disabled:cursor-not-allowed disabled:text-slate-400"
               />
               {market === "ashare" && (ashareSuggestOpen || ashareSuggestLoading) && (
@@ -4403,17 +4526,17 @@ export default function AShareTD9InteractiveChart() {
                 </div>
               )}
             </div>
-            <select value={period} onChange={(e) => setPeriod(e.target.value)} disabled={market === "agent"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
+            <select value={period} onChange={(e) => setPeriod(e.target.value)} disabled={market === "agent" || market === "factor-research"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               {PERIOD_OPTIONS.map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
               ))}
             </select>
-            <select value={adjust} onChange={(e) => setAdjust(e.target.value)} disabled={market === "agent"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
+            <select value={adjust} onChange={(e) => setAdjust(e.target.value)} disabled={market === "agent" || market === "factor-research"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               {ADJUST_OPTIONS.map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
               ))}
             </select>
-            <select value={displayCount} onChange={(e) => setDisplayCount(Number(e.target.value))} disabled={market === "agent"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
+            <select value={displayCount} onChange={(e) => setDisplayCount(Number(e.target.value))} disabled={market === "agent" || market === "factor-research"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               <option value={30}>近30根</option>
               <option value={45}>近45根</option>
               <option value={60}>近60根</option>
@@ -4422,34 +4545,34 @@ export default function AShareTD9InteractiveChart() {
               <option value={180}>近180根</option>
               <option value={240}>近240根</option>
             </select>
-            <select value={tdMode} onChange={(e) => setTdMode(e.target.value)} disabled={market === "agent"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
+            <select value={tdMode} onChange={(e) => setTdMode(e.target.value)} disabled={market === "agent" || market === "factor-research"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               <option value="current">只显示当前九转</option>
               <option value="full">显示全部1~9转</option>
               <option value="ths">同花顺显示逻辑</option>
               <option value="simple">简化连续计数</option>
             </select>
             <label className="flex items-center gap-1 rounded-xl border bg-white px-3 py-2 text-sm">
-              <input type="checkbox" checked={showGaps} disabled={market === "agent"} onChange={(e) => setShowGaps(e.target.checked)} />
+              <input type="checkbox" checked={showGaps} disabled={market === "agent" || market === "factor-research"} onChange={(e) => setShowGaps(e.target.checked)} />
               断层
             </label>
             <label className="flex items-center gap-1 rounded-xl border bg-white px-3 py-2 text-sm">
-              <input type="checkbox" checked={unfilledOnly} disabled={market === "agent"} onChange={(e) => setUnfilledOnly(e.target.checked)} />
+              <input type="checkbox" checked={unfilledOnly} disabled={market === "agent" || market === "factor-research"} onChange={(e) => setUnfilledOnly(e.target.checked)} />
               未回补
             </label>
             <label className="flex items-center gap-1 rounded-xl border bg-white px-3 py-2 text-sm">
-              <input type="checkbox" checked={showWaves} disabled={market === "agent"} onChange={(e) => setShowWaves(e.target.checked)} />
+              <input type="checkbox" checked={showWaves} disabled={market === "agent" || market === "factor-research"} onChange={(e) => setShowWaves(e.target.checked)} />
               波浪
             </label>
-            <select value={waveSensitivity} onChange={(e) => setWaveSensitivity(e.target.value)} disabled={market === "agent"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
+            <select value={waveSensitivity} onChange={(e) => setWaveSensitivity(e.target.value)} disabled={market === "agent" || market === "factor-research"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               {WAVE_SENSITIVITY_OPTIONS.map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
               ))}
             </select>
-            <Button onClick={() => load()} disabled={loading || market === "agent"} className="rounded-xl">
+            <Button onClick={() => load()} disabled={loading || market === "agent" || market === "factor-research"} className="rounded-xl">
               <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               {loading ? "加载中" : "查询"}
             </Button>
-          </div>
+          </div>}
         </div>
 
         {error && (
@@ -4459,7 +4582,7 @@ export default function AShareTD9InteractiveChart() {
           </div>
         )}
 
-        {market !== "agent" ? (
+        {market !== "agent" && market !== "factor-research" ? (
           <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)_320px]">
             <Card className="rounded-2xl">
               <CardContent className="p-4">
@@ -4707,7 +4830,7 @@ export default function AShareTD9InteractiveChart() {
                 setMarketCodes((prev) => ({ ...prev, [market]: code }));
                 setError("");
                 window.setTimeout(() => {
-                  if (market !== "agent") load(code);
+                  if (market !== "agent" && market !== "factor-research") load(code);
                 }, 0);
               }}
               onToggleFavorite={(item) => {
@@ -4715,10 +4838,12 @@ export default function AShareTD9InteractiveChart() {
               }}
             />
           </div>
-        ) : (
+        ) : market === "agent" ? (
           <AgentChatPanel marketCodes={marketCodes} />
+        ) : (
+          <FactorResearchPanel />
         )}
-        {market !== "agent" && (
+        {market !== "agent" && market !== "factor-research" && (
           <FavoritesToolbar
             market={market}
             items={favoriteItems}
@@ -4732,7 +4857,7 @@ export default function AShareTD9InteractiveChart() {
               setMarketCodes((prev) => ({ ...prev, [market]: code }));
               setError("");
               window.setTimeout(() => {
-                load(code);
+                if (market !== "factor-research") load(code);
               }, 0);
             }}
             onRemove={(item) => {
@@ -4740,7 +4865,7 @@ export default function AShareTD9InteractiveChart() {
             }}
           />
         )}
-        {chartFullscreen && market !== "agent" && rows.length > 0 && (
+        {chartFullscreen && market !== "agent" && market !== "factor-research" && rows.length > 0 && (
           <div className="fixed inset-0 z-50 bg-slate-950/40 p-3 backdrop-blur-sm md:p-5">
             <div className="flex h-full flex-col rounded-2xl bg-white shadow-2xl">
               <div className="flex flex-col gap-3 border-b px-4 py-4 md:flex-row md:items-start md:justify-between md:px-5">
@@ -4803,9 +4928,11 @@ export default function AShareTD9InteractiveChart() {
             </div>
           </div>
         )}
-        <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-sm">
-          说明：这是学习/研究用图表，不构成投资建议。断层基于已拉取的完整历史 K 线计算，再映射到当前显示区间；规则按相邻 K 线高低价判断：向上断层为当日最低价高于前一根最高价，向下断层为当日最高价低于前一根最低价；默认只显示未回补断层。
-        </div>
+        {market !== "factor-research" && (
+          <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-sm">
+            说明：这是学习/研究用图表，不构成投资建议。断层基于已拉取的完整历史 K 线计算，再映射到当前显示区间；规则按相邻 K 线高低价判断：向上断层为当日最低价高于前一根最高价，向下断层为当日最高价低于前一根最低价；默认只显示未回补断层。
+          </div>
+        )}
       </div>
     </div>
   );

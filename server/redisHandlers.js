@@ -2,8 +2,8 @@ import { getRedisClient } from "./redisClient.js";
 
 function normalizeRecommendationFactor(value) {
   const factor = String(value || "").trim().toLowerCase();
-  if (!/^factor[1-5]$/.test(factor)) {
-    throw new Error("Invalid factor. Expected factor1 to factor5.");
+  if (!/^factor[1-6]$/.test(factor)) {
+    throw new Error("Invalid factor. Expected factor1 to factor6.");
   }
   return factor;
 }
@@ -24,8 +24,8 @@ function normalizeRecommendationMarketSuffix(value) {
 }
 
 function assertAllowedRecommendationKey(key) {
-  if (/^factor[1-5]_(cn|us)_\d{8}$/.test(key)) return;
-  throw new Error("Invalid recommendation key. Expected factor1_cn_YYYYMMDD to factor5_cn_YYYYMMDD.");
+  if (/^factor[1-6]_(cn|us)_\d{8}$/.test(key)) return;
+  throw new Error("Invalid recommendation key. Expected factor1_cn_YYYYMMDD to factor6_cn_YYYYMMDD.");
 }
 
 export async function readRedisValue(client, key) {
