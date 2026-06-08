@@ -4018,6 +4018,11 @@ function WatchlistPanel({
                         <div className={`mt-3 font-mono text-lg font-semibold ${active ? "text-white" : "text-slate-900"}`}>
                           {item.code}
                         </div>
+                        {item.name && item.name !== item.code && (
+                          <div className={`mt-1 text-sm ${active ? "text-slate-200" : "text-slate-500"}`}>
+                            {item.name}
+                          </div>
+                        )}
                       </div>
                       {active && (
                         <div className="rounded-full bg-emerald-400/20 px-2.5 py-1 text-[11px] font-medium text-emerald-100 ring-1 ring-emerald-300/30">

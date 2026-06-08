@@ -1,4 +1,24 @@
 import { getRedisClient } from "./redisClient.js";
+import { getMysqlPool } from "./mysqlClient.js";
+
+async function enrichAShareNames(items) {
+  const nameless = items.filter((item) => item.name === item.code);
+  if (!nameless.length) return items;
+  try {
+    const codes = nameless.map((item) => item.code);
+    const pool = getMysqlPool();
+    const placeholders = codes.map(() => "?").join(",");
+    const [rows] = await pool.query(
+      `SELECT stock_code, stock_name FROM stock_basic WHERE stock_code IN (${placeholders})`,
+      codes,
+    );
+    const nameMap = {};
+    for (const row of rows) nameMap[row.stock_code] = row.stock_name;
+    return items.map((item) => ({ ...item, name: nameMap[item.code] || item.name }));
+  } catch {
+    return items;
+  }
+}
 
 function normalizeMarket(value) {
   const market = String(value || "").trim().toLowerCase();
@@ -119,7 +139,8 @@ export function createFavoritesHandler() {
         const market = normalizeMarket(requestUrl.searchParams.get("market") || "ashare");
         const key = getFavoritesKey(userId, market);
         const client = await getRedisClient();
-        const items = await readFavoriteItems(client, key, market);
+        const rawItems = await readFavoriteItems(client, key, market);
+        const items = market === "ashare" ? await enrichAShareNames(rawItems) : rawItems;
         return sendJson(res, 200, { ok: true, userId, market, items });
       }
 
@@ -133,12 +154,10 @@ export function createFavoritesHandler() {
         const items = await readFavoriteItems(client, key, market);
 
         if (!items.some((item) => item.code === code)) {
-          items.push({
-            code,
-            name: normalizeFavoriteName(body.name, code),
-            market,
-            createdAt: Date.now(),
-          });
+          const enriched = market === "ashare"
+            ? await enrichAShareNames([{ code, name: normalizeFavoriteName(body.name, code) }])
+            : [{ code, name: normalizeFavoriteName(body.name, code) }];
+          items.push({ code, name: enriched[0].name, market, createdAt: Date.now() });
           await writeFavoriteItems(client, key, items);
         }
 

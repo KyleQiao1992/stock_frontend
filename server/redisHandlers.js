@@ -1,4 +1,24 @@
 import { getRedisClient } from "./redisClient.js";
+import { getMysqlPool } from "./mysqlClient.js";
+
+async function enrichAShareNames(items) {
+  const nameless = items.filter((item) => item.name === item.code);
+  if (!nameless.length) return items;
+  try {
+    const codes = nameless.map((item) => item.code);
+    const pool = getMysqlPool();
+    const placeholders = codes.map(() => "?").join(",");
+    const [rows] = await pool.query(
+      `SELECT stock_code, stock_name FROM stock_basic WHERE stock_code IN (${placeholders})`,
+      codes,
+    );
+    const nameMap = {};
+    for (const row of rows) nameMap[row.stock_code] = row.stock_name;
+    return items.map((item) => ({ ...item, name: nameMap[item.code] || item.name }));
+  } catch {
+    return items;
+  }
+}
 
 function normalizeRecommendationFactor(value) {
   const factor = String(value || "").trim().toLowerCase();
@@ -187,7 +207,8 @@ export function createRedisRecommendationsHandler() {
 
       const client = await getRedisClient();
       const payload = await readRedisValue(client, key);
-      const items = normalizeRecommendationItems(payload, market);
+      const rawItems = normalizeRecommendationItems(payload, market);
+      const items = market === "ashare" ? await enrichAShareNames(rawItems) : rawItems;
 
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
