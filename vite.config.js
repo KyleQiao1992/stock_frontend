@@ -9,6 +9,8 @@ import { createAshareSearchHandler } from "./server/ashareSearch.js";
 import { createFavoritesHandler } from "./server/favoritesHandlers.js";
 import { createRedisRecommendationsHandler } from "./server/redisHandlers.js";
 import { createUsKlineHandler } from "./server/usKline.js";
+import { createMacdFactorReturnsHandler } from "./server/macdFactorHandler.js";
+import { createMacdFactorDetailHandler } from "./server/macdFactorDetailHandler.js";
 
 function usKlinePlugin() {
   loadServerEnv();
@@ -18,6 +20,8 @@ function usKlinePlugin() {
   const ashareSearchHandler = createAshareSearchHandler();
   const redisRecommendationsHandler = createRedisRecommendationsHandler();
   const favoritesHandler = createFavoritesHandler();
+  const factorReturnsHandler = createMacdFactorReturnsHandler();
+  const factorDetailHandler = createMacdFactorDetailHandler();
 
   function register(middlewares) {
     middlewares.use("/api/us-kline", handler);
@@ -26,6 +30,8 @@ function usKlinePlugin() {
     middlewares.use("/api/ashare-search", ashareSearchHandler);
     middlewares.use("/api/recommendations", redisRecommendationsHandler);
     middlewares.use("/api/favorites", favoritesHandler);
+    middlewares.use("/api/factor-returns", factorReturnsHandler);
+    middlewares.use("/api/factor-detail", factorDetailHandler);
   }
 
   return {

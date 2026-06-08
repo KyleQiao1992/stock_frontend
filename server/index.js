@@ -8,6 +8,8 @@ import { createAshareSearchHandler } from "./ashareSearch.js";
 import { createFavoritesHandler } from "./favoritesHandlers.js";
 import { createRedisRecommendationsHandler } from "./redisHandlers.js";
 import { createUsKlineHandler } from "./usKline.js";
+import { createMacdFactorReturnsHandler } from "./macdFactorHandler.js";
+import { createMacdFactorDetailHandler } from "./macdFactorDetailHandler.js";
 
 loadServerEnv();
 
@@ -19,6 +21,8 @@ const app = express();
 const port = Number(process.env.PORT) || 80;
 
 app.get("/api/us-kline", createUsKlineHandler());
+app.get("/api/factor-returns", createMacdFactorReturnsHandler());
+app.get("/api/factor-detail", createMacdFactorDetailHandler());
 app.get("/api/ashare-finance", createAshareFinanceHandler());
 app.get("/api/ashare-profile", createAshareProfileHandler());
 app.get("/api/ashare-search", createAshareSearchHandler());

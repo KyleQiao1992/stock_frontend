@@ -3270,65 +3270,312 @@ function AgentChatPanel({ marketCodes }) {
   );
 }
 
-const FACTOR_RETURN_PERIODS = [
-  { key: "1d",  label: "近1天收益率" },
-  { key: "3d",  label: "近3天收益率" },
-  { key: "1w",  label: "近1周收益率" },
-  { key: "2w",  label: "近2周收益率" },
-  { key: "1m",  label: "近1月收益率" },
-  { key: "3m",  label: "近3月收益率" },
+const FACTOR_DETAIL_PERIODS = [
+  { key: "t1",  label: "第1交易日收益" },
+  { key: "t3",  label: "第3交易日收益" },
+  { key: "t5",  label: "第5交易日收益" },
+  { key: "t10", label: "第2周收益" },
+  { key: "t20", label: "一月收益" },
+  { key: "t40", label: "二月收益" },
+  { key: "t60", label: "三月收益" },
 ];
 
-const FACTOR_RETURNS_MOCK = {
-  "1d": [
-    { factor: "因子1", value:  1.23 },
-    { factor: "因子2", value: -0.87 },
-    { factor: "因子3", value:  2.15 },
-    { factor: "因子4", value: -1.45 },
-    { factor: "因子5", value:  0.63 },
-    { factor: "因子6", value: -2.01 },
-  ],
-  "3d": [
-    { factor: "因子1", value:  3.41 },
-    { factor: "因子2", value:  1.05 },
-    { factor: "因子3", value: -2.30 },
-    { factor: "因子4", value:  4.78 },
-    { factor: "因子5", value: -1.12 },
-    { factor: "因子6", value:  0.55 },
-  ],
-  "1w": [
-    { factor: "因子1", value: -4.20 },
-    { factor: "因子2", value:  6.33 },
-    { factor: "因子3", value:  2.87 },
-    { factor: "因子4", value: -1.95 },
-    { factor: "因子5", value:  5.10 },
-    { factor: "因子6", value: -3.44 },
-  ],
-  "2w": [
-    { factor: "因子1", value:  7.65 },
-    { factor: "因子2", value: -5.20 },
-    { factor: "因子3", value:  3.90 },
-    { factor: "因子4", value:  9.12 },
-    { factor: "因子5", value: -2.78 },
-    { factor: "因子6", value:  1.34 },
-  ],
-  "1m": [
-    { factor: "因子1", value: -8.45 },
-    { factor: "因子2", value: 12.30 },
-    { factor: "因子3", value:  5.67 },
-    { factor: "因子4", value: -3.21 },
-    { factor: "因子5", value: 10.88 },
-    { factor: "因子6", value: -6.54 },
-  ],
-  "3m": [
-    { factor: "因子1", value: 18.72 },
-    { factor: "因子2", value: -9.30 },
-    { factor: "因子3", value: 22.45 },
-    { factor: "因子4", value:  6.18 },
-    { factor: "因子5", value: -14.60 },
-    { factor: "因子6", value: 11.03 },
-  ],
-};
+async function fetchFactorDetail({ factors, startDate, endDate, page }) {
+  const params = new URLSearchParams({ factor: factors.join(","), startDate, endDate, page: String(page) });
+  const res = await fetch(`/api/factor-detail?${params}`, { cache: "no-store" });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+  return payload;
+}
+
+function ReturnCell({ value }) {
+  if (value === null || value === undefined) {
+    return <td className="px-3 py-2 text-center text-slate-300 text-xs">-</td>;
+  }
+  const isPos = value >= 0;
+  return (
+    <td className={`px-3 py-2 text-center font-mono text-xs ${isPos ? "text-red-500" : "text-emerald-600"}`}>
+      {isPos ? "+" : ""}{value.toFixed(2)}%
+    </td>
+  );
+}
+
+const STATS_PERIODS = [
+  { key: "t1",  label: "1日" },
+  { key: "t3",  label: "3日" },
+  { key: "t5",  label: "5日" },
+  { key: "t10", label: "2周" },
+  { key: "t20", label: "1月" },
+  { key: "t60", label: "3月" },
+];
+
+function FactorStatsSummary({ stats, startDate, endDate, total }) {
+  const parts = STATS_PERIODS
+    .map(({ key, label }) => {
+      const s = stats[key];
+      if (!s || s.avg === null) return null;
+      const avgSign = s.avg >= 0 ? "+" : "";
+      const avgColor = s.avg >= 0 ? "text-red-500" : "text-emerald-600";
+      return (
+        <span key={key} className="inline-flex items-center gap-0.5">
+          {label}&nbsp;<span className={`font-medium ${avgColor}`}>{avgSign}{s.avg.toFixed(2)}%</span>
+          {s.winRate !== null && (
+            <span className="text-slate-400">（胜率&nbsp;<span className="font-medium text-slate-600">{s.winRate.toFixed(1)}%</span>）</span>
+          )}
+        </span>
+      );
+    })
+    .filter(Boolean);
+
+  if (parts.length === 0) return null;
+
+  return (
+    <span className="text-slate-500">
+      {startDate} 至 {endDate}，共 {total} 条信号 &mdash;&nbsp;
+      {parts.reduce((acc, el, i) => (i === 0 ? [el] : [...acc, <span key={`sep-${i}`} className="mx-1 text-slate-300">|</span>, el]), [])}
+    </span>
+  );
+}
+
+function FactorDetailPanel() {
+  const [factors, setFactors] = useState(["factor1"]);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [startDate, setStartDate] = useState(defaultStartDate);
+  const [endDate, setEndDate] = useState(todayStr);
+  const [query, setQuery] = useState(null); // {factors, startDate, endDate} — set on button click
+  const [page, setPage] = useState(1);
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    if (!query) return;
+    const ctrl = new AbortController();
+    setLoading(true);
+    setError(null);
+    fetchFactorDetail({ factors: query.factors, startDate: query.startDate, endDate: query.endDate, page })
+      .then(setResult)
+      .catch((e) => { if (e.name !== "AbortError") setError(e?.message || "加载失败"); })
+      .finally(() => setLoading(false));
+    return () => ctrl.abort();
+  }, [query, page]);
+
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    function handleClickOutside(e) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [dropdownOpen]);
+
+  function toggleFactor(value) {
+    setFactors((prev) =>
+      prev.includes(value)
+        ? prev.length > 1 ? prev.filter((f) => f !== value) : prev
+        : [...prev, value],
+    );
+  }
+
+  function handleQuery() {
+    if (factors.length === 0) return;
+    setDropdownOpen(false);
+    setPage(1);
+    setResult(null);
+    setQuery({ factors, startDate, endDate });
+  }
+
+  const totalPages = result ? Math.ceil(result.total / result.pageSize) : 0;
+  const showFactorCol = query && query.factors.length > 1;
+
+  const factorLabelMap = useMemo(
+    () => Object.fromEntries(RECOMMENDATION_FACTOR_OPTIONS.map((o) => [o.value, o.label])),
+    [],
+  );
+  const factorLabel = factors.length === 1
+    ? (factorLabelMap[factors[0]] ?? factors[0])
+    : `已选 ${factors.length} 个因子`;
+
+  return (
+    <div className="space-y-4">
+      <div className="text-base font-semibold text-slate-700">因子详情查询</div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative" ref={dropdownRef}>
+          <button
+            type="button"
+            onClick={() => setDropdownOpen((v) => !v)}
+            className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none hover:border-slate-400"
+          >
+            <span>{factorLabel}</span>
+            <svg className={`h-4 w-4 text-slate-400 transition-transform ${dropdownOpen ? "rotate-180" : ""}`} viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+            </svg>
+          </button>
+          {dropdownOpen && (
+            <div className="absolute left-0 top-full z-20 mt-1 min-w-[8rem] rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+              {RECOMMENDATION_FACTOR_OPTIONS.map((o) => (
+                <label key={o.value} className="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-sm hover:bg-slate-50">
+                  <input
+                    type="checkbox"
+                    checked={factors.includes(o.value)}
+                    onChange={() => toggleFactor(o.value)}
+                    className="h-4 w-4 accent-slate-800"
+                  />
+                  <span className="text-slate-700">{o.label}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={startDate}
+            max={endDate || todayStr()}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400"
+          />
+          <span className="text-slate-400 text-sm">至</span>
+          <input
+            type="date"
+            value={endDate}
+            min={startDate}
+            max={todayStr()}
+            onChange={(e) => setEndDate(e.target.value)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400"
+          />
+        </div>
+        <div className="flex items-center gap-1.5">
+          {[
+            { label: "近7天", days: 7 },
+            { label: "近1个月", months: 1 },
+            { label: "近2个月", months: 2 },
+            { label: "近3个月", months: 3 },
+          ].map((preset) => {
+            const today = todayStr();
+            const d = new Date();
+            if (preset.days) d.setDate(d.getDate() - preset.days);
+            else d.setMonth(d.getMonth() - preset.months);
+            const from = d.toISOString().slice(0, 10);
+            const active = startDate === from && endDate === today;
+            return (
+              <button
+                key={preset.label}
+                type="button"
+                onClick={() => { setStartDate(from); setEndDate(today); }}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${active ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600 hover:border-slate-400 hover:text-slate-900"}`}
+              >
+                {preset.label}
+              </button>
+            );
+          })}
+        </div>
+        <button
+          type="button"
+          onClick={handleQuery}
+          disabled={loading || !startDate || !endDate || factors.length === 0}
+          className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+        >
+          {loading ? "查询中…" : "查询"}
+        </button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-xl bg-slate-50 px-4 py-2.5 text-xs text-slate-400 leading-5">
+        <span className="shrink-0">收益率 = ( 第 N 交易日收盘价 &minus; 信号日收盘价 ) &divide; 信号日收盘价 &times; 100%</span>
+        {result && result.stats && (
+          <FactorStatsSummary stats={result.stats} startDate={result.startDate} endDate={result.endDate} total={result.total} />
+        )}
+      </div>
+
+      {error && (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">{error}</div>
+      )}
+
+      {result && (
+        <>
+          <div className="overflow-x-auto rounded-2xl border border-slate-100 bg-white shadow-sm">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 text-xs text-slate-500">
+                  <th className="px-3 py-3 text-left font-medium whitespace-nowrap">日期</th>
+                  {showFactorCol && <th className="px-3 py-3 text-left font-medium whitespace-nowrap">因子</th>}
+                  <th className="px-3 py-3 text-left font-medium whitespace-nowrap">代码</th>
+                  <th className="px-3 py-3 text-left font-medium whitespace-nowrap">名称</th>
+                  {FACTOR_DETAIL_PERIODS.map((p) => (
+                    <th key={p.key} className="px-3 py-3 text-center font-medium whitespace-nowrap">{p.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {result.rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={showFactorCol ? 11 : 10} className="py-12 text-center text-sm text-slate-400">
+                      该时间段暂无信号数据
+                    </td>
+                  </tr>
+                ) : (
+                  result.rows.map((row, i) => (
+                    <tr key={`${row.signalDate}-${row.factorName}-${row.stockCode}-${i}`} className={`border-b border-slate-50 transition-colors hover:bg-slate-100/60 ${i % 2 === 0 ? "bg-white" : "bg-slate-50"}`}>
+                      <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{row.signalDate}</td>
+                      {showFactorCol && (
+                        <td className="px-3 py-2 text-slate-500 whitespace-nowrap">
+                          {factorLabelMap[row.factorName] ?? row.factorName}
+                        </td>
+                      )}
+                      <td className="px-3 py-2 font-mono text-slate-700 whitespace-nowrap">{row.stockCode}</td>
+                      <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{row.stockName}</td>
+                      {FACTOR_DETAIL_PERIODS.map((p) => (
+                        <ReturnCell key={p.key} value={row.returns[p.key]} />
+                      ))}
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex items-center justify-between text-xs text-slate-500">
+            <span>共 {result.total} 条</span>
+            {totalPages > 1 && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={page <= 1}
+                  onClick={() => setPage((p) => p - 1)}
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 disabled:opacity-40 hover:bg-slate-50"
+                >
+                  上一页
+                </button>
+                <span>{page} / {totalPages}</span>
+                <button
+                  type="button"
+                  disabled={page >= totalPages}
+                  onClick={() => setPage((p) => p + 1)}
+                  className="rounded-lg border border-slate-200 px-3 py-1.5 disabled:opacity-40 hover:bg-slate-50"
+                >
+                  下一页
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+const FACTOR_RETURN_PERIODS = [
+  { key: "1d",  label: "近1天收益率",  forwardLabel: "第1天",  days: 1  },
+  { key: "3d",  label: "近3天收益率",  forwardLabel: "前3天",  days: 3  },
+  { key: "1w",  label: "近1周收益率",  forwardLabel: "前1周",  days: 7  },
+  { key: "2w",  label: "近2周收益率",  forwardLabel: "前2周",  days: 14 },
+  { key: "1m",  label: "近1月收益率",  forwardLabel: "前1月",  days: 30 },
+  { key: "3m",  label: "近3月收益率",  forwardLabel: "前3月",  days: 90 },
+];
 
 function FactorBarChart({ data, label }) {
   const maxAbs = Math.max(...data.map((d) => Math.abs(d.value)), 0.01);
@@ -3374,17 +3621,135 @@ function FactorBarChart({ data, label }) {
   );
 }
 
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function defaultStartDate() {
+  const d = new Date();
+  d.setMonth(d.getMonth() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function formatDateLabel(dateStr) {
+  const [, m, d] = dateStr.split("-");
+  return `${Number(m)}/${Number(d)}`;
+}
+
+async function fetchFactorReturns(mode, startDate, signal) {
+  const params = new URLSearchParams({ mode });
+  if (mode === "custom" && startDate) params.set("startDate", startDate);
+  const res = await fetch(`/api/factor-returns?${params}`, { cache: "no-store", signal });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+  return payload.data;
+}
+
 function FactorResearchPanel() {
+  const [activeTab, setActiveTab] = useState("trailing");
+  const [startDate, setStartDate] = useState(defaultStartDate);
+  const [trailingData, setTrailingData] = useState(null);
+  const [customCache, setCustomCache] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+
+  const tabs = [
+    { key: "trailing", label: "滚动区间" },
+    { key: "custom",   label: "自选起始日" },
+  ];
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    setLoading(true);
+    setLoadError(null);
+    fetchFactorReturns("trailing", null, ctrl.signal)
+      .then((data) => setTrailingData(data))
+      .catch((e) => { if (e.name !== "AbortError") setLoadError(e?.message || "加载失败"); })
+      .finally(() => setLoading(false));
+    return () => ctrl.abort();
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== "custom") return;
+    if (customCache[startDate]) return;
+    const ctrl = new AbortController();
+    setLoading(true);
+    setLoadError(null);
+    fetchFactorReturns("custom", startDate, ctrl.signal)
+      .then((data) => setCustomCache((prev) => ({ ...prev, [startDate]: data })))
+      .catch((e) => { if (e.name !== "AbortError") setLoadError(e?.message || "加载失败"); })
+      .finally(() => setLoading(false));
+    return () => ctrl.abort();
+  }, [activeTab, startDate]);
+
+  const currentData = activeTab === "trailing" ? trailingData : customCache[startDate];
+
+  const periods = FACTOR_RETURN_PERIODS.map((p) => ({
+    ...p,
+    displayLabel:
+      activeTab === "trailing"
+        ? p.label
+        : `${formatDateLabel(startDate)} 起 · ${p.forwardLabel}`,
+    data: currentData?.[p.key] ?? [],
+  }));
+
   return (
     <div className="space-y-4">
+      <div className="text-base font-semibold text-slate-700">因子整体表现</div>
+      {/* Tab 切换 + 日期选择器 */}
+      <div className="flex items-center gap-4">
+        <div className="flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setActiveTab(t.key)}
+              className={`rounded-lg px-4 py-1.5 text-sm font-medium transition-colors ${
+                activeTab === t.key
+                  ? "bg-slate-900 text-white"
+                  : "text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === "custom" && (
+          <div className="flex items-center gap-2 text-sm text-slate-600">
+            <span className="shrink-0">起始日期</span>
+            <input
+              type="date"
+              value={startDate}
+              max={todayStr()}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-800 shadow-sm outline-none focus:border-slate-400"
+            />
+          </div>
+        )}
+
+        {loading && <span className="text-xs text-slate-400">加载中…</span>}
+      </div>
+
+      {loadError && (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">
+          {loadError}
+        </div>
+      )}
+
+      <div className="rounded-xl bg-slate-50 px-4 py-2.5 text-xs text-slate-400 leading-5">
+        收益率 = ( 第 N 交易日收盘价 &minus; 信号日收盘价 ) &divide; 信号日收盘价 &times; 100%
+      </div>
+
+      {/* 图表网格 */}
       <div className="grid grid-cols-3 gap-4">
-        {FACTOR_RETURN_PERIODS.slice(0, 3).map((p) => (
-          <FactorBarChart key={p.key} data={FACTOR_RETURNS_MOCK[p.key]} label={p.label} />
+        {periods.slice(0, 3).map((p) => (
+          <FactorBarChart key={p.key} data={p.data} label={p.displayLabel} />
         ))}
       </div>
       <div className="grid grid-cols-3 gap-4">
-        {FACTOR_RETURN_PERIODS.slice(3).map((p) => (
-          <FactorBarChart key={p.key} data={FACTOR_RETURNS_MOCK[p.key]} label={p.label} />
+        {periods.slice(3).map((p) => (
+          <FactorBarChart key={p.key} data={p.data} label={p.displayLabel} />
         ))}
       </div>
     </div>
@@ -3526,62 +3891,6 @@ function WatchlistPanel({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
-              <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-slate-400">9转</div>
-              <div className="grid grid-cols-2 gap-2">
-                <select
-                  value={recommendationTd}
-                  onChange={(e) => onRecommendationTdChange?.(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none"
-                >
-                  {RECOMMENDATION_TD_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-                <div className="relative">
-                  <input
-                    type="date"
-                    value={formatRecommendationDateInput(recommendationTdDate)}
-                    max={recommendationMaxDate}
-                    onChange={(e) => onRecommendationTdDateChange?.(normalizeRecommendationDate(e.target.value))}
-                    className="absolute inset-0 z-10 cursor-pointer opacity-0"
-                    onFocus={(e) => e.target.showPicker()}
-                    onClick={(e) => e.target.showPicker()}
-                  />
-                  <input
-                    type="text"
-                    readOnly
-                    value={formatRecommendationDateInput(recommendationTdDate)}
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 outline-none"
-                    placeholder="YYYY-MM-DD"
-                  />
-                </div>
-                <select
-                  value={recommendationMacd}
-                  onChange={(e) => onRecommendationMacdChange?.(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none"
-                >
-                  {RECOMMENDATION_MACD_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-                <select
-                  value={recommendationSafety}
-                  onChange={(e) => onRecommendationSafetyChange?.(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none"
-                >
-                  {RECOMMENDATION_SAFETY_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-                <div className="col-span-2 flex justify-end">
-                  <Button onClick={onRefresh} disabled={loading} className="rounded-xl px-3">
-                    <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-                    {loading ? "读取中" : "查询"}
-                  </Button>
-                </div>
-              </div>
-            </div>
           </div>
         ) : (
           <div className="rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm">
@@ -4445,7 +4754,7 @@ export default function AShareTD9InteractiveChart() {
               })}
             </div>
           </div>
-          {market !== "factor-research" && <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
+          {market !== "factor-research" && market !== "agent" && <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
             <div className="relative col-span-2 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 md:w-56">
               <Search className="h-4 w-4 text-slate-400" />
               <input
@@ -4841,7 +5150,10 @@ export default function AShareTD9InteractiveChart() {
         ) : market === "agent" ? (
           <AgentChatPanel marketCodes={marketCodes} />
         ) : (
-          <FactorResearchPanel />
+          <div className="space-y-10">
+            <FactorResearchPanel />
+            <FactorDetailPanel />
+          </div>
         )}
         {market !== "agent" && market !== "factor-research" && (
           <FavoritesToolbar
