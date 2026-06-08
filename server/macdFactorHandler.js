@@ -1,4 +1,5 @@
 import { getMysqlPool } from "./mysqlClient.js";
+import { getRedisClient } from "./redisClient.js";
 
 // Number of trading days forward for each period key
 const PERIOD_TRADING_DAYS = {
@@ -44,6 +45,13 @@ export function createMacdFactorReturnsHandler() {
       const url = new URL(req.url || "", "http://localhost");
       const mode = url.searchParams.get("mode") === "custom" ? "custom" : "trailing";
       const startDate = url.searchParams.get("startDate") || "";
+
+      const cacheKey = `macd:factor:returns:${mode}:${mode === "custom" && /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? startDate : "trailing"}`;
+      try {
+        const redis = await getRedisClient();
+        const cached = await redis.get(cacheKey);
+        if (cached) return sendJson(res, 200, JSON.parse(cached));
+      } catch (_) {}
 
       const pool = getMysqlPool();
 
@@ -167,7 +175,12 @@ export function createMacdFactorReturnsHandler() {
         });
       }
 
-      return sendJson(res, 200, { ok: true, data });
+      const result = { ok: true, data };
+      try {
+        const redis = await getRedisClient();
+        await redis.setEx(cacheKey, 3600, JSON.stringify(result));
+      } catch (_) {}
+      return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, 502, { ok: false, error: error?.message || String(error) });
     }
