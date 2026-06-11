@@ -27,9 +27,9 @@ function normalizeMarket(value) {
 }
 
 function normalizeUserId(value) {
-  const digits = String(value ?? "0").trim();
-  if (!/^\d+$/.test(digits)) {
-    throw new Error("Invalid userId. Expected a non-negative integer.");
+  const digits = String(value ?? "").trim();
+  if (!/^[1-9]\d*$/.test(digits)) {
+    throw new Error("Invalid authenticated user id.");
   }
   return digits;
 }
@@ -58,6 +58,14 @@ function normalizeFavoriteName(value, fallbackCode) {
 
 function getFavoritesKey(userId, market) {
   return `favorites:${userId}:${market}`;
+}
+
+function getLegacyMigrationKey(userId, market) {
+  return `favorites:migrated:${userId}:${market}`;
+}
+
+function getLegacyFavoritesOwnerId() {
+  return normalizeUserId(process.env.FAVORITES_LEGACY_OWNER_USER_ID || "1");
 }
 
 function toFavoriteItem(entry, market) {
@@ -122,6 +130,33 @@ async function writeFavoriteItems(client, key, items) {
   await multi.exec();
 }
 
+async function migrateLegacyFavorites(client, userId, market) {
+  if (userId !== getLegacyFavoritesOwnerId()) return;
+
+  const migrationKey = getLegacyMigrationKey(userId, market);
+  if (await client.exists(migrationKey)) return;
+
+  const key = getFavoritesKey(userId, market);
+  const legacyKey = getFavoritesKey("0", market);
+  const [items, legacyItems] = await Promise.all([
+    readFavoriteItems(client, key, market),
+    readFavoriteItems(client, legacyKey, market),
+  ]);
+  const mergedItems = [...items];
+  const seen = new Set(items.map((item) => item.code));
+
+  for (const item of legacyItems) {
+    if (seen.has(item.code)) continue;
+    seen.add(item.code);
+    mergedItems.push(item);
+  }
+
+  if (mergedItems.length !== items.length) {
+    await writeFavoriteItems(client, key, mergedItems);
+  }
+  await client.set(migrationKey, String(Date.now()));
+}
+
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -133,12 +168,13 @@ export function createFavoritesHandler() {
     try {
       const requestUrl = new URL(req.url || "", "http://localhost");
       const method = String(req.method || "GET").toUpperCase();
+      const userId = normalizeUserId(req.user?.id);
+      const client = await getRedisClient();
 
       if (method === "GET") {
-        const userId = normalizeUserId(requestUrl.searchParams.get("userId") || "0");
         const market = normalizeMarket(requestUrl.searchParams.get("market") || "ashare");
         const key = getFavoritesKey(userId, market);
-        const client = await getRedisClient();
+        await migrateLegacyFavorites(client, userId, market);
         const rawItems = await readFavoriteItems(client, key, market);
         const items = market === "ashare" ? await enrichAShareNames(rawItems) : rawItems;
         return sendJson(res, 200, { ok: true, userId, market, items });
@@ -146,11 +182,10 @@ export function createFavoritesHandler() {
 
       if (method === "POST") {
         const body = await readRequestBody(req);
-        const userId = normalizeUserId(body.userId ?? "0");
         const market = normalizeMarket(body.market || "ashare");
         const code = normalizeFavoriteCode(body.code, market);
         const key = getFavoritesKey(userId, market);
-        const client = await getRedisClient();
+        await migrateLegacyFavorites(client, userId, market);
         const items = await readFavoriteItems(client, key, market);
 
         if (!items.some((item) => item.code === code)) {
@@ -165,11 +200,10 @@ export function createFavoritesHandler() {
       }
 
       if (method === "DELETE") {
-        const userId = normalizeUserId(requestUrl.searchParams.get("userId") || "0");
         const market = normalizeMarket(requestUrl.searchParams.get("market") || "ashare");
         const code = normalizeFavoriteCode(requestUrl.searchParams.get("code"), market);
         const key = getFavoritesKey(userId, market);
-        const client = await getRedisClient();
+        await migrateLegacyFavorites(client, userId, market);
         const items = await readFavoriteItems(client, key, market);
         const nextItems = items.filter((item) => item.code !== code);
 

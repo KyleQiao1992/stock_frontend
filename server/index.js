@@ -10,6 +10,8 @@ import { createRedisRecommendationsHandler } from "./redisHandlers.js";
 import { createUsKlineHandler } from "./usKline.js";
 import { createMacdFactorReturnsHandler } from "./macdFactorHandler.js";
 import { createMacdFactorDetailHandler } from "./macdFactorDetailHandler.js";
+import { createAuthHandler } from "./authHandlers.js";
+import { authMiddleware } from "./authMiddleware.js";
 
 loadServerEnv();
 
@@ -19,6 +21,12 @@ const distDir = path.resolve(__dirname, "../dist");
 
 const app = express();
 const port = Number(process.env.PORT) || 80;
+
+// Public: auth routes (must be before authMiddleware)
+app.use("/api/auth", createAuthHandler());
+
+// All routes below require a valid JWT
+app.use("/api", authMiddleware);
 
 app.get("/api/us-kline", createUsKlineHandler());
 app.get("/api/factor-returns", createMacdFactorReturnsHandler());
@@ -37,7 +45,7 @@ app.use(
   }),
 );
 
-app.use((req, res) => {
+app.use((_req, res) => {
   res.sendFile(path.join(distDir, "index.html"));
 });
 

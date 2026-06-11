@@ -20,6 +20,33 @@ const FACTOR_LABELS = {
   factor6: "因子6",
 };
 
+const CHINA_UTC_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+function getSecondsUntilChinaDayEnd(now = new Date()) {
+  const chinaNow = new Date(now.getTime() + CHINA_UTC_OFFSET_MS);
+  let expiresAt = Date.UTC(
+    chinaNow.getUTCFullYear(),
+    chinaNow.getUTCMonth(),
+    chinaNow.getUTCDate(),
+    15,
+    59,
+    59,
+  );
+
+  if (expiresAt <= now.getTime()) {
+    expiresAt = Date.UTC(
+      chinaNow.getUTCFullYear(),
+      chinaNow.getUTCMonth(),
+      chinaNow.getUTCDate() + 1,
+      15,
+      59,
+      59,
+    );
+  }
+
+  return Math.max(1, Math.ceil((expiresAt - now.getTime()) / 1000));
+}
+
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -50,8 +77,13 @@ export function createMacdFactorReturnsHandler() {
       try {
         const redis = await getRedisClient();
         const cached = await redis.get(cacheKey);
-        if (cached) return sendJson(res, 200, JSON.parse(cached));
-      } catch (_) {}
+        if (cached) {
+          await redis.expire(cacheKey, getSecondsUntilChinaDayEnd());
+          return sendJson(res, 200, JSON.parse(cached));
+        }
+      } catch {
+        // Redis cache is optional; fall back to MySQL.
+      }
 
       const pool = getMysqlPool();
 
@@ -178,8 +210,10 @@ export function createMacdFactorReturnsHandler() {
       const result = { ok: true, data };
       try {
         const redis = await getRedisClient();
-        await redis.setEx(cacheKey, 3600, JSON.stringify(result));
-      } catch (_) {}
+        await redis.setEx(cacheKey, getSecondsUntilChinaDayEnd(), JSON.stringify(result));
+      } catch {
+        // Redis cache is optional; return the computed result.
+      }
       return sendJson(res, 200, result);
     } catch (error) {
       return sendJson(res, 502, { ok: false, error: error?.message || String(error) });

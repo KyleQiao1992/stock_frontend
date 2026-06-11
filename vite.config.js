@@ -11,6 +11,8 @@ import { createRedisRecommendationsHandler } from "./server/redisHandlers.js";
 import { createUsKlineHandler } from "./server/usKline.js";
 import { createMacdFactorReturnsHandler } from "./server/macdFactorHandler.js";
 import { createMacdFactorDetailHandler } from "./server/macdFactorDetailHandler.js";
+import { createAuthHandler } from "./server/authHandlers.js";
+import { authMiddleware } from "./server/authMiddleware.js";
 
 function usKlinePlugin() {
   loadServerEnv();
@@ -22,8 +24,11 @@ function usKlinePlugin() {
   const favoritesHandler = createFavoritesHandler();
   const factorReturnsHandler = createMacdFactorReturnsHandler();
   const factorDetailHandler = createMacdFactorDetailHandler();
+  const authHandler = createAuthHandler();
 
   function register(middlewares) {
+    middlewares.use("/api/auth", authHandler);
+    middlewares.use("/api", authMiddleware);
     middlewares.use("/api/us-kline", handler);
     middlewares.use("/api/ashare-finance", ashareFinanceHandler);
     middlewares.use("/api/ashare-profile", ashareProfileHandler);

@@ -22,6 +22,14 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
+function apiFetch(url, opts = {}) {
+  const token = localStorage.getItem("token");
+  return fetch(url, {
+    ...opts,
+    headers: { ...(opts.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+}
+
 const PERIOD_OPTIONS = [
   { value: "101", label: "日K" },
   { value: "102", label: "周K" },
@@ -513,7 +521,7 @@ async function fetchUsKline({ symbol, period, adjust, limit }) {
       adjust,
       limit: String(limit || 600),
     });
-    const res = await fetch(`/api/us-kline?${params.toString()}`, {
+    const res = await apiFetch(`/api/us-kline?${params.toString()}`, {
       method: "GET",
       cache: "no-store",
     });
@@ -819,7 +827,7 @@ function getDefaultRecommendationDate() {
 
 async function fetchRecommendationList({ market, factor, date }) {
   const params = new URLSearchParams({ market, factor, date });
-  const res = await fetch(`/api/recommendations?${params.toString()}`, {
+  const res = await apiFetch(`/api/recommendations?${params.toString()}`, {
     method: "GET",
     cache: "no-store",
   });
@@ -834,7 +842,7 @@ async function fetchAshareSuggestions(query, options = {}) {
   const keyword = String(query || "").trim();
   if (!keyword) return [];
   const params = new URLSearchParams({ q: keyword });
-  const res = await fetch(`/api/ashare-search?${params.toString()}`, {
+  const res = await apiFetch(`/api/ashare-search?${params.toString()}`, {
     method: "GET",
     cache: "no-store",
     signal: options.signal,
@@ -846,9 +854,9 @@ async function fetchAshareSuggestions(query, options = {}) {
   return Array.isArray(payload?.items) ? payload.items : [];
 }
 
-async function fetchFavorites({ market, userId = 0 }) {
-  const params = new URLSearchParams({ market, userId: String(userId) });
-  const res = await fetch(`/api/favorites?${params.toString()}`, {
+async function fetchFavorites({ market }) {
+  const params = new URLSearchParams({ market });
+  const res = await apiFetch(`/api/favorites?${params.toString()}`, {
     method: "GET",
     cache: "no-store",
   });
@@ -859,14 +867,14 @@ async function fetchFavorites({ market, userId = 0 }) {
   return payload;
 }
 
-async function addFavorite({ market, code, name, userId = 0 }) {
-  const res = await fetch("/api/favorites", {
+async function addFavorite({ market, code, name }) {
+  const res = await apiFetch("/api/favorites", {
     method: "POST",
     cache: "no-store",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ market, code, name, userId }),
+    body: JSON.stringify({ market, code, name }),
   });
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
@@ -875,9 +883,9 @@ async function addFavorite({ market, code, name, userId = 0 }) {
   return payload;
 }
 
-async function removeFavorite({ market, code, userId = 0 }) {
-  const params = new URLSearchParams({ market, code, userId: String(userId) });
-  const res = await fetch(`/api/favorites?${params.toString()}`, {
+async function removeFavorite({ market, code }) {
+  const params = new URLSearchParams({ market, code });
+  const res = await apiFetch(`/api/favorites?${params.toString()}`, {
     method: "DELETE",
     cache: "no-store",
   });
@@ -2642,6 +2650,7 @@ function Chart({
     const ma5 = movingAverage(safeRows, 5);
     const ma10 = movingAverage(safeRows, 10);
     const ma20 = movingAverage(safeRows, 20);
+    const ma60 = movingAverage(safeRows, 60);
     const gaps = Array.isArray(visibleGaps) ? visibleGaps : [];
     const makePath = (arr, yMapper = y) => {
       let started = false;
@@ -2655,7 +2664,7 @@ function Chart({
         .filter(Boolean)
         .join(" ");
     };
-    return { margin, mainH, gap, volH, macdH, plotW, xStep, candleW, x, y, vy, volBase, macdTop, macdBase, macdY, macdAbsMax, yMax, yMin, maxVol, ma5, ma10, ma20, macdSeries, macdCrosses, zeroAxisCrosses, gaps, makePath };
+    return { margin, mainH, gap, volH, macdH, plotW, xStep, candleW, x, y, vy, volBase, macdTop, macdBase, macdY, macdAbsMax, yMax, yMin, maxVol, ma5, ma10, ma20, ma60, macdSeries, macdCrosses, zeroAxisCrosses, gaps, makePath };
   }, [safeRows, fullSafeRows, width, height, visibleGaps]);
 
   if (!chart || safeRows.length === 0) {
@@ -2841,9 +2850,11 @@ function Chart({
         <path d={chart.makePath(chart.ma5)} fill="none" stroke="#ff9900" strokeWidth="1.4" />
         <path d={chart.makePath(chart.ma10)} fill="none" stroke="#3366cc" strokeWidth="1.4" />
         <path d={chart.makePath(chart.ma20)} fill="none" stroke="#9933cc" strokeWidth="1.4" />
+        <path d={chart.makePath(chart.ma60)} fill="none" stroke="#009688" strokeWidth="1.4" />
         <text x="18" y="39" fontSize="12" fill="#ff9900">MA5</text>
         <text x="64" y="39" fontSize="12" fill="#3366cc">MA10</text>
         <text x="116" y="39" fontSize="12" fill="#9933cc">MA20</text>
+        <text x="168" y="39" fontSize="12" fill="#009688">MA60</text>
 
         {showGaps &&
           chart.gaps.map((g, idx) => {
@@ -3282,7 +3293,7 @@ const FACTOR_DETAIL_PERIODS = [
 
 async function fetchFactorDetail({ factors, startDate, endDate, page }) {
   const params = new URLSearchParams({ factor: factors.join(","), startDate, endDate, page: String(page) });
-  const res = await fetch(`/api/factor-detail?${params}`, { cache: "no-store" });
+  const res = await apiFetch(`/api/factor-detail?${params}`, { cache: "no-store" });
   const payload = await res.json().catch(() => null);
   if (!res.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
   return payload;
@@ -3639,7 +3650,7 @@ function formatDateLabel(dateStr) {
 async function fetchFactorReturns(mode, startDate, signal) {
   const params = new URLSearchParams({ mode });
   if (mode === "custom" && startDate) params.set("startDate", startDate);
-  const res = await fetch(`/api/factor-returns?${params}`, { cache: "no-store", signal });
+  const res = await apiFetch(`/api/factor-returns?${params}`, { cache: "no-store", signal });
   const payload = await res.json().catch(() => null);
   if (!res.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
   return payload.data;
@@ -4165,8 +4176,8 @@ function FavoritesToolbar({
   );
 }
 
-export default function AShareTD9InteractiveChart() {
-  const favoriteUserId = 0;
+export default function AShareTD9InteractiveChart({ onLogout }) {
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [market, setMarket] = useState("ashare");
   const [marketCodes, setMarketCodes] = useState({ ashare: "600519", us: "MSFT" });
   const [ashareSuggestions, setAshareSuggestions] = useState([]);
@@ -4485,7 +4496,7 @@ export default function AShareTD9InteractiveChart() {
     setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: "" }));
 
     try {
-      const payload = await fetchFavorites({ market: requestedMarket, userId: favoriteUserId });
+      const payload = await fetchFavorites({ market: requestedMarket });
       const items = Array.isArray(payload?.items) ? payload.items : [];
       setFavoriteItemsMap((prev) => ({ ...prev, [requestedMarket]: items }));
     } catch (e) {
@@ -4504,12 +4515,11 @@ export default function AShareTD9InteractiveChart() {
 
     try {
       const payload = favoriteCodeSet.has(code)
-        ? await removeFavorite({ market: requestedMarket, code, userId: favoriteUserId })
+        ? await removeFavorite({ market: requestedMarket, code })
         : await addFavorite({
           market: requestedMarket,
           code,
           name: item?.name || (meta.code === code ? meta.name : "") || code,
-          userId: favoriteUserId,
         });
       const items = Array.isArray(payload?.items) ? payload.items : [];
       setFavoriteItemsMap((prev) => ({ ...prev, [requestedMarket]: items }));
@@ -4584,7 +4594,7 @@ export default function AShareTD9InteractiveChart() {
         try {
           const target = result.code || currentCode;
           const [financeResult, profileResult] = await Promise.allSettled([
-            fetch(`/api/ashare-finance?code=${encodeURIComponent(target)}`, {
+            apiFetch(`/api/ashare-finance?code=${encodeURIComponent(target)}`, {
               method: "GET",
               cache: "no-store",
             }).then(async (res) => {
@@ -4592,7 +4602,7 @@ export default function AShareTD9InteractiveChart() {
               if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
               return payload;
             }),
-            fetch(`/api/ashare-profile?code=${encodeURIComponent(target)}`, {
+            apiFetch(`/api/ashare-profile?code=${encodeURIComponent(target)}`, {
               method: "GET",
               cache: "no-store",
             }).then(async (res) => {
@@ -4728,7 +4738,7 @@ export default function AShareTD9InteractiveChart() {
   return (
     <div className="min-h-screen bg-slate-50 p-4 text-slate-900">
       <div className="mx-auto max-w-[1600px] space-y-4">
-        <div className="flex flex-col gap-3 rounded-2xl bg-white p-4 shadow-sm md:flex-row md:items-end md:justify-between">
+        <div className="flex flex-col gap-3 rounded-2xl bg-white p-4 shadow-sm md:flex-row md:items-center md:justify-between">
           <div>
             <div className="mb-3 inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
               {MARKET_TABS.map((tab) => {
@@ -4759,6 +4769,7 @@ export default function AShareTD9InteractiveChart() {
               })}
             </div>
           </div>
+          <div className="flex items-center gap-2">
           {market !== "factor-research" && market !== "agent" && <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
             <div className="relative col-span-2 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 md:w-56">
               <Search className="h-4 w-4 text-slate-400" />
@@ -4887,6 +4898,30 @@ export default function AShareTD9InteractiveChart() {
               {loading ? "加载中" : "查询"}
             </Button>
           </div>}
+          {onLogout && (
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowProfileMenu((v) => !v)}
+                onBlur={() => setTimeout(() => setShowProfileMenu(false), 150)}
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200"
+              >
+                <UserRound className="h-4 w-4" />
+              </button>
+              {showProfileMenu && (
+                <div className="absolute right-0 top-10 z-20 w-32 rounded-xl border border-slate-100 bg-white py-1 shadow-md">
+                  <button
+                    type="button"
+                    onMouseDown={onLogout}
+                    className="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+                  >
+                    退出登录
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+          </div>
         </div>
 
         {error && (
@@ -5243,11 +5278,6 @@ export default function AShareTD9InteractiveChart() {
                 />
               </div>
             </div>
-          </div>
-        )}
-        {market !== "factor-research" && (
-          <div className="rounded-2xl bg-white p-4 text-sm text-slate-500 shadow-sm">
-            说明：这是学习/研究用图表，不构成投资建议。断层基于已拉取的完整历史 K 线计算，再映射到当前显示区间；规则按相邻 K 线高低价判断：向上断层为当日最低价高于前一根最高价，向下断层为当日最高价低于前一根最低价；默认只显示未回补断层。
           </div>
         )}
       </div>

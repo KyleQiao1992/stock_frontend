@@ -1,5 +1,6 @@
-import { Component } from "react";
+import { Component, useState } from "react";
 import AShareTD9InteractiveChart from "./components/AShareTD9InteractiveChart";
+import LoginPage from "./components/LoginPage";
 
 class AppErrorBoundary extends Component {
   constructor(props) {
@@ -42,10 +43,30 @@ class AppErrorBoundary extends Component {
   }
 }
 
+function getStoredAuth() {
+  const token = localStorage.getItem("token");
+  const id = localStorage.getItem("userId");
+  const username = localStorage.getItem("username");
+  return token && id ? { token, id: Number(id), username } : null;
+}
+
 export default function App() {
+  const [auth, setAuth] = useState(() => getStoredAuth());
+
+  function handleLogout() {
+    localStorage.removeItem("token");
+    localStorage.removeItem("userId");
+    localStorage.removeItem("username");
+    setAuth(null);
+  }
+
+  if (!auth) {
+    return <LoginPage onLogin={setAuth} />;
+  }
+
   return (
     <AppErrorBoundary>
-      <AShareTD9InteractiveChart />
+      <AShareTD9InteractiveChart onLogout={handleLogout} />
     </AppErrorBoundary>
   );
 }
