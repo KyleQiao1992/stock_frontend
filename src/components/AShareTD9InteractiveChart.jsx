@@ -3299,6 +3299,21 @@ async function fetchFactorDetail({ factors, startDate, endDate, page }) {
   return payload;
 }
 
+// Derive a display label from a factor name, e.g. "factor7" -> "因子7".
+function factorLabelFromName(name) {
+  const m = /^factor(\d+)$/.exec(String(name));
+  return m ? `因子${m[1]}` : String(name);
+}
+
+// Fetch the factor list for a status ("production" | "preliminary") from factor_dim.
+async function fetchFactors(status, signal) {
+  const params = new URLSearchParams({ status });
+  const res = await apiFetch(`/api/factors?${params}`, { cache: "no-store", signal });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+  return payload.data; // [{ name, status, label }]
+}
+
 function ReturnCell({ value }) {
   if (value === null || value === undefined) {
     return <td className="px-3 py-2 text-center text-slate-300 text-xs">-</td>;
@@ -3348,8 +3363,9 @@ function FactorStatsSummary({ stats, startDate, endDate, total }) {
   );
 }
 
-function FactorDetailPanel() {
-  const [factors, setFactors] = useState(["factor1"]);
+function FactorDetailPanel({ status = "production" }) {
+  const [factorOptions, setFactorOptions] = useState([]); // [{ value, label }]
+  const [factors, setFactors] = useState([]);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [startDate, setStartDate] = useState(defaultStartDate);
   const [endDate, setEndDate] = useState(todayStr);
@@ -3359,6 +3375,18 @@ function FactorDetailPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchFactors(status, ctrl.signal)
+      .then((list) => {
+        const options = list.map((f) => ({ value: f.name, label: f.label ?? factorLabelFromName(f.name) }));
+        setFactorOptions(options);
+        if (options.length) setFactors([options[0].value]);
+      })
+      .catch(() => { /* keep dropdown empty on failure */ });
+    return () => ctrl.abort();
+  }, [status]);
 
   useEffect(() => {
     if (!query) return;
@@ -3403,12 +3431,14 @@ function FactorDetailPanel() {
   const showFactorCol = query && query.factors.length > 1;
 
   const factorLabelMap = useMemo(
-    () => Object.fromEntries(RECOMMENDATION_FACTOR_OPTIONS.map((o) => [o.value, o.label])),
-    [],
+    () => Object.fromEntries(factorOptions.map((o) => [o.value, o.label])),
+    [factorOptions],
   );
-  const factorLabel = factors.length === 1
-    ? (factorLabelMap[factors[0]] ?? factors[0])
-    : `已选 ${factors.length} 个因子`;
+  const factorLabel = factors.length === 0
+    ? "选择因子"
+    : factors.length === 1
+      ? (factorLabelMap[factors[0]] ?? factors[0])
+      : `已选 ${factors.length} 个因子`;
 
   return (
     <div className="space-y-4">
@@ -3428,7 +3458,7 @@ function FactorDetailPanel() {
           </button>
           {dropdownOpen && (
             <div className="absolute left-0 top-full z-20 mt-1 min-w-[8rem] rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
-              {RECOMMENDATION_FACTOR_OPTIONS.map((o) => (
+              {factorOptions.map((o) => (
                 <label key={o.value} className="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-sm hover:bg-slate-50">
                   <input
                     type="checkbox"
@@ -3647,8 +3677,8 @@ function formatDateLabel(dateStr) {
   return `${Number(m)}/${Number(d)}`;
 }
 
-async function fetchFactorReturns(mode, startDate, signal) {
-  const params = new URLSearchParams({ mode });
+async function fetchFactorReturns(mode, startDate, signal, status = "production") {
+  const params = new URLSearchParams({ mode, status });
   if (mode === "custom" && startDate) params.set("startDate", startDate);
   const res = await apiFetch(`/api/factor-returns?${params}`, { cache: "no-store", signal });
   const payload = await res.json().catch(() => null);
@@ -3656,7 +3686,258 @@ async function fetchFactorReturns(mode, startDate, signal) {
   return payload.data;
 }
 
-function FactorResearchPanel() {
+function FactorResearchPageLayout() {
+  const [factorCategory, setFactorCategory] = useState("mature");
+
+  const categoryTabs = [
+    { key: "mature", label: "成熟因子" },
+    { key: "candidate", label: "预备因子" },
+  ];
+
+  const status = factorCategory === "mature" ? "production" : "preliminary";
+
+  return (
+    <div className="space-y-6">
+      {/* 左：成熟/预备 切换　右：因子管理（独立放置，便于后续按权限隐藏） */}
+      <div className="flex items-center justify-between">
+        <div className="flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm w-fit">
+          {categoryTabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setFactorCategory(t.key)}
+              className={`rounded-lg px-5 py-1.5 text-sm font-medium transition-colors ${
+                factorCategory === t.key
+                  ? "bg-slate-900 text-white"
+                  : "text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* 权限上线后，把这个按钮包一层 role === 'admin' 判断即可整体隐藏 */}
+        <button
+          type="button"
+          onClick={() => setFactorCategory("manage")}
+          className={`rounded-xl border px-5 py-1.5 text-sm font-medium shadow-sm transition-colors ${
+            factorCategory === "manage"
+              ? "border-slate-900 bg-slate-900 text-white"
+              : "border-slate-200 bg-white text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          因子管理
+        </button>
+      </div>
+
+      {factorCategory === "manage" ? (
+        <FactorAdminPanel />
+      ) : (
+        <div key={status} className="space-y-10">
+          <FactorResearchPanel status={status} />
+          <FactorDetailPanel status={status} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Fetch every factor (including disabled) for the management table.
+async function fetchAdminFactors(signal) {
+  const res = await apiFetch(`/api/admin/factors`, { cache: "no-store", signal });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+  return payload.data; // [{ name, label, status, enabled, updatedAt, updatedBy }]
+}
+
+async function patchAdminFactor(name, patch) {
+  const res = await apiFetch(`/api/admin/factors/${encodeURIComponent(name)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+  return true;
+}
+
+function formatUpdatedAt(value) {
+  if (!value) return "-";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "-";
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${mm}-${dd}`;
+}
+
+function FactorAdminPanel() {
+  const [rows, setRows] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [savingName, setSavingName] = useState("");
+  const [savedName, setSavedName] = useState("");
+  const [rowError, setRowError] = useState(null);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    setLoading(true);
+    setLoadError(null);
+    fetchAdminFactors(ctrl.signal)
+      .then((data) => setRows(data))
+      .catch((e) => { if (e.name !== "AbortError") setLoadError(e?.message || "加载失败"); })
+      .finally(() => setLoading(false));
+    return () => ctrl.abort();
+  }, []);
+
+  // Optimistic immediate-save: apply the patch locally, PATCH, roll back on error.
+  async function applyPatch(name, patch) {
+    setRowError(null);
+    const prev = rows;
+    setRows((list) => list.map((r) => (r.name === name ? { ...r, ...patch } : r)));
+    setSavingName(name);
+    try {
+      await patchAdminFactor(name, patch);
+      // Reflect server-side audit fields without a refetch.
+      setRows((list) =>
+        list.map((r) =>
+          r.name === name
+            ? { ...r, updatedAt: new Date().toISOString(), updatedBy: localStorage.getItem("username") || r.updatedBy }
+            : r,
+        ),
+      );
+      setSavedName(name);
+      setTimeout(() => setSavedName((cur) => (cur === name ? "" : cur)), 1500);
+    } catch (e) {
+      setRows(prev); // roll back
+      setRowError(`${name}：${e?.message || "保存失败"}`);
+    } finally {
+      setSavingName((cur) => (cur === name ? "" : cur));
+    }
+  }
+
+  const total = rows?.length || 0;
+  const productionCount = rows?.filter((r) => r.status === "production").length || 0;
+  const preliminaryCount = rows?.filter((r) => r.status === "preliminary").length || 0;
+  const disabledCount = rows?.filter((r) => !r.enabled).length || 0;
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between">
+        <div className="text-base font-semibold text-slate-700">因子管理</div>
+        {rows && (
+          <div className="flex gap-3 text-xs text-slate-500">
+            <span>共 {total} 个</span>
+            <span>正式 {productionCount} · 预备 {preliminaryCount}</span>
+            <span>已停用 {disabledCount}</span>
+          </div>
+        )}
+      </div>
+      <div className="mt-1 text-xs text-slate-400">
+        正式/预备决定因子归属，启用决定是否在全站展示（停用后整体表现、详情、列表都不再出现）。修改即时保存。
+      </div>
+
+      {rowError && (
+        <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {rowError}
+        </div>
+      )}
+
+      {loading && <div className="mt-4 text-sm text-slate-400">加载中…</div>}
+      {loadError && <div className="mt-4 text-sm text-red-600">加载失败：{loadError}</div>}
+
+      {rows && (
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-slate-500">
+                <th className="px-3 py-3 text-left font-medium whitespace-nowrap">因子名</th>
+                <th className="px-3 py-3 text-left font-medium whitespace-nowrap">显示名</th>
+                <th className="px-3 py-3 text-left font-medium w-[36%] min-w-[340px]">简介</th>
+                <th className="px-3 py-3 text-left font-medium whitespace-nowrap">状态</th>
+                <th className="px-3 py-3 text-left font-medium whitespace-nowrap">启用</th>
+                <th className="px-3 py-3 text-left font-medium whitespace-nowrap">更新时间</th>
+                <th className="px-3 py-3 text-left font-medium whitespace-nowrap">更新人</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const busy = savingName === r.name;
+                const dim = !r.enabled;
+                return (
+                  <tr
+                    key={r.name}
+                    className={`border-b border-slate-100 ${dim ? "text-slate-400" : "text-slate-700"}`}
+                  >
+                    <td className="px-3 py-2.5 font-mono text-xs whitespace-nowrap">{r.name}</td>
+                    <td className="px-3 py-2.5 whitespace-nowrap">
+                      {r.displayName || r.label}
+                    </td>
+                    <td className="px-3 py-2.5 align-top">
+                      <div className="px-2 py-1 text-sm leading-relaxed whitespace-pre-wrap">
+                        {r.summary || <span className="text-slate-300">（未填写）</span>}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+                        {[
+                          { key: "production", label: "正式" },
+                          { key: "preliminary", label: "预备" },
+                        ].map((s) => (
+                          <button
+                            key={s.key}
+                            type="button"
+                            disabled={busy}
+                            onClick={() => r.status !== s.key && applyPatch(r.name, { status: s.key })}
+                            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                              r.status === s.key
+                                ? "bg-slate-900 text-white"
+                                : "text-slate-500 hover:text-slate-800"
+                            }`}
+                          >
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={r.enabled}
+                        disabled={busy}
+                        onClick={() => applyPatch(r.name, { enabled: !r.enabled })}
+                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 ${
+                          r.enabled ? "bg-emerald-500" : "bg-slate-300"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                            r.enabled ? "translate-x-4" : "translate-x-0.5"
+                          }`}
+                        />
+                      </button>
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-xs">
+                      {savedName === r.name ? (
+                        <span className="text-emerald-600">✓ 已保存</span>
+                      ) : (
+                        formatUpdatedAt(r.updatedAt)
+                      )}
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap text-xs">{r.updatedBy || "-"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FactorResearchPanel({ status = "production" }) {
   const [activeTab, setActiveTab] = useState("trailing");
   const [startDate, setStartDate] = useState(defaultStartDate);
   const [trailingData, setTrailingData] = useState(null);
@@ -3673,12 +3954,12 @@ function FactorResearchPanel() {
     const ctrl = new AbortController();
     setLoading(true);
     setLoadError(null);
-    fetchFactorReturns("trailing", null, ctrl.signal)
+    fetchFactorReturns("trailing", null, ctrl.signal, status)
       .then((data) => setTrailingData(data))
       .catch((e) => { if (e.name !== "AbortError") setLoadError(e?.message || "加载失败"); })
       .finally(() => setLoading(false));
     return () => ctrl.abort();
-  }, []);
+  }, [status]);
 
   useEffect(() => {
     if (activeTab !== "custom") return;
@@ -3686,12 +3967,12 @@ function FactorResearchPanel() {
     const ctrl = new AbortController();
     setLoading(true);
     setLoadError(null);
-    fetchFactorReturns("custom", startDate, ctrl.signal)
+    fetchFactorReturns("custom", startDate, ctrl.signal, status)
       .then((data) => setCustomCache((prev) => ({ ...prev, [startDate]: data })))
       .catch((e) => { if (e.name !== "AbortError") setLoadError(e?.message || "加载失败"); })
       .finally(() => setLoading(false));
     return () => ctrl.abort();
-  }, [activeTab, startDate]);
+  }, [activeTab, startDate, status]);
 
   const currentData = activeTab === "trailing" ? trailingData : customCache[startDate];
 
@@ -5190,10 +5471,7 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
         ) : market === "agent" ? (
           <AgentChatPanel marketCodes={marketCodes} />
         ) : (
-          <div className="space-y-10">
-            <FactorResearchPanel />
-            <FactorDetailPanel />
-          </div>
+          <FactorResearchPageLayout />
         )}
         {market !== "agent" && market !== "factor-research" && (
           <FavoritesToolbar

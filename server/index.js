@@ -10,6 +10,8 @@ import { createRedisRecommendationsHandler } from "./redisHandlers.js";
 import { createUsKlineHandler } from "./usKline.js";
 import { createMacdFactorReturnsHandler } from "./macdFactorHandler.js";
 import { createMacdFactorDetailHandler } from "./macdFactorDetailHandler.js";
+import { createFactorsHandler } from "./factorsHandler.js";
+import { createFactorAdminHandler } from "./factorAdminHandler.js";
 import { createAuthHandler } from "./authHandlers.js";
 import { authMiddleware } from "./authMiddleware.js";
 
@@ -29,6 +31,8 @@ app.use("/api/auth", createAuthHandler());
 app.use("/api", authMiddleware);
 
 app.get("/api/us-kline", createUsKlineHandler());
+app.get("/api/factors", createFactorsHandler());
+app.use("/api/admin/factors", createFactorAdminHandler());
 app.get("/api/factor-returns", createMacdFactorReturnsHandler());
 app.get("/api/factor-detail", createMacdFactorDetailHandler());
 app.get("/api/ashare-finance", createAshareFinanceHandler());

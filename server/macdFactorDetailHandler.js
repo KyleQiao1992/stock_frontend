@@ -1,4 +1,5 @@
 import { getMysqlPool } from "./mysqlClient.js";
+import { fetchFactorDim } from "./factorDim.js";
 
 const PERIOD_OFFSETS = [
   { key: "t1",  days: 1  },
@@ -10,7 +11,6 @@ const PERIOD_OFFSETS = [
   { key: "t60", days: 60 },
 ];
 
-const VALID_FACTORS = new Set(["factor1", "factor2", "factor3", "factor4", "factor5", "factor6"]);
 const PAGE_SIZE = 20;
 
 function sendJson(res, statusCode, payload) {
@@ -69,7 +69,8 @@ export function createMacdFactorDetailHandler() {
       const startDate = url.searchParams.get("startDate") || url.searchParams.get("date") || "";
       const endDate = url.searchParams.get("endDate") || startDate;
 
-      if (factors.length === 0 || factors.some((f) => !VALID_FACTORS.has(f))) {
+      const validFactors = new Set((await fetchFactorDim()).map((f) => f.name));
+      if (factors.length === 0 || factors.some((f) => !validFactors.has(f))) {
         return sendJson(res, 400, { ok: false, error: "Invalid factor" });
       }
       if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {

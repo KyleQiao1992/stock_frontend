@@ -1,5 +1,6 @@
 import { getMysqlPool } from "./mysqlClient.js";
 import { getRedisClient } from "./redisClient.js";
+import { fetchFactorDim, factorLabel } from "./factorDim.js";
 
 // Number of trading days forward for each period key
 const PERIOD_TRADING_DAYS = {
@@ -9,15 +10,6 @@ const PERIOD_TRADING_DAYS = {
   "2w": 10,
   "1m": 20,
   "3m": 60,
-};
-
-const FACTOR_LABELS = {
-  factor1: "因子1",
-  factor2: "因子2",
-  factor3: "因子3",
-  factor4: "因子4",
-  factor5: "因子5",
-  factor6: "因子6",
 };
 
 const CHINA_UTC_OFFSET_MS = 8 * 60 * 60 * 1000;
@@ -58,10 +50,10 @@ function toDateStr(value) {
   return String(value).slice(0, 10);
 }
 
-function buildEmptyData() {
+function buildEmptyData(factorNames) {
   const data = {};
   for (const key of Object.keys(PERIOD_TRADING_DAYS)) {
-    data[key] = Object.values(FACTOR_LABELS).map((label) => ({ factor: label, value: 0, sampleSize: 0 }));
+    data[key] = factorNames.map((name) => ({ factor: factorLabel(name), value: 0, sampleSize: 0 }));
   }
   return data;
 }
@@ -72,8 +64,10 @@ export function createMacdFactorReturnsHandler() {
       const url = new URL(req.url || "", "http://localhost");
       const mode = url.searchParams.get("mode") === "custom" ? "custom" : "trailing";
       const startDate = url.searchParams.get("startDate") || "";
+      const statusParam = url.searchParams.get("status");
+      const status = statusParam === "preliminary" ? "preliminary" : "production";
 
-      const cacheKey = `macd:factor:returns:${mode}:${mode === "custom" && /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? startDate : "trailing"}`;
+      const cacheKey = `macd:factor:returns:${status}:${mode}:${mode === "custom" && /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? startDate : "trailing"}`;
       try {
         const redis = await getRedisClient();
         const cached = await redis.get(cacheKey);
@@ -87,9 +81,16 @@ export function createMacdFactorReturnsHandler() {
 
       const pool = getMysqlPool();
 
-      // 1. Fetch signal rows from macd_factor_sync_result
-      let signalQuery = "SELECT factor_name, trade_date, codes FROM macd_factor_sync_result WHERE market = 'cn'";
-      const signalParams = [];
+      // 0. Resolve the factor universe for this status from factor_dim
+      const factorNames = (await fetchFactorDim(status)).map((f) => f.name);
+      if (!factorNames.length) {
+        return sendJson(res, 200, { ok: true, data: buildEmptyData([]) });
+      }
+
+      // 1. Fetch signal rows from macd_factor_sync_result, scoped to these factors
+      const factorPlaceholders = factorNames.map(() => "?").join(",");
+      let signalQuery = `SELECT factor_name, trade_date, codes FROM macd_factor_sync_result WHERE market = 'cn' AND factor_name IN (${factorPlaceholders})`;
+      const signalParams = [...factorNames];
 
       if (mode === "custom" && /^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
         signalQuery += " AND trade_date >= ?";
@@ -101,7 +102,7 @@ export function createMacdFactorReturnsHandler() {
 
       const [signalRows] = await pool.query(signalQuery, signalParams);
       if (!signalRows.length) {
-        return sendJson(res, 200, { ok: true, data: buildEmptyData() });
+        return sendJson(res, 200, { ok: true, data: buildEmptyData(factorNames) });
       }
 
       // 2. Expand comma-separated codes into (factorName, signalDate, code) tuples
@@ -122,7 +123,7 @@ export function createMacdFactorReturnsHandler() {
       }
 
       if (!signals.length || !codeSet.size) {
-        return sendJson(res, 200, { ok: true, data: buildEmptyData() });
+        return sendJson(res, 200, { ok: true, data: buildEmptyData(factorNames) });
       }
 
       // 3. Fetch klines for all codes from minDate in one query
@@ -149,7 +150,7 @@ export function createMacdFactorReturnsHandler() {
       // 5. Accumulate returns per (factorName, periodKey)
       // acc[factorName][periodKey] = { sum, count }
       const acc = {};
-      for (const factorName of Object.keys(FACTOR_LABELS)) {
+      for (const factorName of factorNames) {
         acc[factorName] = {};
         for (const key of Object.keys(PERIOD_TRADING_DAYS)) {
           acc[factorName][key] = { sum: 0, count: 0 };
@@ -197,10 +198,10 @@ export function createMacdFactorReturnsHandler() {
       // 6. Build response: {periodKey: [{factor, value, sampleSize}]}
       const data = {};
       for (const key of Object.keys(PERIOD_TRADING_DAYS)) {
-        data[key] = Object.entries(FACTOR_LABELS).map(([factorName, label]) => {
+        data[key] = factorNames.map((factorName) => {
           const { sum, count } = acc[factorName][key];
           return {
-            factor: label,
+            factor: factorLabel(factorName),
             value: count > 0 ? parseFloat((sum / count).toFixed(2)) : 0,
             sampleSize: count,
           };
