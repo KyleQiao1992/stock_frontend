@@ -4091,6 +4091,21 @@ function WatchlistPanel({
   const panelTitle = isRecommendationMode ? `${isAshare ? "A股" : "美股"}推荐列表` : title;
   const recommendationMaxDate = formatRecommendationDateInput(getDefaultRecommendationDate());
 
+  // Recommendation factor dropdown — load正式因子 from factor_dim so newly
+  // promoted factors show up. Falls back to the static list if the API fails.
+  const [factorOptions, setFactorOptions] = useState(RECOMMENDATION_FACTOR_OPTIONS);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchFactors("production", ctrl.signal)
+      .then((list) => {
+        if (list?.length) {
+          setFactorOptions(list.map((f) => ({ value: f.name, label: f.label ?? factorLabelFromName(f.name) })));
+        }
+      })
+      .catch(() => { /* keep fallback options */ });
+    return () => ctrl.abort();
+  }, []);
+
   function renderFavoriteButton(item) {
     const favorited = favoriteCodeSet?.has(item.code);
     const pending = favoritePendingCodeSet?.has(item.code);
@@ -4152,7 +4167,7 @@ function WatchlistPanel({
                   onChange={(e) => onRecommendationFactorChange?.(e.target.value)}
                   className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none"
                 >
-                  {RECOMMENDATION_FACTOR_OPTIONS.map((option) => (
+                  {factorOptions.map((option) => (
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
@@ -4328,7 +4343,7 @@ function WatchlistPanel({
             })
           ) : (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-              {isRecommendationMode ? "当前 Redis 推荐 key 还没有可展示的标的。" : "输入股票代码后，这里会生成收藏卡片。"}
+              {isRecommendationMode ? `今天没有符合要求的${factorLabelFromName(recommendationFactor)}。` : "输入股票代码后，这里会生成收藏卡片。"}
             </div>
           )}
           </div>
@@ -4760,9 +4775,8 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
       const payload = await fetchRecommendationList({ market: requestedMarket, factor, date });
       const items = Array.isArray(payload?.items) ? payload.items : [];
       setRecommendationItemsMap((prev) => ({ ...prev, [requestedMarket]: items }));
-      if (!items.length) {
-        setRecommendationError("Redis 推荐列表为空，或当前 key 下没有可识别的标的。");
-      }
+      // Empty isn't an error — the factor just has no qualifying picks today.
+      // The friendly "今天没有符合要求的因子X" placeholder covers this case.
     } catch (e) {
       setRecommendationError(getErrorMessage(e, "推荐列表读取失败，请检查 Redis key 或数据格式。"));
       setRecommendationItemsMap((prev) => ({ ...prev, [requestedMarket]: [] }));

@@ -22,8 +22,8 @@ async function enrichAShareNames(items) {
 
 function normalizeRecommendationFactor(value) {
   const factor = String(value || "").trim().toLowerCase();
-  if (!/^factor[1-6]$/.test(factor)) {
-    throw new Error("Invalid factor. Expected factor1 to factor6.");
+  if (!/^factor[1-9]\d*$/.test(factor)) {
+    throw new Error("Invalid factor. Expected factorN (N >= 1).");
   }
   return factor;
 }
@@ -44,8 +44,8 @@ function normalizeRecommendationMarketSuffix(value) {
 }
 
 function assertAllowedRecommendationKey(key) {
-  if (/^factor[1-6]_(cn|us)_\d{8}$/.test(key)) return;
-  throw new Error("Invalid recommendation key. Expected factor1_cn_YYYYMMDD to factor6_cn_YYYYMMDD.");
+  if (/^factor[1-9]\d*_(cn|us)_\d{8}$/.test(key)) return;
+  throw new Error("Invalid recommendation key. Expected factorN_cn_YYYYMMDD (N >= 1).");
 }
 
 export async function readRedisValue(client, key) {

@@ -1,4 +1,5 @@
 import { fetchFactorDim, updateFactorDim, factorLabel } from "./factorDim.js";
+import { clearFactorReturnsCache } from "./macdFactorHandler.js";
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
@@ -63,6 +64,11 @@ export function createFactorAdminHandler() {
         const affected = await updateFactorDim(name, patch, updatedBy);
         if (affected === 0) {
           return sendJson(res, 404, { ok: false, error: "因子不存在。" });
+        }
+        // status / enabled changes alter the factor universe of the cached
+        // performance cards; bust the cache so they refresh immediately.
+        if (patch.status !== undefined || patch.enabled !== undefined) {
+          await clearFactorReturnsCache();
         }
         return sendJson(res, 200, { ok: true });
       }

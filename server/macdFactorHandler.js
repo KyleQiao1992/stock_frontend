@@ -39,6 +39,26 @@ function getSecondsUntilChinaDayEnd(now = new Date()) {
   return Math.max(1, Math.ceil((expiresAt - now.getTime()) / 1000));
 }
 
+const FACTOR_RETURNS_CACHE_PREFIX = "macd:factor:returns:";
+
+// Drop every cached factor-returns payload (all statuses / modes / start dates).
+// Called whenever a factor's status or enabled flag changes, so the performance
+// cards reflect the new factor universe immediately instead of after market close.
+export async function clearFactorReturnsCache() {
+  try {
+    const redis = await getRedisClient();
+    const keys = [];
+    // scanIterator yields batches (arrays of keys) in this redis client
+    // version, so flatten each chunk before deleting.
+    for await (const chunk of redis.scanIterator({ MATCH: `${FACTOR_RETURNS_CACHE_PREFIX}*` })) {
+      for (const key of Array.isArray(chunk) ? chunk : [chunk]) keys.push(key);
+    }
+    if (keys.length) await redis.del(keys);
+  } catch {
+    // Redis is optional; if it's unavailable the cache simply expires on its own.
+  }
+}
+
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -67,7 +87,7 @@ export function createMacdFactorReturnsHandler() {
       const statusParam = url.searchParams.get("status");
       const status = statusParam === "preliminary" ? "preliminary" : "production";
 
-      const cacheKey = `macd:factor:returns:${status}:${mode}:${mode === "custom" && /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? startDate : "trailing"}`;
+      const cacheKey = `${FACTOR_RETURNS_CACHE_PREFIX}${status}:${mode}:${mode === "custom" && /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? startDate : "trailing"}`;
       try {
         const redis = await getRedisClient();
         const cached = await redis.get(cacheKey);
