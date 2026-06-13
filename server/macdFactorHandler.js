@@ -86,17 +86,26 @@ export function createMacdFactorReturnsHandler() {
       const startDate = url.searchParams.get("startDate") || "";
       const statusParam = url.searchParams.get("status");
       const status = statusParam === "preliminary" ? "preliminary" : "production";
+      const forceRefresh = url.searchParams.get("force") === "1";
+
+      if (forceRefresh) {
+        // Historical signals or klines may have been backfilled. Clear every
+        // factor-return cache so all ranges are recomputed on their next read.
+        await clearFactorReturnsCache();
+      }
 
       const cacheKey = `${FACTOR_RETURNS_CACHE_PREFIX}${status}:${mode}:${mode === "custom" && /^\d{4}-\d{2}-\d{2}$/.test(startDate) ? startDate : "trailing"}`;
-      try {
-        const redis = await getRedisClient();
-        const cached = await redis.get(cacheKey);
-        if (cached) {
-          await redis.expire(cacheKey, getSecondsUntilChinaDayEnd());
-          return sendJson(res, 200, JSON.parse(cached));
+      if (!forceRefresh) {
+        try {
+          const redis = await getRedisClient();
+          const cached = await redis.get(cacheKey);
+          if (cached) {
+            await redis.expire(cacheKey, getSecondsUntilChinaDayEnd());
+            return sendJson(res, 200, JSON.parse(cached));
+          }
+        } catch {
+          // Redis cache is optional; fall back to MySQL.
         }
-      } catch {
-        // Redis cache is optional; fall back to MySQL.
       }
 
       const pool = getMysqlPool();

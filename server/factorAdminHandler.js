@@ -35,7 +35,7 @@ export function createFactorAdminHandler() {
       const name = decodeURIComponent(url.pathname.replace(/^\/+/, "").trim());
 
       if (method === "GET" && !name) {
-        const factors = await fetchFactorDim("", true);
+        const factors = await fetchFactorDim("", true, true);
         const data = factors.map((f) => {
           const attributes = f.factorAttribute && typeof f.factorAttribute === "object"
             ? f.factorAttribute

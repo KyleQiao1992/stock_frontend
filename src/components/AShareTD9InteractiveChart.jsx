@@ -3677,9 +3677,10 @@ function formatDateLabel(dateStr) {
   return `${Number(m)}/${Number(d)}`;
 }
 
-async function fetchFactorReturns(mode, startDate, signal, status = "production") {
+async function fetchFactorReturns(mode, startDate, signal, status = "production", force = false) {
   const params = new URLSearchParams({ mode, status });
   if (mode === "custom" && startDate) params.set("startDate", startDate);
+  if (force) params.set("force", "1");
   const res = await apiFetch(`/api/factor-returns?${params}`, { cache: "no-store", signal });
   const payload = await res.json().catch(() => null);
   if (!res.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
@@ -4143,6 +4144,7 @@ function FactorResearchPanel({ status = "production" }) {
   const [customCache, setCustomCache] = useState({});
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(null);
+  const [refreshMessage, setRefreshMessage] = useState("");
 
   const tabs = [
     { key: "trailing", label: "滚动区间" },
@@ -4150,6 +4152,8 @@ function FactorResearchPanel({ status = "production" }) {
   ];
 
   useEffect(() => {
+    if (activeTab !== "trailing") return;
+    if (trailingData) return;
     const ctrl = new AbortController();
     setLoading(true);
     setLoadError(null);
@@ -4158,7 +4162,7 @@ function FactorResearchPanel({ status = "production" }) {
       .catch((e) => { if (e.name !== "AbortError") setLoadError(e?.message || "加载失败"); })
       .finally(() => setLoading(false));
     return () => ctrl.abort();
-  }, [status]);
+  }, [activeTab, status, trailingData]);
 
   useEffect(() => {
     if (activeTab !== "custom") return;
@@ -4175,6 +4179,27 @@ function FactorResearchPanel({ status = "production" }) {
 
   const currentData = activeTab === "trailing" ? trailingData : customCache[startDate];
 
+  async function forceRefresh() {
+    setLoading(true);
+    setLoadError(null);
+    setRefreshMessage("");
+    try {
+      const data = await fetchFactorReturns(activeTab, startDate, undefined, status, true);
+      if (activeTab === "trailing") {
+        setTrailingData(data);
+        setCustomCache({});
+      } else {
+        setCustomCache({ [startDate]: data });
+        setTrailingData(null);
+      }
+      setRefreshMessage(`已硬刷新 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`);
+    } catch (e) {
+      setLoadError(e?.message || "硬刷新失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   const periods = FACTOR_RETURN_PERIODS.map((p) => ({
     ...p,
     displayLabel:
@@ -4186,7 +4211,21 @@ function FactorResearchPanel({ status = "production" }) {
 
   return (
     <div className="space-y-4">
-      <div className="text-base font-semibold text-slate-700">因子整体表现</div>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <div className="text-base font-semibold text-slate-700">因子整体表现</div>
+          <div className="mt-1 text-xs text-slate-400">硬刷新会清空所有因子收益缓存，并基于最新历史信号与 K 线重新计算。</div>
+        </div>
+        <button
+          type="button"
+          disabled={loading}
+          onClick={forceRefresh}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          硬刷新因子
+        </button>
+      </div>
       {/* Tab 切换 + 日期选择器 */}
       <div className="flex items-center gap-4">
         <div className="flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
@@ -4219,7 +4258,8 @@ function FactorResearchPanel({ status = "production" }) {
           </div>
         )}
 
-        {loading && <span className="text-xs text-slate-400">加载中…</span>}
+        {loading && <span className="text-xs text-slate-400">重新计算中…</span>}
+        {!loading && refreshMessage && <span className="text-xs text-emerald-600">{refreshMessage}</span>}
       </div>
 
       {loadError && (

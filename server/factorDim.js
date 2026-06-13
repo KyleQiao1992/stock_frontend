@@ -12,16 +12,50 @@ function sortKey(name) {
   return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
 }
 
+let factorAttributeColumnResolved = false;
+let factorAttributeColumn = null;
+
+async function resolveFactorAttributeColumn(pool) {
+  if (factorAttributeColumnResolved) return factorAttributeColumn;
+  try {
+    const [rows] = await pool.query(
+      `SELECT COLUMN_NAME
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'factor_dim'
+         AND COLUMN_NAME IN ('factor_attribute', 'fator_attribute')
+       ORDER BY FIELD(COLUMN_NAME, 'factor_attribute', 'fator_attribute')
+       LIMIT 1`,
+    );
+    factorAttributeColumn = rows[0]?.COLUMN_NAME || null;
+  } catch {
+    factorAttributeColumn = null;
+  }
+  factorAttributeColumnResolved = true;
+  return factorAttributeColumn;
+}
+
 // Read the factor dimension table. Pass status ("production" | "preliminary")
 // to filter; omit to get every factor. By default only enabled factors are
 // returned (disabled ones are hidden from the whole app); pass
-// includeDisabled = true for the management view. Returns
-// [{ name, factorAttribute, status, enabled, updatedAt, updatedBy }] sorted by
-// the numeric suffix of the factor name.
-export async function fetchFactorDim(status, includeDisabled = false) {
+// includeDisabled = true for the management view. factor_attribute is optional
+// because older deployments of factor_dim do not have that column.
+export async function fetchFactorDim(status, includeDisabled = false, includeFactorAttribute = false) {
   const pool = getMysqlPool();
-  let sql =
-    "SELECT factor_name, display_name, summary, factor_attribute, status, enabled, updated_at, updated_by FROM factor_dim";
+  const attributeColumn = includeFactorAttribute
+    ? await resolveFactorAttributeColumn(pool)
+    : null;
+  const columns = [
+    "factor_name",
+    "display_name",
+    "summary",
+    ...(attributeColumn ? [`${attributeColumn} AS factor_attribute`] : []),
+    "status",
+    "enabled",
+    "updated_at",
+    "updated_by",
+  ];
+  let sql = `SELECT ${columns.join(", ")} FROM factor_dim`;
   const where = [];
   const params = [];
   if (status) {
@@ -38,7 +72,7 @@ export async function fetchFactorDim(status, includeDisabled = false) {
       name: r.factor_name,
       displayName: r.display_name,
       summary: r.summary,
-      factorAttribute: r.factor_attribute,
+      factorAttribute: r.factor_attribute || null,
       status: r.status,
       enabled: r.enabled === 1 || r.enabled === true,
       updatedAt: r.updated_at,
