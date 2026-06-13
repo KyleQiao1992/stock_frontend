@@ -16,12 +16,12 @@ function sortKey(name) {
 // to filter; omit to get every factor. By default only enabled factors are
 // returned (disabled ones are hidden from the whole app); pass
 // includeDisabled = true for the management view. Returns
-// [{ name, status, enabled, updatedAt, updatedBy }] sorted by the numeric
-// suffix of the factor name.
+// [{ name, factorAttribute, status, enabled, updatedAt, updatedBy }] sorted by
+// the numeric suffix of the factor name.
 export async function fetchFactorDim(status, includeDisabled = false) {
   const pool = getMysqlPool();
   let sql =
-    "SELECT factor_name, display_name, summary, status, enabled, updated_at, updated_by FROM factor_dim";
+    "SELECT factor_name, display_name, summary, factor_attribute, status, enabled, updated_at, updated_by FROM factor_dim";
   const where = [];
   const params = [];
   if (status) {
@@ -38,6 +38,7 @@ export async function fetchFactorDim(status, includeDisabled = false) {
       name: r.factor_name,
       displayName: r.display_name,
       summary: r.summary,
+      factorAttribute: r.factor_attribute,
       status: r.status,
       enabled: r.enabled === 1 || r.enabled === true,
       updatedAt: r.updated_at,

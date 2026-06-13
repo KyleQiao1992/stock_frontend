@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Bot,
@@ -3748,7 +3748,7 @@ async function fetchAdminFactors(signal) {
   const res = await apiFetch(`/api/admin/factors`, { cache: "no-store", signal });
   const payload = await res.json().catch(() => null);
   if (!res.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
-  return payload.data; // [{ name, label, status, enabled, updatedAt, updatedBy }]
+  return payload.data; // [{ name, label, formula, source, principle, whyEffective, evaluation, decision, status, enabled }]
 }
 
 async function patchAdminFactor(name, patch) {
@@ -3771,6 +3771,51 @@ function formatUpdatedAt(value) {
   return `${mm}-${dd}`;
 }
 
+function safeExternalUrl(value) {
+  if (!value) return "";
+  try {
+    const url = new URL(String(value));
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+
+const EVALUATION_LABELS = {
+  freq: "频率",
+  engine: "验证引擎",
+  window: "验证区间",
+  universe: "股票池",
+  universe_size: "股票池数量",
+  hold_days: "持有天数",
+  rebalance_days: "调仓天数",
+  n_periods: "样本期数",
+  ic_mean: "IC 均值",
+  icir: "ICIR",
+  icir_ann: "年化 ICIR",
+  icir_ann_nonoverlap: "非重叠年化 ICIR",
+  ic_pos_ratio: "IC 正向占比",
+  ls_winrate: "多空胜率",
+  ls_monthly_pct: "月度多空收益",
+  ls_net_pct: "净多空收益",
+  monotonic: "分组单调",
+};
+
+function formatEvaluationValue(key, value) {
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value !== "number") return String(value);
+  if (key === "ic_pos_ratio" || key === "ls_winrate") return `${(value * 100).toFixed(1)}%`;
+  if (key === "ls_monthly_pct" || key === "ls_net_pct") return `${value.toFixed(3).replace(/\.?0+$/, "")}%`;
+  return String(value);
+}
+
+function decisionMeta(value) {
+  if (value === "keep") return { label: "保留", className: "bg-emerald-50 text-emerald-700 ring-emerald-200" };
+  if (value === "watch") return { label: "观察", className: "bg-amber-50 text-amber-700 ring-amber-200" };
+  if (value === "drop") return { label: "淘汰", className: "bg-red-50 text-red-700 ring-red-200" };
+  return { label: value || "未填写", className: "bg-slate-50 text-slate-500 ring-slate-200" };
+}
+
 function FactorAdminPanel() {
   const [rows, setRows] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -3778,6 +3823,8 @@ function FactorAdminPanel() {
   const [savingName, setSavingName] = useState("");
   const [savedName, setSavedName] = useState("");
   const [rowError, setRowError] = useState(null);
+  const [showDisabled, setShowDisabled] = useState(false);
+  const [expandedNames, setExpandedNames] = useState(() => new Set());
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -3819,7 +3866,207 @@ function FactorAdminPanel() {
   const total = rows?.length || 0;
   const productionCount = rows?.filter((r) => r.status === "production").length || 0;
   const preliminaryCount = rows?.filter((r) => r.status === "preliminary").length || 0;
-  const disabledCount = rows?.filter((r) => !r.enabled).length || 0;
+  const enabledRows = rows?.filter((r) => r.enabled) || [];
+  const disabledRows = rows?.filter((r) => !r.enabled) || [];
+  const disabledCount = disabledRows.length;
+
+  const renderRow = (r) => {
+    const busy = savingName === r.name;
+    const dim = !r.enabled;
+    const source = r.source && typeof r.source === "object"
+      ? r.source
+      : {};
+    const sourceUrl = safeExternalUrl(source.url);
+    const evaluation = r.evaluation && typeof r.evaluation === "object"
+      ? Object.entries(r.evaluation).filter(([, value]) => value !== null && value !== undefined)
+      : [];
+    const decision = decisionMeta(r.decision);
+    const hasDetails = Boolean(
+      r.formula || source.ref || source.title || sourceUrl || r.principle
+      || r.whyEffective || evaluation.length || r.decision || r.decisionReason
+    );
+    const expanded = expandedNames.has(r.name);
+    return (
+      <Fragment key={r.name}>
+        <tr
+          className={`border-b border-slate-100 ${expanded ? "bg-slate-50/60" : ""} ${dim ? "text-slate-400" : "text-slate-700"}`}
+        >
+          <td className="px-3 py-3 align-top">
+            <div className="font-mono text-xs whitespace-nowrap">{r.name}</div>
+            <button
+              type="button"
+              disabled={!hasDetails}
+              onClick={() =>
+                setExpandedNames((current) => {
+                  const next = new Set(current);
+                  if (next.has(r.name)) next.delete(r.name);
+                  else next.add(r.name);
+                  return next;
+                })
+              }
+              className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium text-sky-700 hover:text-sky-900 disabled:cursor-default disabled:text-slate-300"
+            >
+              {expanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+              {hasDetails ? (expanded ? "收起资料" : "查看资料") : "暂无资料"}
+            </button>
+          </td>
+          <td className="px-3 py-3 align-top whitespace-nowrap">
+            {r.displayName || r.label}
+          </td>
+          <td className="px-3 py-3 align-top">
+            <div className="text-sm leading-relaxed whitespace-pre-wrap">
+              {r.summary || <span className="text-slate-300">（未填写）</span>}
+            </div>
+          </td>
+          <td className="px-3 py-3 align-top">
+            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+              {[
+                { key: "production", label: "正式" },
+                { key: "preliminary", label: "预备" },
+              ].map((s) => (
+                <button
+                  key={s.key}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => r.status !== s.key && applyPatch(r.name, { status: s.key })}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
+                    r.status === s.key
+                      ? "bg-slate-900 text-white"
+                      : "text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </td>
+          <td className="px-3 py-3 align-top">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={r.enabled}
+              disabled={busy}
+              onClick={() => applyPatch(r.name, { enabled: !r.enabled })}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 ${
+                r.enabled ? "bg-emerald-500" : "bg-slate-300"
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                  r.enabled ? "translate-x-4" : "translate-x-0.5"
+                }`}
+              />
+            </button>
+          </td>
+          <td className="px-3 py-3 align-top whitespace-nowrap text-xs">
+            {savedName === r.name ? (
+              <span className="text-emerald-600">✓ 已保存</span>
+            ) : (
+              formatUpdatedAt(r.updatedAt)
+            )}
+          </td>
+          <td className="px-3 py-3 align-top whitespace-nowrap text-xs">{r.updatedBy || "-"}</td>
+        </tr>
+        {expanded && (
+          <tr className={`border-b border-slate-100 ${dim ? "text-slate-400" : "text-slate-700"}`}>
+            <td colSpan={7} className="px-3 pb-4 pt-1">
+              <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50/80 p-3 md:grid-cols-2">
+                <div className="rounded-lg bg-white p-3 ring-1 ring-slate-100">
+                  <div className="mb-2 text-xs font-semibold text-slate-500">因子原理</div>
+                  <div className="text-xs leading-relaxed text-slate-700">
+                    {r.principle || <span className="text-slate-300">未填写</span>}
+                  </div>
+                </div>
+                <div className="rounded-lg bg-white p-3 ring-1 ring-slate-100">
+                  <div className="mb-2 text-xs font-semibold text-slate-500">为何有效</div>
+                  <div className="text-xs leading-relaxed text-slate-700">
+                    {r.whyEffective || <span className="text-slate-300">未填写</span>}
+                  </div>
+                </div>
+                <div className="rounded-lg bg-white p-3 ring-1 ring-slate-100">
+                  <div className="mb-2 text-xs font-semibold text-slate-500">计算公式</div>
+                  {r.formula ? (
+                    <code className="block whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-700">
+                      {r.formula}
+                    </code>
+                  ) : (
+                    <span className="text-xs text-slate-300">未填写</span>
+                  )}
+                </div>
+                <div className="rounded-lg bg-white p-3 ring-1 ring-slate-100">
+                  <div className="mb-2 text-xs font-semibold text-slate-500">来源 / 文章</div>
+                  {source.ref || source.title || sourceUrl ? (
+                    <div className="space-y-1.5 text-xs leading-relaxed">
+                      {source.ref && <div className="font-medium text-slate-700">{source.ref}</div>}
+                      {source.title && (
+                        sourceUrl ? (
+                          <a
+                            href={sourceUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block text-sky-700 hover:underline"
+                          >
+                            {source.title}
+                          </a>
+                        ) : (
+                          <div className="text-slate-600">{source.title}</div>
+                        )
+                      )}
+                      {sourceUrl && !source.title && (
+                        <a
+                          href={sourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block text-sky-700 hover:underline"
+                        >
+                          查看相关文章
+                        </a>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-300">未填写</span>
+                  )}
+                </div>
+                <div className="rounded-lg bg-white p-3 ring-1 ring-slate-100 md:col-span-2">
+                  <div className="mb-2 text-xs font-semibold text-slate-500">评估结果</div>
+                  {evaluation.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {evaluation.map(([key, value]) => (
+                        <div
+                          key={key}
+                          className="rounded-lg bg-slate-50 px-2.5 py-1.5 text-xs ring-1 ring-slate-100"
+                        >
+                          <span className="text-slate-400">{EVALUATION_LABELS[key] || key}</span>
+                          <span className="ml-1.5 font-medium text-slate-700">
+                            {formatEvaluationValue(key, value)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-300">未填写</span>
+                  )}
+                </div>
+                <div className="rounded-lg bg-white p-3 ring-1 ring-slate-100 md:col-span-2">
+                  <div className="mb-2 text-xs font-semibold text-slate-500">研究结论</div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className={`rounded-full px-2.5 py-1 font-medium ring-1 ${decision.className}`}>
+                      {decision.label}
+                    </span>
+                    {r.decisionReason ? (
+                      <span className="leading-relaxed text-slate-700">{r.decisionReason}</span>
+                    ) : (
+                      <span className="text-slate-300">未填写结论理由</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </td>
+          </tr>
+        )}
+      </Fragment>
+    );
+  };
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -3834,7 +4081,7 @@ function FactorAdminPanel() {
         )}
       </div>
       <div className="mt-1 text-xs text-slate-400">
-        正式/预备决定因子归属，启用决定是否在全站展示（停用后整体表现、详情、列表都不再出现）。修改即时保存。
+        点击因子名下方的“查看资料”可展开计算公式与来源文章。正式/预备决定因子归属，启用决定是否在全站展示。修改即时保存。
       </div>
 
       {rowError && (
@@ -3847,88 +4094,40 @@ function FactorAdminPanel() {
       {loadError && <div className="mt-4 text-sm text-red-600">加载失败：{loadError}</div>}
 
       {rows && (
-        <div className="mt-4 overflow-x-auto">
-          <table className="w-full text-sm">
+        <div className="mt-4">
+          <table className="w-full table-fixed text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-slate-500">
-                <th className="px-3 py-3 text-left font-medium whitespace-nowrap">因子名</th>
-                <th className="px-3 py-3 text-left font-medium whitespace-nowrap">显示名</th>
-                <th className="px-3 py-3 text-left font-medium w-[36%] min-w-[340px]">简介</th>
-                <th className="px-3 py-3 text-left font-medium whitespace-nowrap">状态</th>
-                <th className="px-3 py-3 text-left font-medium whitespace-nowrap">启用</th>
-                <th className="px-3 py-3 text-left font-medium whitespace-nowrap">更新时间</th>
-                <th className="px-3 py-3 text-left font-medium whitespace-nowrap">更新人</th>
+                <th className="w-[11%] px-3 py-3 text-left font-medium">因子名</th>
+                <th className="w-[18%] px-3 py-3 text-left font-medium">显示名</th>
+                <th className="w-[36%] px-3 py-3 text-left font-medium">简介</th>
+                <th className="w-[13%] px-3 py-3 text-left font-medium">状态</th>
+                <th className="w-[7%] px-3 py-3 text-left font-medium">启用</th>
+                <th className="w-[8%] px-3 py-3 text-left font-medium">更新时间</th>
+                <th className="w-[7%] px-3 py-3 text-left font-medium">更新人</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => {
-                const busy = savingName === r.name;
-                const dim = !r.enabled;
-                return (
-                  <tr
-                    key={r.name}
-                    className={`border-b border-slate-100 ${dim ? "text-slate-400" : "text-slate-700"}`}
-                  >
-                    <td className="px-3 py-2.5 font-mono text-xs whitespace-nowrap">{r.name}</td>
-                    <td className="px-3 py-2.5 whitespace-nowrap">
-                      {r.displayName || r.label}
-                    </td>
-                    <td className="px-3 py-2.5 align-top">
-                      <div className="px-2 py-1 text-sm leading-relaxed whitespace-pre-wrap">
-                        {r.summary || <span className="text-slate-300">（未填写）</span>}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
-                        {[
-                          { key: "production", label: "正式" },
-                          { key: "preliminary", label: "预备" },
-                        ].map((s) => (
-                          <button
-                            key={s.key}
-                            type="button"
-                            disabled={busy}
-                            onClick={() => r.status !== s.key && applyPatch(r.name, { status: s.key })}
-                            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${
-                              r.status === s.key
-                                ? "bg-slate-900 text-white"
-                                : "text-slate-500 hover:text-slate-800"
-                            }`}
-                          >
-                            {s.label}
-                          </button>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2.5">
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={r.enabled}
-                        disabled={busy}
-                        onClick={() => applyPatch(r.name, { enabled: !r.enabled })}
-                        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 ${
-                          r.enabled ? "bg-emerald-500" : "bg-slate-300"
-                        }`}
+              {enabledRows.map((r) => renderRow(r))}
+              {disabledCount > 0 && (
+                <tr className="border-b border-slate-100">
+                  <td colSpan={7} className="px-3 py-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowDisabled((v) => !v)}
+                      className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-800"
+                    >
+                      <span
+                        className={`inline-block transition-transform ${showDisabled ? "rotate-90" : ""}`}
                       >
-                        <span
-                          className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
-                            r.enabled ? "translate-x-4" : "translate-x-0.5"
-                          }`}
-                        />
-                      </button>
-                    </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-xs">
-                      {savedName === r.name ? (
-                        <span className="text-emerald-600">✓ 已保存</span>
-                      ) : (
-                        formatUpdatedAt(r.updatedAt)
-                      )}
-                    </td>
-                    <td className="px-3 py-2.5 whitespace-nowrap text-xs">{r.updatedBy || "-"}</td>
-                  </tr>
-                );
-              })}
+                        ▶
+                      </span>
+                      已停用 {disabledCount} 个
+                    </button>
+                  </td>
+                </tr>
+              )}
+              {showDisabled && disabledRows.map((r) => renderRow(r))}
             </tbody>
           </table>
         </div>

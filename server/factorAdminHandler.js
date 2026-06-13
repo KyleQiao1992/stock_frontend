@@ -36,16 +36,28 @@ export function createFactorAdminHandler() {
 
       if (method === "GET" && !name) {
         const factors = await fetchFactorDim("", true);
-        const data = factors.map((f) => ({
-          name: f.name,
-          label: factorLabel(f.name),
-          displayName: f.displayName,
-          summary: f.summary,
-          status: f.status,
-          enabled: f.enabled,
-          updatedAt: f.updatedAt,
-          updatedBy: f.updatedBy,
-        }));
+        const data = factors.map((f) => {
+          const attributes = f.factorAttribute && typeof f.factorAttribute === "object"
+            ? f.factorAttribute
+            : {};
+          return {
+            name: f.name,
+            label: factorLabel(f.name),
+            displayName: f.displayName,
+            summary: f.summary,
+            formula: attributes.formula || null,
+            source: attributes.source || null,
+            principle: attributes.principle || null,
+            whyEffective: attributes.why_effective || null,
+            evaluation: attributes.evaluation || null,
+            decision: attributes.decision || null,
+            decisionReason: attributes.decision_reason || null,
+            status: f.status,
+            enabled: f.enabled,
+            updatedAt: f.updatedAt,
+            updatedBy: f.updatedBy,
+          };
+        });
         return sendJson(res, 200, { ok: true, data });
       }
 
