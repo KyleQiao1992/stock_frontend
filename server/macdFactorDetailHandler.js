@@ -139,26 +139,55 @@ export function createMacdFactorDetailHandler() {
         klineMap[code].push({ date: toDateStr(r.trade_date), close: Number(r.close_price) });
       }
 
-      // 4. Compute returns for every tuple (needed for stats over all data)
-      const allComputedRows = allTuples.map(({ signalDate, factorName, code }) => ({
-        signalDate,
-        factorName,
-        stockCode: code,
-        stockName: nameMap[code] || code,
-        returns: calcReturns(klineMap[code] || [], signalDate),
-      }));
+      // 4. Compute returns for every tuple (needed for stats over all data).
+      //    entryIdx = 该股 K 线序列中信号的进场下标，用于按持有期做非重叠去重。
+      const allComputedRows = allTuples.map(({ signalDate, factorName, code }) => {
+        const klines = klineMap[code] || [];
+        return {
+          signalDate,
+          factorName,
+          stockCode: code,
+          stockName: nameMap[code] || code,
+          entryIdx: binarySearchEntry(klines, signalDate),
+          returns: calcReturns(klines, signalDate),
+        };
+      });
 
-      // 5. Compute per-period average returns and win rates across all signals (ignoring nulls)
+      // 5. 按持有期做「非重叠」统计：像 amihud_20 这类慢变量因子，同一只票几乎天天入选，
+      //    若把每天的信号都当独立样本平均，会因持有窗口重叠严重高估胜率/收益。
+      //    对每个口径(days 交易日)，同一 (factor, code) 只在一个持有窗口内保留一次信号
+      //    （贪心取最早，进场下标间隔 >= days 才允许下一次），得到非重叠样本。
+      const statsGroups = new Map(); // `${factor}|${code}` -> rows[]（按信号日升序）
+      for (const r of allComputedRows) {
+        const gk = `${r.factorName}|${r.stockCode}`;
+        if (!statsGroups.has(gk)) statsGroups.set(gk, []);
+        statsGroups.get(gk).push(r);
+      }
+      for (const rows of statsGroups.values()) {
+        rows.sort((a, b) => (a.signalDate < b.signalDate ? -1 : a.signalDate > b.signalDate ? 1 : 0));
+      }
+
       const stats = {};
-      for (const { key } of PERIOD_OFFSETS) {
-        const values = allComputedRows.map((r) => r.returns[key]).filter((v) => v !== null && v !== undefined);
+      for (const { key, days } of PERIOD_OFFSETS) {
+        const values = [];
+        for (const rows of statsGroups.values()) {
+          let lastKeptIdx = -Infinity;
+          for (const r of rows) {
+            const v = r.returns[key];
+            if (v === null || v === undefined) continue; // 没有足够未来 K 线，跳过
+            if (r.entryIdx < 0) continue;
+            if (r.entryIdx - lastKeptIdx < days) continue; // 仍处于上一次持有窗口内 → 重叠，丢弃
+            values.push(v);
+            lastKeptIdx = r.entryIdx;
+          }
+        }
         if (values.length === 0) {
-          stats[key] = { avg: null, winRate: null };
+          stats[key] = { avg: null, winRate: null, n: 0 };
         } else {
           const avg = parseFloat((values.reduce((s, v) => s + v, 0) / values.length).toFixed(2));
           const wins = values.filter((v) => v > 0).length;
           const winRate = parseFloat(((wins / values.length) * 100).toFixed(1));
-          stats[key] = { avg, winRate };
+          stats[key] = { avg, winRate, n: values.length };
         }
       }
 

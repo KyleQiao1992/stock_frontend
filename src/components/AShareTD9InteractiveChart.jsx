@@ -3346,7 +3346,8 @@ function FactorStatsSummary({ stats, startDate, endDate, total }) {
         <span key={key} className="inline-flex items-center gap-0.5">
           {label}&nbsp;<span className={`font-medium ${avgColor}`}>{avgSign}{s.avg.toFixed(2)}%</span>
           {s.winRate !== null && (
-            <span className="text-slate-400">（胜率&nbsp;<span className="font-medium text-slate-600">{s.winRate.toFixed(1)}%</span>）</span>
+            <span className="text-slate-400">（胜率&nbsp;<span className="font-medium text-slate-600">{s.winRate.toFixed(1)}%</span>
+              {s.n != null && <>&nbsp;·&nbsp;n={s.n}</>}）</span>
           )}
         </span>
       );
@@ -3357,7 +3358,7 @@ function FactorStatsSummary({ stats, startDate, endDate, total }) {
 
   return (
     <span className="text-slate-500">
-      {startDate} 至 {endDate}，共 {total} 条信号 &mdash;&nbsp;
+      {startDate} 至 {endDate}，共 {total} 条信号（非重叠口径，n=各持有期内同股去重后的独立样本数）&mdash;&nbsp;
       {parts.reduce((acc, el, i) => (i === 0 ? [el] : [...acc, <span key={`sep-${i}`} className="mx-1 text-slate-300">|</span>, el]), [])}
     </span>
   );
