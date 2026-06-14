@@ -186,6 +186,13 @@ export function createMacdFactorReturnsHandler() {
         }
       }
 
+      // Group signals by (factor, code) and order by signal date so the average
+      // can be taken over NON-OVERLAPPING holding windows per period (same fix as
+      // factor-detail). A slow-moving factor like amihud_20 selects almost the same
+      // stocks every day; counting each daily signal with overlapping holding
+      // windows badly inflates the long-horizon averages (1m/3m). Here a stock only
+      // counts once per `tradingDays`-day window (greedy, earliest first).
+      const groups = new Map(); // `${factor}|${code}` -> { factorName, klines, items: [{signalDate, entryIdx, entryClose}] }
       for (const { factorName, signalDate, code } of signals) {
         if (!acc[factorName]) continue;
         const klines = klineMap[code];
@@ -209,18 +216,31 @@ export function createMacdFactorReturnsHandler() {
         const entryClose = klines[entryIdx].close;
         if (!entryClose || entryClose <= 0) continue;
 
+        const gk = `${factorName}|${code}`;
+        let g = groups.get(gk);
+        if (!g) { g = { factorName, klines, items: [] }; groups.set(gk, g); }
+        g.items.push({ signalDate, entryIdx, entryClose });
+      }
+
+      for (const { factorName, klines, items } of groups.values()) {
+        items.sort((a, b) => (a.signalDate < b.signalDate ? -1 : a.signalDate > b.signalDate ? 1 : 0));
         for (const [key, tradingDays] of Object.entries(PERIOD_TRADING_DAYS)) {
-          const exitIdx = entryIdx + tradingDays;
-          if (exitIdx >= klines.length) continue;
+          let lastKeptIdx = -Infinity;
+          for (const { entryIdx, entryClose } of items) {
+            const exitIdx = entryIdx + tradingDays;
+            if (exitIdx >= klines.length) continue; // 未来 K 线不足，跳过（不占用持有窗口）
 
-          const exitClose = klines[exitIdx].close;
-          if (!exitClose || exitClose <= 0) continue;
+            const exitClose = klines[exitIdx].close;
+            if (!exitClose || exitClose <= 0) continue;
+            if (entryIdx - lastKeptIdx < tradingDays) continue; // 仍处于上一次持有窗口内 → 重叠，丢弃
 
-          const ret = ((exitClose - entryClose) / entryClose) * 100;
-          if (!Number.isFinite(ret)) continue;
+            const ret = ((exitClose - entryClose) / entryClose) * 100;
+            if (!Number.isFinite(ret)) continue;
 
-          acc[factorName][key].sum += ret;
-          acc[factorName][key].count += 1;
+            acc[factorName][key].sum += ret;
+            acc[factorName][key].count += 1;
+            lastKeptIdx = entryIdx;
+          }
         }
       }
 

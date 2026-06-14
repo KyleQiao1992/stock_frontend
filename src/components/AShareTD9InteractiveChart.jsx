@@ -3629,7 +3629,11 @@ function FactorBarChart({ data, label }) {
           const isPos = item.value >= 0;
           const pct = (Math.abs(item.value) / maxAbs) * 100;
           return (
-            <div key={item.factor} className="flex items-center gap-2 text-xs">
+            <div
+              key={item.factor}
+              className="flex items-center gap-2 text-xs"
+              title={item.sampleSize != null ? `非重叠独立样本 n=${item.sampleSize}` : undefined}
+            >
               <div className="w-10 shrink-0 text-right text-slate-500">{item.factor}</div>
               <div className="flex flex-1 items-center">
                 <div className="flex flex-1 justify-end pr-px">
@@ -4271,6 +4275,7 @@ function FactorResearchPanel({ status = "production" }) {
 
       <div className="rounded-xl bg-slate-50 px-4 py-2.5 text-xs text-slate-400 leading-5">
         收益率 = ( 第 N 交易日收盘价 &minus; 信号日收盘价 ) &divide; 信号日收盘价 &times; 100%
+        <br />均值按「非重叠持有期」统计：同一只票在一个持有窗口内只计一次，避免慢变量因子（如 amihud_20）因每日重复入选而高估。悬停可看各因子的独立样本数 n。
       </div>
 
       {/* 图表网格 */}
