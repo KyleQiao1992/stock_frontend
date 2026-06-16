@@ -3299,6 +3299,15 @@ async function fetchFactorDetail({ factors, startDate, endDate, page }) {
   return payload;
 }
 
+// 收藏夹回测：以每只票自己的收藏日为信号日，返回结构对齐 factor-detail。
+async function fetchFavoritesBacktest({ market = "ashare", page }) {
+  const params = new URLSearchParams({ market, page: String(page) });
+  const res = await apiFetch(`/api/favorites-backtest?${params}`, { cache: "no-store" });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+  return payload;
+}
+
 // Derive a display label from a factor name, e.g. "factor7" -> "因子7".
 function factorLabelFromName(name) {
   const m = /^factor(\d+)$/.exec(String(name));
@@ -3367,6 +3376,7 @@ function FactorStatsSummary({ stats, startDate, endDate, total }) {
 function FactorDetailPanel({ status = "production" }) {
   const [factorOptions, setFactorOptions] = useState([]); // [{ value, label }]
   const [factors, setFactors] = useState([]);
+  const [favoritesMode, setFavoritesMode] = useState(false); // 选中「我的收藏夹」时为 true，与因子互斥
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [startDate, setStartDate] = useState(defaultStartDate);
   const [endDate, setEndDate] = useState(todayStr);
@@ -3375,9 +3385,23 @@ function FactorDetailPanel({ status = "production" }) {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [favoriteCodeSet, setFavoriteCodeSet] = useState(() => new Set()); // 用于在因子结果里标记「已收藏」
   const dropdownRef = useRef(null);
 
   useEffect(() => {
+    let alive = true;
+    fetchFavorites({ market: "ashare" })
+      .then((payload) => {
+        if (!alive) return;
+        const items = Array.isArray(payload?.items) ? payload.items : [];
+        setFavoriteCodeSet(new Set(items.map((it) => it.code)));
+      })
+      .catch(() => { /* 拉取失败则不展示标记 */ });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    setFavoritesMode(false); // 「我的收藏夹」只在成熟因子提供，切换分类时复位
     const ctrl = new AbortController();
     fetchFactors(status, ctrl.signal)
       .then((list) => {
@@ -3394,7 +3418,10 @@ function FactorDetailPanel({ status = "production" }) {
     const ctrl = new AbortController();
     setLoading(true);
     setError(null);
-    fetchFactorDetail({ factors: query.factors, startDate: query.startDate, endDate: query.endDate, page })
+    const request = query.mode === "favorites"
+      ? fetchFavoritesBacktest({ market: "ashare", page })
+      : fetchFactorDetail({ factors: query.factors, startDate: query.startDate, endDate: query.endDate, page });
+    request
       .then(setResult)
       .catch((e) => { if (e.name !== "AbortError") setError(e?.message || "加载失败"); })
       .finally(() => setLoading(false));
@@ -3413,6 +3440,12 @@ function FactorDetailPanel({ status = "production" }) {
   }, [dropdownOpen]);
 
   function toggleFactor(value) {
+    if (favoritesMode) {
+      // 从收藏夹切回因子：退出收藏夹模式并只选中该因子
+      setFavoritesMode(false);
+      setFactors([value]);
+      return;
+    }
     setFactors((prev) =>
       prev.includes(value)
         ? prev.length > 1 ? prev.filter((f) => f !== value) : prev
@@ -3420,26 +3453,37 @@ function FactorDetailPanel({ status = "production" }) {
     );
   }
 
+  function selectFavorites() {
+    setFavoritesMode(true); // 与因子互斥，仅切换模式（保留因子选择，下次点因子时恢复）
+  }
+
   function handleQuery() {
-    if (factors.length === 0) return;
     setDropdownOpen(false);
     setPage(1);
     setResult(null);
-    setQuery({ factors, startDate, endDate });
+    if (favoritesMode) {
+      setQuery({ mode: "favorites" });
+      return;
+    }
+    if (factors.length === 0) return;
+    setQuery({ mode: "factors", factors, startDate, endDate });
   }
 
   const totalPages = result ? Math.ceil(result.total / result.pageSize) : 0;
-  const showFactorCol = query && query.factors.length > 1;
+  const showFactorCol = query && query.mode !== "favorites" && query.factors.length > 1;
+  const isFavoritesResult = query && query.mode === "favorites";
 
   const factorLabelMap = useMemo(
     () => Object.fromEntries(factorOptions.map((o) => [o.value, o.label])),
     [factorOptions],
   );
-  const factorLabel = factors.length === 0
-    ? "选择因子"
-    : factors.length === 1
-      ? (factorLabelMap[factors[0]] ?? factors[0])
-      : `已选 ${factors.length} 个因子`;
+  const factorLabel = favoritesMode
+    ? "我的收藏夹"
+    : factors.length === 0
+      ? "选择因子"
+      : factors.length === 1
+        ? (factorLabelMap[factors[0]] ?? factors[0])
+        : `已选 ${factors.length} 个因子`;
 
   return (
     <div className="space-y-4">
@@ -3459,11 +3503,25 @@ function FactorDetailPanel({ status = "production" }) {
           </button>
           {dropdownOpen && (
             <div className="absolute left-0 top-full z-20 mt-1 min-w-[8rem] rounded-xl border border-slate-200 bg-white py-1 shadow-lg">
+              {status === "production" && (
+                <>
+                  <label className="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-sm hover:bg-slate-50">
+                    <input
+                      type="checkbox"
+                      checked={favoritesMode}
+                      onChange={selectFavorites}
+                      className="h-4 w-4 accent-slate-800"
+                    />
+                    <span className="font-medium text-slate-800">我的收藏夹</span>
+                  </label>
+                  <div className="my-1 border-t border-slate-100" />
+                </>
+              )}
               {factorOptions.map((o) => (
                 <label key={o.value} className="flex cursor-pointer items-center gap-2.5 px-3 py-2 text-sm hover:bg-slate-50">
                   <input
                     type="checkbox"
-                    checked={factors.includes(o.value)}
+                    checked={!favoritesMode && factors.includes(o.value)}
                     onChange={() => toggleFactor(o.value)}
                     className="h-4 w-4 accent-slate-800"
                   />
@@ -3473,13 +3531,14 @@ function FactorDetailPanel({ status = "production" }) {
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className={`flex items-center gap-2 ${favoritesMode ? "opacity-40" : ""}`}>
           <input
             type="date"
             value={startDate}
             max={endDate || todayStr()}
+            disabled={favoritesMode}
             onChange={(e) => setStartDate(e.target.value)}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400"
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400 disabled:cursor-not-allowed"
           />
           <span className="text-slate-400 text-sm">至</span>
           <input
@@ -3487,11 +3546,12 @@ function FactorDetailPanel({ status = "production" }) {
             value={endDate}
             min={startDate}
             max={todayStr()}
+            disabled={favoritesMode}
             onChange={(e) => setEndDate(e.target.value)}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400"
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400 disabled:cursor-not-allowed"
           />
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className={`flex items-center gap-1.5 ${favoritesMode ? "opacity-40" : ""}`}>
           {[
             { label: "近7天", days: 7 },
             { label: "近1个月", months: 1 },
@@ -3503,13 +3563,14 @@ function FactorDetailPanel({ status = "production" }) {
             if (preset.days) d.setDate(d.getDate() - preset.days);
             else d.setMonth(d.getMonth() - preset.months);
             const from = d.toISOString().slice(0, 10);
-            const active = startDate === from && endDate === today;
+            const active = !favoritesMode && startDate === from && endDate === today;
             return (
               <button
                 key={preset.label}
                 type="button"
+                disabled={favoritesMode}
                 onClick={() => { setStartDate(from); setEndDate(today); }}
-                className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition ${active ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600 hover:border-slate-400 hover:text-slate-900"}`}
+                className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed ${active ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600 hover:border-slate-400 hover:text-slate-900"}`}
               >
                 {preset.label}
               </button>
@@ -3519,7 +3580,7 @@ function FactorDetailPanel({ status = "production" }) {
         <button
           type="button"
           onClick={handleQuery}
-          disabled={loading || !startDate || !endDate || factors.length === 0}
+          disabled={loading || (!favoritesMode && (!startDate || !endDate || factors.length === 0))}
           className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
         >
           {loading ? "查询中…" : "查询"}
@@ -3543,7 +3604,7 @@ function FactorDetailPanel({ status = "production" }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 text-xs text-slate-500">
-                  <th className="px-3 py-3 text-left font-medium whitespace-nowrap">日期</th>
+                  <th className="px-3 py-3 text-left font-medium whitespace-nowrap">{isFavoritesResult ? "收藏日" : "日期"}</th>
                   {showFactorCol && <th className="px-3 py-3 text-left font-medium whitespace-nowrap">因子</th>}
                   <th className="px-3 py-3 text-left font-medium whitespace-nowrap">代码</th>
                   <th className="px-3 py-3 text-left font-medium whitespace-nowrap">名称</th>
@@ -3556,7 +3617,7 @@ function FactorDetailPanel({ status = "production" }) {
                 {result.rows.length === 0 ? (
                   <tr>
                     <td colSpan={showFactorCol ? 11 : 10} className="py-12 text-center text-sm text-slate-400">
-                      该时间段暂无信号数据
+                      {isFavoritesResult ? "收藏夹为空，先去收藏一些股票吧" : "该时间段暂无信号数据"}
                     </td>
                   </tr>
                 ) : (
@@ -3569,7 +3630,16 @@ function FactorDetailPanel({ status = "production" }) {
                         </td>
                       )}
                       <td className="px-3 py-2 font-mono text-slate-700 whitespace-nowrap">{row.stockCode}</td>
-                      <td className="px-3 py-2 text-slate-700 whitespace-nowrap">{row.stockName}</td>
+                      <td className="px-3 py-2 text-slate-700 whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1">
+                          {row.stockName}
+                          {!isFavoritesResult && favoriteCodeSet.has(row.stockCode) && (
+                            <span className="inline-flex items-center gap-0.5 rounded bg-amber-50 px-1 py-0.5 text-[10px] font-medium text-amber-600" title="已收藏">
+                              <Star className="h-2.5 w-2.5" fill="currentColor" />已收藏
+                            </span>
+                          )}
+                        </span>
+                      </td>
                       {FACTOR_DETAIL_PERIODS.map((p) => (
                         <ReturnCell key={p.key} value={row.returns[p.key]} />
                       ))}

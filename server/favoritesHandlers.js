@@ -163,6 +163,18 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+// Read a user's favorites (with legacy migration + A-share name enrichment).
+// Exported so other handlers (e.g. favorites backtest) can reuse the same source.
+export async function getFavoriteItems(rawUserId, rawMarket) {
+  const userId = normalizeUserId(rawUserId);
+  const market = normalizeMarket(rawMarket);
+  const client = await getRedisClient();
+  const key = getFavoritesKey(userId, market);
+  await migrateLegacyFavorites(client, userId, market);
+  const rawItems = await readFavoriteItems(client, key, market);
+  return market === "ashare" ? await enrichAShareNames(rawItems) : rawItems;
+}
+
 export function createFavoritesHandler() {
   return async function favoritesHandler(req, res) {
     try {
@@ -173,10 +185,7 @@ export function createFavoritesHandler() {
 
       if (method === "GET") {
         const market = normalizeMarket(requestUrl.searchParams.get("market") || "ashare");
-        const key = getFavoritesKey(userId, market);
-        await migrateLegacyFavorites(client, userId, market);
-        const rawItems = await readFavoriteItems(client, key, market);
-        const items = market === "ashare" ? await enrichAShareNames(rawItems) : rawItems;
+        const items = await getFavoriteItems(userId, market);
         return sendJson(res, 200, { ok: true, userId, market, items });
       }
 

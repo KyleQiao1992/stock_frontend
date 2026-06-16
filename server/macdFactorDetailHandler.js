@@ -1,15 +1,6 @@
 import { getMysqlPool } from "./mysqlClient.js";
 import { fetchFactorDim } from "./factorDim.js";
-
-const PERIOD_OFFSETS = [
-  { key: "t1",  days: 1  },
-  { key: "t3",  days: 3  },
-  { key: "t5",  days: 5  },
-  { key: "t10", days: 10 },
-  { key: "t20", days: 20 },
-  { key: "t40", days: 40 },
-  { key: "t60", days: 60 },
-];
+import { PERIOD_OFFSETS, toDateStr, binarySearchEntry, calcReturns, fetchKlinesAndNames } from "./factorReturns.js";
 
 const PAGE_SIZE = 20;
 
@@ -17,44 +8,6 @@ function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(payload));
-}
-
-function toDateStr(value) {
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
-  return String(value).slice(0, 10);
-}
-
-function binarySearchEntry(klines, signalDate) {
-  let lo = 0;
-  let hi = klines.length - 1;
-  let idx = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >>> 1;
-    if (klines[mid].date >= signalDate) {
-      idx = mid;
-      hi = mid - 1;
-    } else {
-      lo = mid + 1;
-    }
-  }
-  return idx;
-}
-
-function calcReturns(klines, signalDate) {
-  const entryIdx = binarySearchEntry(klines, signalDate);
-  const returns = {};
-  for (const { key, days } of PERIOD_OFFSETS) {
-    if (entryIdx === -1) { returns[key] = null; continue; }
-    const entryClose = klines[entryIdx]?.close;
-    if (!entryClose || entryClose <= 0) { returns[key] = null; continue; }
-    const exitIdx = entryIdx + days;
-    if (exitIdx >= klines.length) { returns[key] = null; continue; }
-    const exitClose = klines[exitIdx]?.close;
-    if (!exitClose || exitClose <= 0) { returns[key] = null; continue; }
-    const ret = ((exitClose - entryClose) / entryClose) * 100;
-    returns[key] = Number.isFinite(ret) ? parseFloat(ret.toFixed(2)) : null;
-  }
-  return returns;
 }
 
 export function createMacdFactorDetailHandler() {
@@ -110,34 +63,10 @@ export function createMacdFactorDetailHandler() {
 
       // 3. Fetch klines for ALL unique codes across the full date range
       const allCodes = [...new Set(allTuples.map((t) => t.code))];
-      const codePlaceholders = allCodes.map(() => "?").join(",");
       const minDate = allTuples.reduce((m, t) => t.signalDate < m ? t.signalDate : m, allTuples[0].signalDate);
       const maxDate = allTuples.reduce((m, t) => t.signalDate > m ? t.signalDate : m, allTuples[0].signalDate);
 
-      const [nameRows] = await pool.query(
-        `SELECT stock_code, stock_name FROM stock_basic WHERE stock_code IN (${codePlaceholders})`,
-        allCodes,
-      );
-      const nameMap = {};
-      for (const r of nameRows) nameMap[r.stock_code] = r.stock_name;
-
-      const [klineRows] = await pool.query(
-        `SELECT stock_code, trade_date, close_price
-         FROM stock_daily_kline
-         WHERE stock_code IN (${codePlaceholders})
-           AND trade_date >= ?
-           AND trade_date <= DATE_ADD(?, INTERVAL 100 DAY)
-           AND adjust_type = 'qfq'
-         ORDER BY stock_code, trade_date`,
-        [...allCodes, minDate, maxDate],
-      );
-
-      const klineMap = {};
-      for (const r of klineRows) {
-        const code = r.stock_code;
-        if (!klineMap[code]) klineMap[code] = [];
-        klineMap[code].push({ date: toDateStr(r.trade_date), close: Number(r.close_price) });
-      }
+      const { klineMap, nameMap } = await fetchKlinesAndNames(allCodes, minDate, maxDate);
 
       // 4. Compute returns for every tuple (needed for stats over all data).
       //    entryIdx = 该股 K 线序列中信号的进场下标，用于按持有期做非重叠去重。
