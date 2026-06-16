@@ -11,8 +11,10 @@ import {
   Minimize2,
   Minus,
   Pencil,
+  Plus,
   RefreshCw,
   Search,
+  X,
   Send,
   Star,
   Trash2,
@@ -867,14 +869,14 @@ async function fetchFavorites({ market }) {
   return payload;
 }
 
-async function addFavorite({ market, code, name }) {
+async function addFavorite({ market, code, name, group }) {
   const res = await apiFetch("/api/favorites", {
     method: "POST",
     cache: "no-store",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ market, code, name }),
+    body: JSON.stringify({ market, code, name, group }),
   });
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
@@ -886,6 +888,49 @@ async function addFavorite({ market, code, name }) {
 async function removeFavorite({ market, code }) {
   const params = new URLSearchParams({ market, code });
   const res = await apiFetch(`/api/favorites?${params.toString()}`, {
+    method: "DELETE",
+    cache: "no-store",
+  });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(payload?.error || `HTTP ${res.status}`);
+  }
+  return payload;
+}
+
+// 把某只票移动到另一个收藏夹（单归属）。
+async function moveFavorite({ market, code, group }) {
+  const res = await apiFetch("/api/favorites", {
+    method: "PATCH",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ market, code, group }),
+  });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(payload?.error || `HTTP ${res.status}`);
+  }
+  return payload;
+}
+
+async function createFavoriteGroup({ market, name }) {
+  const res = await apiFetch("/api/favorite-groups", {
+    method: "POST",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ market, name }),
+  });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error(payload?.error || `HTTP ${res.status}`);
+  }
+  return payload;
+}
+
+// 删除收藏夹（连同其下所有票）。
+async function deleteFavoriteGroup({ market, name }) {
+  const params = new URLSearchParams({ market, name });
+  const res = await apiFetch(`/api/favorite-groups?${params.toString()}`, {
     method: "DELETE",
     cache: "no-store",
   });
@@ -3300,8 +3345,10 @@ async function fetchFactorDetail({ factors, startDate, endDate, page }) {
 }
 
 // 收藏夹回测：以每只票自己的收藏日为信号日，返回结构对齐 factor-detail。
-async function fetchFavoritesBacktest({ market = "ashare", page }) {
+async function fetchFavoritesBacktest({ market = "ashare", page, groups }) {
   const params = new URLSearchParams({ market, page: String(page) });
+  // groups 为空数组 → 不传，后端按全部收藏夹处理。
+  if (Array.isArray(groups) && groups.length) params.set("groups", groups.join(","));
   const res = await apiFetch(`/api/favorites-backtest?${params}`, { cache: "no-store" });
   const payload = await res.json().catch(() => null);
   if (!res.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
@@ -3386,6 +3433,8 @@ function FactorDetailPanel({ status = "production" }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [favoriteCodeSet, setFavoriteCodeSet] = useState(() => new Set()); // 用于在因子结果里标记「已收藏」
+  const [favoriteGroups, setFavoriteGroups] = useState(["默认"]); // 收藏夹列表（含默认）
+  const [selectedFavGroups, setSelectedFavGroups] = useState([]); // 回测时选中的收藏夹（默认全选）
   const dropdownRef = useRef(null);
 
   useEffect(() => {
@@ -3395,6 +3444,8 @@ function FactorDetailPanel({ status = "production" }) {
         if (!alive) return;
         const items = Array.isArray(payload?.items) ? payload.items : [];
         setFavoriteCodeSet(new Set(items.map((it) => it.code)));
+        const groups = Array.isArray(payload?.groups) && payload.groups.length ? payload.groups : ["默认"];
+        setFavoriteGroups(groups);
       })
       .catch(() => { /* 拉取失败则不展示标记 */ });
     return () => { alive = false; };
@@ -3419,7 +3470,7 @@ function FactorDetailPanel({ status = "production" }) {
     setLoading(true);
     setError(null);
     const request = query.mode === "favorites"
-      ? fetchFavoritesBacktest({ market: "ashare", page })
+      ? fetchFavoritesBacktest({ market: "ashare", page, groups: query.groups })
       : fetchFactorDetail({ factors: query.factors, startDate: query.startDate, endDate: query.endDate, page });
     request
       .then(setResult)
@@ -3455,6 +3506,13 @@ function FactorDetailPanel({ status = "production" }) {
 
   function selectFavorites() {
     setFavoritesMode(true); // 与因子互斥，仅切换模式（保留因子选择，下次点因子时恢复）
+    setSelectedFavGroups(favoriteGroups); // 进入收藏夹模式默认全选所有夹
+  }
+
+  function toggleFavGroup(name) {
+    setSelectedFavGroups((prev) =>
+      prev.includes(name) ? prev.filter((g) => g !== name) : [...prev, name],
+    );
   }
 
   function handleQuery() {
@@ -3462,7 +3520,10 @@ function FactorDetailPanel({ status = "production" }) {
     setPage(1);
     setResult(null);
     if (favoritesMode) {
-      setQuery({ mode: "favorites" });
+      if (selectedFavGroups.length === 0) return; // 一个夹都没选，不查询
+      // 全选时传空数组 → 后端按全部收藏夹回测。
+      const groups = selectedFavGroups.length === favoriteGroups.length ? [] : selectedFavGroups;
+      setQuery({ mode: "favorites", groups });
       return;
     }
     if (factors.length === 0) return;
@@ -3514,6 +3575,22 @@ function FactorDetailPanel({ status = "production" }) {
                     />
                     <span className="font-medium text-slate-800">我的收藏夹</span>
                   </label>
+                  {favoritesMode && (
+                    <div className="border-t border-slate-100 py-1">
+                      <div className="px-3 pb-1 pt-1.5 text-[11px] text-slate-400">选择回测的收藏夹</div>
+                      {favoriteGroups.map((g) => (
+                        <label key={g} className="flex cursor-pointer items-center gap-2.5 px-3 py-1.5 pl-6 text-sm hover:bg-slate-50">
+                          <input
+                            type="checkbox"
+                            checked={selectedFavGroups.includes(g)}
+                            onChange={() => toggleFavGroup(g)}
+                            className="h-4 w-4 accent-slate-800"
+                          />
+                          <span className="truncate text-slate-700">{g}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
                   <div className="my-1 border-t border-slate-100" />
                 </>
               )}
@@ -3580,7 +3657,7 @@ function FactorDetailPanel({ status = "production" }) {
         <button
           type="button"
           onClick={handleQuery}
-          disabled={loading || (!favoritesMode && (!startDate || !endDate || factors.length === 0))}
+          disabled={loading || (favoritesMode ? selectedFavGroups.length === 0 : (!startDate || !endDate || factors.length === 0))}
           className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
         >
           {loading ? "查询中…" : "查询"}
@@ -4675,12 +4752,44 @@ function FavoritesToolbar({
   loading,
   error,
   pendingCodeSet,
+  groups,
+  activeGroup,
   onToggleOpen,
   onRefresh,
   onPick,
   onRemove,
+  onSelectGroup,
+  onCreateGroup,
+  onDeleteGroup,
+  onMoveItem,
 }) {
   const title = market === "us" ? "我的美股收藏夹" : "我的股票收藏夹";
+  const groupList = groups && groups.length ? groups : ["默认"];
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+
+  // 每个收藏夹的票数，用于 chip 上的角标。
+  const countByGroup = useMemo(() => {
+    const map = {};
+    for (const it of items) {
+      const g = it.group || "默认";
+      map[g] = (map[g] || 0) + 1;
+    }
+    return map;
+  }, [items]);
+
+  // 仅展示当前选中收藏夹里的票。
+  const visibleItems = useMemo(
+    () => items.filter((it) => (it.group || "默认") === activeGroup),
+    [items, activeGroup],
+  );
+
+  function submitNewGroup() {
+    const name = newName.trim();
+    if (name) onCreateGroup?.(name);
+    setNewName("");
+    setCreating(false);
+  }
 
   return (
     <>
@@ -4712,7 +4821,7 @@ function FavoritesToolbar({
               <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4">
                 <div>
                   <div className="text-base font-semibold text-slate-900">{title}</div>
-                  <div className="mt-1 text-xs text-slate-500">按添加顺序展示，当前用户 `0`</div>
+                  <div className="mt-1 text-xs text-slate-500">分收藏夹管理，新收藏将加入当前夹</div>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -4734,13 +4843,81 @@ function FavoritesToolbar({
                 </div>
               </div>
 
+              {/* 收藏夹切换 chips + 新建 */}
+              <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 px-4 py-3">
+                {groupList.map((g) => {
+                  const active = g === activeGroup;
+                  const isDefault = g === "默认";
+                  return (
+                    <span
+                      key={g}
+                      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${
+                        active
+                          ? "border-slate-900 bg-slate-900 text-white"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
+                      }`}
+                    >
+                      <button type="button" onClick={() => onSelectGroup?.(g)} className="inline-flex max-w-[10rem] items-center gap-1">
+                        <span className="truncate">{g}</span>
+                        <span
+                          className={`shrink-0 rounded-full px-1.5 text-[10px] leading-4 ${active ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"}`}
+                          title={`${countByGroup[g] || 0} 只股票`}
+                        >
+                          {countByGroup[g] || 0}
+                        </span>
+                      </button>
+                      {!isDefault && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm(`删除收藏夹「${g}」会同时删除其中的 ${countByGroup[g] || 0} 只股票，确定吗？`)) {
+                              onDeleteGroup?.(g);
+                            }
+                          }}
+                          className={`-mr-0.5 rounded-full p-0.5 ${active ? "text-white/70 hover:text-white" : "text-slate-300 hover:text-red-500"}`}
+                          title={`删除收藏夹「${g}」`}
+                          aria-label={`删除收藏夹 ${g}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      )}
+                    </span>
+                  );
+                })}
+
+                {creating ? (
+                  <input
+                    autoFocus
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    onBlur={submitNewGroup}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") submitNewGroup();
+                      else if (e.key === "Escape") { setNewName(""); setCreating(false); }
+                    }}
+                    maxLength={30}
+                    placeholder="收藏夹名称"
+                    className="w-28 rounded-full border border-slate-300 px-2.5 py-1 text-xs outline-none focus:border-slate-500"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setCreating(true)}
+                    className="inline-flex items-center gap-1 rounded-full border border-dashed border-slate-300 px-2.5 py-1 text-xs text-slate-500 transition hover:border-slate-400 hover:text-slate-900"
+                    title="新建收藏夹"
+                  >
+                    <Plus className="h-3 w-3" />新建
+                  </button>
+                )}
+              </div>
+
               {error ? (
                 <div className="border-b border-amber-100 bg-amber-50 px-4 py-3 text-xs text-amber-700">{error}</div>
               ) : null}
 
-              <div className="max-h-[55vh] space-y-3 overflow-y-auto p-4">
-                {items.length ? (
-                  items.map((item, index) => {
+              <div className="max-h-[48vh] space-y-3 overflow-y-auto p-4">
+                {visibleItems.length ? (
+                  visibleItems.map((item, index) => {
                     const pending = pendingCodeSet?.has(item.code);
 
                     return (
@@ -4770,12 +4947,28 @@ function FavoritesToolbar({
                             <Trash2 className="h-4 w-4" />
                           </button>
                         </div>
+
+                        {groupList.length > 1 && (
+                          <label className="mt-3 flex items-center gap-2 text-[11px] text-slate-400">
+                            移动到
+                            <select
+                              value={item.group || "默认"}
+                              disabled={pending}
+                              onChange={(e) => onMoveItem?.(item, e.target.value)}
+                              className="flex-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 outline-none focus:border-slate-400 disabled:opacity-60"
+                            >
+                              {groupList.map((g) => (
+                                <option key={g} value={g}>{g}</option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
                       </div>
                     );
                   })
                 ) : (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
-                    还没有收藏股票，点击列表里的星星后会出现在这里。
+                    「{activeGroup}」还没有收藏股票，点击列表里的星星即可加入此夹。
                   </div>
                 )}
               </div>
@@ -4807,6 +5000,8 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
   const [favoriteLoadingMap, setFavoriteLoadingMap] = useState({ ashare: false, us: false });
   const [favoriteErrorMap, setFavoriteErrorMap] = useState({ ashare: "", us: "" });
   const [favoritePendingMap, setFavoritePendingMap] = useState({ ashare: [], us: [] });
+  const [favoriteGroupsMap, setFavoriteGroupsMap] = useState({ ashare: ["默认"], us: ["默认"] });
+  const [activeFavoriteGroupMap, setActiveFavoriteGroupMap] = useState({ ashare: "默认", us: "默认" });
   const [favoritesPanelOpen, setFavoritesPanelOpen] = useState(false);
   const [recommendationItemsMap, setRecommendationItemsMap] = useState({ ashare: [], us: [] });
   const [recommendationLoading, setRecommendationLoading] = useState(false);
@@ -4874,6 +5069,8 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
   const favoriteLoading = market === "us" ? favoriteLoadingMap.us : favoriteLoadingMap.ashare;
   const favoriteError = market === "us" ? favoriteErrorMap.us : favoriteErrorMap.ashare;
   const favoritePendingCodes = market === "us" ? favoritePendingMap.us : favoritePendingMap.ashare;
+  const favoriteGroups = market === "us" ? favoriteGroupsMap.us : favoriteGroupsMap.ashare;
+  const activeFavoriteGroup = market === "us" ? activeFavoriteGroupMap.us : activeFavoriteGroupMap.ashare;
   const favoriteCodeSet = useMemo(() => new Set(favoriteItems.map((item) => item.code)), [favoriteItems]);
   const favoritePendingCodeSet = useMemo(() => new Set(favoritePendingCodes), [favoritePendingCodes]);
   const activeMetaCode = normalizeCodeForMarket(meta.code || currentCode, market);
@@ -5108,7 +5305,13 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
     try {
       const payload = await fetchFavorites({ market: requestedMarket });
       const items = Array.isArray(payload?.items) ? payload.items : [];
+      const groups = Array.isArray(payload?.groups) && payload.groups.length ? payload.groups : ["默认"];
       setFavoriteItemsMap((prev) => ({ ...prev, [requestedMarket]: items }));
+      setFavoriteGroupsMap((prev) => ({ ...prev, [requestedMarket]: groups }));
+      // active 夹若已不存在（被删），回落到默认夹。
+      setActiveFavoriteGroupMap((prev) => (
+        groups.includes(prev[requestedMarket]) ? prev : { ...prev, [requestedMarket]: "默认" }
+      ));
     } catch (e) {
       setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: getErrorMessage(e, "收藏夹读取失败，请稍后重试。") }));
     } finally {
@@ -5130,6 +5333,8 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
           market: requestedMarket,
           code,
           name: item?.name || (meta.code === code ? meta.name : "") || code,
+          // 新收藏落入当前选中的收藏夹。
+          group: activeFavoriteGroupMap[requestedMarket] || "默认",
         });
       const items = Array.isArray(payload?.items) ? payload.items : [];
       setFavoriteItemsMap((prev) => ({ ...prev, [requestedMarket]: items }));
@@ -5139,6 +5344,64 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
     } finally {
       setFavoritePending(requestedMarket, code, false);
     }
+  }
+
+  // 新建收藏夹，成功后切到该夹（成为 active，后续收藏落入此夹）。
+  async function handleCreateFavoriteGroup(rawName, targetMarket = market) {
+    const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    const name = String(rawName || "").trim().slice(0, 30);
+    if (!name || name === "默认") return;
+    try {
+      const payload = await createFavoriteGroup({ market: requestedMarket, name });
+      const groups = Array.isArray(payload?.groups) && payload.groups.length ? payload.groups : ["默认"];
+      setFavoriteGroupsMap((prev) => ({ ...prev, [requestedMarket]: groups }));
+      setActiveFavoriteGroupMap((prev) => ({ ...prev, [requestedMarket]: name }));
+      setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: "" }));
+    } catch (e) {
+      setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: getErrorMessage(e, "新建收藏夹失败，请稍后重试。") }));
+    }
+  }
+
+  // 删除收藏夹（连票一起删）；若删的是当前 active 夹，回落默认夹。
+  async function handleDeleteFavoriteGroup(name, targetMarket = market) {
+    const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    if (!name || name === "默认") return;
+    try {
+      const payload = await deleteFavoriteGroup({ market: requestedMarket, name });
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const groups = Array.isArray(payload?.groups) && payload.groups.length ? payload.groups : ["默认"];
+      setFavoriteItemsMap((prev) => ({ ...prev, [requestedMarket]: items }));
+      setFavoriteGroupsMap((prev) => ({ ...prev, [requestedMarket]: groups }));
+      setActiveFavoriteGroupMap((prev) => (
+        prev[requestedMarket] === name ? { ...prev, [requestedMarket]: "默认" } : prev
+      ));
+      setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: "" }));
+    } catch (e) {
+      setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: getErrorMessage(e, "删除收藏夹失败，请稍后重试。") }));
+    }
+  }
+
+  // 把某只票移动到另一个收藏夹。
+  async function handleMoveFavorite(item, group, targetMarket = market) {
+    const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    const code = normalizeCodeForMarket(item?.code, requestedMarket);
+    if (!code || !group) return;
+    setFavoritePending(requestedMarket, code, true);
+    try {
+      const payload = await moveFavorite({ market: requestedMarket, code, group });
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      setFavoriteItemsMap((prev) => ({ ...prev, [requestedMarket]: items }));
+      setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: "" }));
+    } catch (e) {
+      setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: getErrorMessage(e, "移动收藏失败，请稍后重试。") }));
+    } finally {
+      setFavoritePending(requestedMarket, code, false);
+    }
+  }
+
+  function handleSelectFavoriteGroup(name, targetMarket = market) {
+    const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    setActiveFavoriteGroupMap((prev) => ({ ...prev, [requestedMarket]: name || "默认" }));
   }
 
   async function load(overrideCode) {
@@ -5810,6 +6073,8 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
             loading={favoriteLoading}
             error={favoriteError}
             pendingCodeSet={favoritePendingCodeSet}
+            groups={favoriteGroups}
+            activeGroup={activeFavoriteGroup}
             onToggleOpen={() => setFavoritesPanelOpen((value) => !value)}
             onRefresh={() => loadFavorites(market)}
             onPick={(code) => {
@@ -5822,6 +6087,10 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
             onRemove={(item) => {
               toggleFavorite(item, market);
             }}
+            onSelectGroup={(name) => handleSelectFavoriteGroup(name, market)}
+            onCreateGroup={(name) => handleCreateFavoriteGroup(name, market)}
+            onDeleteGroup={(name) => handleDeleteFavoriteGroup(name, market)}
+            onMoveItem={(item, group) => handleMoveFavorite(item, group, market)}
           />
         )}
         {chartFullscreen && market !== "agent" && market !== "factor-research" && rows.length > 0 && (

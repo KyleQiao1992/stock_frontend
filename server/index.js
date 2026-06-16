@@ -5,7 +5,7 @@ import { loadServerEnv } from "./env.js";
 import { createAshareFinanceHandler } from "./ashareFinance.js";
 import { createAshareProfileHandler } from "./ashareProfile.js";
 import { createAshareSearchHandler } from "./ashareSearch.js";
-import { createFavoritesHandler } from "./favoritesHandlers.js";
+import { createFavoritesHandler, createFavoriteGroupsHandler } from "./favoritesHandlers.js";
 import { createFavoritesBacktestHandler } from "./favoritesBacktestHandler.js";
 import { createRedisRecommendationsHandler } from "./redisHandlers.js";
 import { createUsKlineHandler } from "./usKline.js";
@@ -41,6 +41,7 @@ app.get("/api/ashare-profile", createAshareProfileHandler());
 app.get("/api/ashare-search", createAshareSearchHandler());
 app.get("/api/recommendations", createRedisRecommendationsHandler());
 app.get("/api/favorites-backtest", createFavoritesBacktestHandler());
+app.use("/api/favorite-groups", createFavoriteGroupsHandler());
 app.use("/api/favorites", createFavoritesHandler());
 
 app.use(

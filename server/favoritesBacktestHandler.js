@@ -27,9 +27,15 @@ export function createFavoritesBacktestHandler() {
         return sendJson(res, 400, { ok: false, error: "Only ashare favorites are supported." });
       }
       const page = Math.max(1, Number(url.searchParams.get("page")) || 1);
+      // groups: 逗号分隔的收藏夹名；缺省 → 不过滤（全部收藏夹）。
+      const groupsParam = url.searchParams.get("groups");
+      const groupFilter = groupsParam == null || groupsParam === ""
+        ? null
+        : new Set(groupsParam.split(",").map((g) => g.trim()).filter(Boolean));
 
       const items = await getFavoriteItems(req.user?.id, market);
       const tuples = items
+        .filter((it) => !groupFilter || groupFilter.has(it.group || "默认"))
         .map((it) => ({ signalDate: favoriteDateStr(it.createdAt), code: it.code, name: it.name }))
         .filter((t) => t.signalDate);
 

@@ -56,8 +56,57 @@ function normalizeFavoriteName(value, fallbackCode) {
   return name || fallbackCode;
 }
 
+const DEFAULT_GROUP = "默认";
+
+// 收藏夹名规范化：去空白、截断到 30 字符；空 → 默认夹。
+function normalizeGroupName(value) {
+  const name = String(value ?? "").trim().slice(0, 30);
+  return name || DEFAULT_GROUP;
+}
+
 function getFavoritesKey(userId, market) {
   return `favorites:${userId}:${market}`;
+}
+
+function getGroupsKey(userId, market) {
+  return `favorite-groups:${userId}:${market}`;
+}
+
+// 读取自定义收藏夹名（有序、去重、剔除默认夹）。
+async function readCustomGroups(client, key) {
+  const entries = await client.lRange(key, 0, -1);
+  const groups = [];
+  const seen = new Set([DEFAULT_GROUP]);
+  for (const raw of entries) {
+    const name = normalizeGroupName(raw);
+    if (seen.has(name)) continue;
+    seen.add(name);
+    groups.push(name);
+  }
+  return groups;
+}
+
+async function writeCustomGroups(client, key, groups) {
+  const multi = client.multi();
+  multi.del(key);
+  if (groups.length) {
+    multi.rPush(key, groups);
+  }
+  await multi.exec();
+}
+
+// 默认夹永远排第一，后面跟自定义夹（同时把 items 里出现过的夹补全进来）。
+function buildGroupList(customGroups, items) {
+  const ordered = [DEFAULT_GROUP, ...customGroups];
+  const seen = new Set(ordered);
+  for (const item of items) {
+    const name = item.group || DEFAULT_GROUP;
+    if (!seen.has(name)) {
+      seen.add(name);
+      ordered.push(name);
+    }
+  }
+  return ordered;
 }
 
 function getLegacyMigrationKey(userId, market) {
@@ -79,6 +128,7 @@ function toFavoriteItem(entry, market) {
       code,
       name: normalizeFavoriteName(parsed.name, code),
       market,
+      group: normalizeGroupName(parsed.group),
       createdAt: Number.isFinite(Number(parsed.createdAt)) ? Number(parsed.createdAt) : Date.now(),
     };
   } catch {
@@ -186,13 +236,16 @@ export function createFavoritesHandler() {
       if (method === "GET") {
         const market = normalizeMarket(requestUrl.searchParams.get("market") || "ashare");
         const items = await getFavoriteItems(userId, market);
-        return sendJson(res, 200, { ok: true, userId, market, items });
+        const customGroups = await readCustomGroups(client, getGroupsKey(userId, market));
+        const groups = buildGroupList(customGroups, items);
+        return sendJson(res, 200, { ok: true, userId, market, items, groups });
       }
 
       if (method === "POST") {
         const body = await readRequestBody(req);
         const market = normalizeMarket(body.market || "ashare");
         const code = normalizeFavoriteCode(body.code, market);
+        const group = normalizeGroupName(body.group);
         const key = getFavoritesKey(userId, market);
         await migrateLegacyFavorites(client, userId, market);
         const items = await readFavoriteItems(client, key, market);
@@ -201,8 +254,44 @@ export function createFavoritesHandler() {
           const enriched = market === "ashare"
             ? await enrichAShareNames([{ code, name: normalizeFavoriteName(body.name, code) }])
             : [{ code, name: normalizeFavoriteName(body.name, code) }];
-          items.push({ code, name: enriched[0].name, market, createdAt: Date.now() });
+          items.push({ code, name: enriched[0].name, market, group, createdAt: Date.now() });
           await writeFavoriteItems(client, key, items);
+        }
+
+        // 收藏到一个尚不存在的自定义夹时，顺手登记该夹。
+        if (group !== DEFAULT_GROUP) {
+          const groupsKey = getGroupsKey(userId, market);
+          const customGroups = await readCustomGroups(client, groupsKey);
+          if (!customGroups.includes(group)) {
+            await writeCustomGroups(client, groupsKey, [...customGroups, group]);
+          }
+        }
+
+        return sendJson(res, 200, { ok: true, userId, market, items });
+      }
+
+      // 把某只票移动到另一个收藏夹（单归属）。
+      if (method === "PATCH") {
+        const body = await readRequestBody(req);
+        const market = normalizeMarket(body.market || "ashare");
+        const code = normalizeFavoriteCode(body.code, market);
+        const group = normalizeGroupName(body.group);
+        const key = getFavoritesKey(userId, market);
+        await migrateLegacyFavorites(client, userId, market);
+        const items = await readFavoriteItems(client, key, market);
+        const target = items.find((item) => item.code === code);
+
+        if (target && target.group !== group) {
+          target.group = group;
+          await writeFavoriteItems(client, key, items);
+
+          if (group !== DEFAULT_GROUP) {
+            const groupsKey = getGroupsKey(userId, market);
+            const customGroups = await readCustomGroups(client, groupsKey);
+            if (!customGroups.includes(group)) {
+              await writeCustomGroups(client, groupsKey, [...customGroups, group]);
+            }
+          }
         }
 
         return sendJson(res, 200, { ok: true, userId, market, items });
@@ -221,6 +310,62 @@ export function createFavoritesHandler() {
         }
 
         return sendJson(res, 200, { ok: true, userId, market, items: nextItems });
+      }
+
+      return sendJson(res, 405, { ok: false, error: "Method not allowed." });
+    } catch (error) {
+      return sendJson(res, 502, { ok: false, error: error?.message || String(error) });
+    }
+  };
+}
+
+// 收藏夹（分组）管理：建夹 / 删夹（连票一起删）。默认夹隐式存在、不可建/删。
+export function createFavoriteGroupsHandler() {
+  return async function favoriteGroupsHandler(req, res) {
+    try {
+      const requestUrl = new URL(req.url || "", "http://localhost");
+      const method = String(req.method || "GET").toUpperCase();
+      const userId = normalizeUserId(req.user?.id);
+      const client = await getRedisClient();
+
+      if (method === "POST") {
+        const body = await readRequestBody(req);
+        const market = normalizeMarket(body.market || "ashare");
+        const name = normalizeGroupName(body.name);
+        if (name === DEFAULT_GROUP) {
+          return sendJson(res, 400, { ok: false, error: "该收藏夹名不可用。" });
+        }
+        const groupsKey = getGroupsKey(userId, market);
+        const customGroups = await readCustomGroups(client, groupsKey);
+        if (!customGroups.includes(name)) {
+          await writeCustomGroups(client, groupsKey, [...customGroups, name]);
+        }
+        const items = await getFavoriteItems(userId, market);
+        const groups = buildGroupList(await readCustomGroups(client, groupsKey), items);
+        return sendJson(res, 200, { ok: true, userId, market, groups });
+      }
+
+      // 删除收藏夹 + 其下所有票（默认夹不可删）。
+      if (method === "DELETE") {
+        const market = normalizeMarket(requestUrl.searchParams.get("market") || "ashare");
+        const name = normalizeGroupName(requestUrl.searchParams.get("name"));
+        if (name === DEFAULT_GROUP) {
+          return sendJson(res, 400, { ok: false, error: "默认收藏夹不可删除。" });
+        }
+        await migrateLegacyFavorites(client, userId, market);
+        const favoritesKey = getFavoritesKey(userId, market);
+        const items = await readFavoriteItems(client, favoritesKey, market);
+        const nextItems = items.filter((item) => (item.group || DEFAULT_GROUP) !== name);
+        if (nextItems.length !== items.length) {
+          await writeFavoriteItems(client, favoritesKey, nextItems);
+        }
+        const groupsKey = getGroupsKey(userId, market);
+        const customGroups = await readCustomGroups(client, groupsKey);
+        await writeCustomGroups(client, groupsKey, customGroups.filter((g) => g !== name));
+
+        const enriched = market === "ashare" ? await enrichAShareNames(nextItems) : nextItems;
+        const groups = buildGroupList(customGroups.filter((g) => g !== name), enriched);
+        return sendJson(res, 200, { ok: true, userId, market, items: enriched, groups });
       }
 
       return sendJson(res, 405, { ok: false, error: "Method not allowed." });
