@@ -1,3 +1,5 @@
+import { initAshareCodeIndex, searchLocal } from "./ashareCodeIndex.js";
+
 function normalizeKeyword(value) {
   return String(value || "").trim().slice(0, 30);
 }
@@ -97,6 +99,14 @@ async function searchAshare(keyword) {
   const cached = getCached(input);
   if (cached) return cached;
 
+  // 本地拼音索引优先：支持完整拼音（taitan）、首字母（ttgf）、中文、代码子串。
+  // 东方财富 suggest 只认首字母，完整拼音会返回空，所以本地命中就直接用。
+  const local = searchLocal(input);
+  if (local.length) {
+    setCached(input, local);
+    return local;
+  }
+
   let lastError = null;
   // 首次失败（超时/抖动）再重试一次。
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -112,6 +122,8 @@ async function searchAshare(keyword) {
 }
 
 export function createAshareSearchHandler() {
+  // 启动时加载静态快照并触发后台刷新（幂等）。
+  initAshareCodeIndex();
   return async function ashareSearchHandler(req, res) {
     try {
       const requestUrl = new URL(req.url || "", "http://localhost");
