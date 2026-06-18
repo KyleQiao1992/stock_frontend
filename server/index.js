@@ -14,6 +14,7 @@ import { createMacdFactorDetailHandler } from "./macdFactorDetailHandler.js";
 import { createFactorsHandler } from "./factorsHandler.js";
 import { createFactorAdminHandler } from "./factorAdminHandler.js";
 import { createAuthHandler } from "./authHandlers.js";
+import { createAgentHandler } from "./agent/agentHandler.js";
 import { authMiddleware } from "./authMiddleware.js";
 
 loadServerEnv();
@@ -41,6 +42,7 @@ app.get("/api/ashare-profile", createAshareProfileHandler());
 app.get("/api/ashare-search", createAshareSearchHandler());
 app.get("/api/recommendations", createRedisRecommendationsHandler());
 app.get("/api/favorites-backtest", createFavoritesBacktestHandler());
+app.post("/api/agent/chat", createAgentHandler());
 app.use("/api/favorite-groups", createFavoriteGroupsHandler());
 app.use("/api/favorites", createFavoritesHandler());
 

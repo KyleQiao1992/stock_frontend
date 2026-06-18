@@ -15,6 +15,7 @@ import { createMacdFactorDetailHandler } from "./server/macdFactorDetailHandler.
 import { createFactorsHandler } from "./server/factorsHandler.js";
 import { createFactorAdminHandler } from "./server/factorAdminHandler.js";
 import { createAuthHandler } from "./server/authHandlers.js";
+import { createAgentHandler } from "./server/agent/agentHandler.js";
 import { authMiddleware } from "./server/authMiddleware.js";
 
 function usKlinePlugin() {
@@ -32,6 +33,7 @@ function usKlinePlugin() {
   const factorsHandler = createFactorsHandler();
   const factorAdminHandler = createFactorAdminHandler();
   const authHandler = createAuthHandler();
+  const agentHandler = createAgentHandler();
 
   function register(middlewares) {
     middlewares.use("/api/auth", authHandler);
@@ -42,6 +44,7 @@ function usKlinePlugin() {
     middlewares.use("/api/ashare-search", ashareSearchHandler);
     middlewares.use("/api/recommendations", redisRecommendationsHandler);
     middlewares.use("/api/favorites-backtest", favoritesBacktestHandler);
+    middlewares.use("/api/agent/chat", agentHandler);
     middlewares.use("/api/favorite-groups", favoriteGroupsHandler);
     middlewares.use("/api/favorites", favoritesHandler);
     middlewares.use("/api/admin/factors", factorAdminHandler);
