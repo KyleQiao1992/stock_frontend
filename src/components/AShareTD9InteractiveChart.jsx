@@ -61,6 +61,17 @@ const TREND_TABS = [
   { value: "short", label: "中短期多头趋势", term: "中短期", ma: 20 },
 ];
 
+// 趋势大盘可按年份回看。"latest" 为最新窗口，其余为具体年份（含该年全部交易日）。
+const TREND_MIN_YEAR = 2015;
+const TREND_YEAR_OPTIONS = (() => {
+  const currentYear = new Date().getFullYear();
+  const years = [];
+  for (let y = currentYear; y >= TREND_MIN_YEAR; y -= 1) {
+    years.push({ value: String(y), label: `${y} 年` });
+  }
+  return [{ value: "latest", label: "最新" }, ...years];
+})();
+
 // 判断某根（默认最后一根）是否处于多头趋势：CLOSE>MAn、MAn 向上、DIF>0 三者同时成立。
 function evalTrend(rows, maPeriod) {
   const safe = Array.isArray(rows) ? rows.filter((r) => r && Number.isFinite(r.close)) : [];
@@ -536,76 +547,89 @@ async function fetchAshareKline({ code, period, adjust, limit }) {
 async function fetchIndexKline({ secid, tencentSymbol, name, limit = 500 }) {
   const errors = [];
 
-  // 主源：腾讯不复权日线。
-  const varName = `tencent_index_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const param = `${tencentSymbol},day,,,${limit}`;
-  const tencentUrl = `https://web.ifzq.gtimg.cn/appstock/app/kline/kline?_var=${encodeURIComponent(varName)}&param=${encodeURIComponent(param)}`;
-  for (const loader of [() => loadScriptVariable(tencentUrl, varName), () => loadTencentText(tencentUrl)]) {
-    try {
-      const res = await loader();
-      const node = res?.data?.[tencentSymbol] || res?.data?.[tencentSymbol?.toUpperCase?.()];
-      const arr = Array.isArray(node?.day) ? node.day : Array.isArray(node?.qfqday) ? node.qfqday : null;
-      if (!arr || !arr.length) throw new Error("腾讯指数 K 线为空");
-      let prevClose = null;
-      const parsed = arr
-        .map((item) => {
-          const close = Number(item[2]);
-          const pct = Number.isFinite(prevClose) && prevClose !== 0 ? ((close - prevClose) / prevClose) * 100 : 0;
-          prevClose = close;
-          return {
-            date: item[0],
-            open: Number(item[1]),
-            close,
-            high: Number(item[3]),
-            low: Number(item[4]),
-            volume: Number(item[5]),
-            pct,
-          };
-        })
-        .filter((r) => r.date && [r.open, r.close, r.high, r.low].every(Number.isFinite));
-      if (parsed.length) return { code: tencentSymbol, name, klines: parsed };
-    } catch (e) {
-      errors.push(`tencent: ${e?.message || e}`);
+  // 腾讯不复权日线。注意 kline/kline 的 count 过大（>1000）会 param error，故仅适合较小窗口。
+  async function tryTencent() {
+    const varName = `tencent_index_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const param = `${tencentSymbol},day,,,${Math.min(limit, 1000)}`;
+    const tencentUrl = `https://web.ifzq.gtimg.cn/appstock/app/kline/kline?_var=${encodeURIComponent(varName)}&param=${encodeURIComponent(param)}`;
+    for (const loader of [() => loadScriptVariable(tencentUrl, varName), () => loadTencentText(tencentUrl)]) {
+      try {
+        const res = await loader();
+        const node = res?.data?.[tencentSymbol] || res?.data?.[tencentSymbol?.toUpperCase?.()];
+        const arr = Array.isArray(node?.day) ? node.day : Array.isArray(node?.qfqday) ? node.qfqday : null;
+        if (!arr || !arr.length) throw new Error("腾讯指数 K 线为空");
+        let prevClose = null;
+        const parsed = arr
+          .map((item) => {
+            const close = Number(item[2]);
+            const pct = Number.isFinite(prevClose) && prevClose !== 0 ? ((close - prevClose) / prevClose) * 100 : 0;
+            prevClose = close;
+            return {
+              date: item[0],
+              open: Number(item[1]),
+              close,
+              high: Number(item[3]),
+              low: Number(item[4]),
+              volume: Number(item[5]),
+              pct,
+            };
+          })
+          .filter((r) => r.date && [r.open, r.close, r.high, r.low].every(Number.isFinite));
+        if (parsed.length) return { code: tencentSymbol, name, klines: parsed };
+      } catch (e) {
+        errors.push(`tencent: ${e?.message || e}`);
+      }
     }
+    return null;
   }
 
-  // 兜底：东方财富。
-  const hosts = [
-    "https://push2his.eastmoney.com",
-    "https://79.push2his.eastmoney.com",
-    "https://82.push2his.eastmoney.com",
-  ];
-  for (const host of hosts) {
-    const url = buildEastmoneyKlineUrl({ host, secid, period: "101", adjust: "0", limit });
-    try {
-      const res = await loadMarketJson(url);
-      const data = res && res.data ? res.data : null;
-      const klines = data && Array.isArray(data.klines) ? data.klines : [];
-      if (!data || klines.length === 0) {
-        errors.push(`${host}: 空数据`);
-        continue;
+  // 东方财富，支持较深历史（回看早年时用它）。
+  async function tryEastmoney() {
+    const hosts = [
+      "https://push2his.eastmoney.com",
+      "https://79.push2his.eastmoney.com",
+      "https://82.push2his.eastmoney.com",
+    ];
+    for (const host of hosts) {
+      const url = buildEastmoneyKlineUrl({ host, secid, period: "101", adjust: "0", limit });
+      try {
+        const res = await loadMarketJson(url);
+        const data = res && res.data ? res.data : null;
+        const klines = data && Array.isArray(data.klines) ? data.klines : [];
+        if (!data || klines.length === 0) {
+          errors.push(`${host}: 空数据`);
+          continue;
+        }
+        const parsed = klines
+          .map((line) => {
+            const parts = String(line).split(",");
+            return {
+              date: parts[0],
+              open: Number(parts[1]),
+              close: Number(parts[2]),
+              high: Number(parts[3]),
+              low: Number(parts[4]),
+              volume: Number(parts[5]),
+              pct: Number(parts[8]),
+            };
+          })
+          .filter((r) => r.date && [r.open, r.close, r.high, r.low].every(Number.isFinite));
+        if (parsed.length) {
+          return { code: data.code || secid, name: data.name || name, klines: parsed };
+        }
+        errors.push(`${host}: 数据格式异常`);
+      } catch (e) {
+        errors.push(`${host}: ${e?.message || e}`);
       }
-      const parsed = klines
-        .map((line) => {
-          const parts = String(line).split(",");
-          return {
-            date: parts[0],
-            open: Number(parts[1]),
-            close: Number(parts[2]),
-            high: Number(parts[3]),
-            low: Number(parts[4]),
-            volume: Number(parts[5]),
-            pct: Number(parts[8]),
-          };
-        })
-        .filter((r) => r.date && [r.open, r.close, r.high, r.low].every(Number.isFinite));
-      if (parsed.length) {
-        return { code: data.code || secid, name: data.name || name, klines: parsed };
-      }
-      errors.push(`${host}: 数据格式异常`);
-    } catch (e) {
-      errors.push(`${host}: ${e?.message || e}`);
     }
+    return null;
+  }
+
+  // 深度历史（回看早年）腾讯 count 受限，优先东方财富；最新窗口仍以腾讯为主（最稳）。
+  const order = limit > 1000 ? [tryEastmoney, tryTencent] : [tryTencent, tryEastmoney];
+  for (const fn of order) {
+    const res = await fn();
+    if (res) return res;
   }
 
   throw new Error(`指数行情暂时不可用。最后错误：${errors.slice(-3).join("；")}`);
@@ -4211,16 +4235,23 @@ function IndexTrendChart({ rows, maPeriod, displayCount, name }) {
   );
 }
 
-function IndexTrendCard({ index, tab }) {
+function IndexTrendCard({ index, tab, year = "latest" }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // 回看历史年份时要取到足够早的数据：从该年到今年的交易日 + 预热缓冲。
+  const fetchLimit = useMemo(() => {
+    if (year === "latest") return 500;
+    const span = new Date().getFullYear() - Number(year) + 2;
+    return Math.min(6000, Math.max(500, span * 260));
+  }, [year]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError("");
-    fetchIndexKline({ secid: index.secid, tencentSymbol: index.tencentSymbol, name: index.name })
+    fetchIndexKline({ secid: index.secid, tencentSymbol: index.tencentSymbol, name: index.name, limit: fetchLimit })
       .then((res) => {
         if (!cancelled) setData(res);
       })
@@ -4233,20 +4264,42 @@ function IndexTrendCard({ index, tab }) {
     return () => {
       cancelled = true;
     };
-  }, [index.secid, index.tencentSymbol, index.name]);
+  }, [index.secid, index.tencentSymbol, index.name, fetchLimit]);
 
-  // 展示窗口 + 预热缓冲：多取 maPeriod 根供指标预热，图表内部只渲染最后 displayCount 根，
-  // 这样可见区第一根就有 MA60/MACD 值，MA 线从最左边开始。
-  const displayCount = tab.ma >= 60 ? 250 : 140;
-  const feedRows = useMemo(() => {
+  // 展示窗口 + 预热缓冲：图表内部只渲染最后 displayCount 根，但喂入的数据多带 MA+MACD 预热，
+  // 这样可见区第一根就有 MA/MACD 值，均线从最左边开始。
+  const warmup = tab.ma + 40;
+  const { feedRows, displayCount, hasYearData } = useMemo(() => {
     const all = data?.klines || [];
-    return all.slice(-(displayCount + tab.ma));
-  }, [data, displayCount, tab.ma]);
+    if (!all.length) return { feedRows: [], displayCount: 0, hasYearData: true };
+
+    if (year === "latest") {
+      const disp = tab.ma >= 60 ? 250 : 140;
+      return { feedRows: all.slice(-(disp + warmup)), displayCount: Math.min(disp, all.length), hasYearData: true };
+    }
+
+    // 指定年份：取该年全部交易日，前面再补一段预热。
+    const prefix = String(year);
+    let firstIdx = -1;
+    let lastIdx = -1;
+    for (let i = 0; i < all.length; i += 1) {
+      if (String(all[i].date).startsWith(prefix)) {
+        if (firstIdx === -1) firstIdx = i;
+        lastIdx = i;
+      }
+    }
+    if (firstIdx === -1) return { feedRows: [], displayCount: 0, hasYearData: false };
+    return {
+      feedRows: all.slice(Math.max(0, firstIdx - warmup), lastIdx + 1),
+      displayCount: lastIdx - firstIdx + 1,
+      hasYearData: true,
+    };
+  }, [data, tab.ma, warmup, year]);
 
   const latest = feedRows[feedRows.length - 1];
 
-  // 最新一根是否满足三个多头条件，得出结论徽标。
-  const trend = useMemo(() => evalTrend(data?.klines || [], tab.ma), [data, tab.ma]);
+  // 结论按窗口最后一根（最新年份为今天，历史年份为该年最后一个交易日）判定多头三条件。
+  const trend = useMemo(() => evalTrend(feedRows, tab.ma), [feedRows, tab.ma]);
 
   return (
     <Card className="rounded-2xl border-slate-200">
@@ -4289,6 +4342,8 @@ function IndexTrendCard({ index, tab }) {
           <div className="flex h-[360px] items-center justify-center text-sm text-slate-400">加载中…</div>
         ) : error ? (
           <div className="flex h-[360px] items-center justify-center px-4 text-center text-sm text-rose-500">{error}</div>
+        ) : !hasYearData ? (
+          <div className="flex h-[360px] items-center justify-center px-4 text-center text-sm text-slate-400">{year} 年暂无该指数数据</div>
         ) : (
           <IndexTrendChart rows={feedRows} maPeriod={tab.ma} displayCount={displayCount} name={index.name} />
         )}
@@ -4299,26 +4354,42 @@ function IndexTrendCard({ index, tab }) {
 
 function MarketTrendPageLayout() {
   const [trendTab, setTrendTab] = useState("long");
+  const [trendYear, setTrendYear] = useState("latest");
   const activeTab = TREND_TABS.find((t) => t.value === trendTab) || TREND_TABS[0];
 
   return (
     <div className="space-y-4">
-      <div className="inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
-        {TREND_TABS.map((tab) => {
-          const active = tab.value === trendTab;
-          return (
-            <button
-              key={tab.value}
-              type="button"
-              onClick={() => setTrendTab(tab.value)}
-              className={`whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium transition ${
-                active ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-900"
-              }`}
-            >
-              {tab.label}
-            </button>
-          );
-        })}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
+          {TREND_TABS.map((tab) => {
+            const active = tab.value === trendTab;
+            return (
+              <button
+                key={tab.value}
+                type="button"
+                onClick={() => setTrendTab(tab.value)}
+                className={`whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium transition ${
+                  active ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-900"
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
+        <label className="flex items-center gap-2 text-sm text-slate-600">
+          <span>年份</span>
+          <select
+            value={trendYear}
+            onChange={(e) => setTrendYear(e.target.value)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 outline-none"
+          >
+            {TREND_YEAR_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+        </label>
       </div>
 
       {/* 判断条件说明：随子 tab 切换 MA 周期，其余不变 */}
@@ -4334,7 +4405,7 @@ function MarketTrendPageLayout() {
 
       <div className="grid gap-4 2xl:grid-cols-2">
         {TREND_INDICES.map((index) => (
-          <IndexTrendCard key={index.code} index={index} tab={activeTab} />
+          <IndexTrendCard key={index.code} index={index} tab={activeTab} year={trendYear} />
         ))}
       </div>
     </div>
@@ -5485,7 +5556,8 @@ function FavoritesToolbar({
 export default function AShareTD9InteractiveChart({ onLogout }) {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [market, setMarket] = useState("ashare");
-  const [marketCodes, setMarketCodes] = useState({ ashare: "600519", us: "MSFT" });
+  // 初始为空：挂载后默认选中自选/收藏夹里的第一只，不再写死茅台/MSFT。
+  const [marketCodes, setMarketCodes] = useState({ ashare: "", us: "" });
   const [ashareSuggestions, setAshareSuggestions] = useState([]);
   const [ashareSuggestLoading, setAshareSuggestLoading] = useState(false);
   const [ashareSuggestOpen, setAshareSuggestOpen] = useState(false);
@@ -5605,6 +5677,8 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
     }
     return codes;
   }, [market, watchlistItems]);
+  // 用户是否手动选过收藏夹（按市场）。未手动选过时，默认选中最新建的收藏夹。
+  const favoriteGroupTouchedRef = useRef({ ashare: false, us: false });
   const usKlineCacheRef = useRef(new Map());
   const usPreloadRunRef = useRef(0);
 
@@ -5758,6 +5832,14 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
 
     // 同步输入框，保证「生成列表」复现一致。
     setWatchlistInputMap((prev) => ({ ...prev, [requestedMarket]: codes.join(",") }));
+
+    // 该市场还没有选中标的时，默认选中并加载第一只（首屏不再写死茅台）。
+    const alreadySelected = requestedMarket === "us" ? marketCodes.us : marketCodes.ashare;
+    if (!alreadySelected && codes.length) {
+      setMarketCodes((prev) => ({ ...prev, [requestedMarket]: codes[0] }));
+      if (requestedMarket === market) load(codes[0]);
+    }
+
     await loadWatchlist(requestedMarket, codes);
   }
 
@@ -5843,10 +5925,14 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
       const groups = Array.isArray(payload?.groups) && payload.groups.length ? payload.groups : ["默认"];
       setFavoriteItemsMap((prev) => ({ ...prev, [requestedMarket]: items }));
       setFavoriteGroupsMap((prev) => ({ ...prev, [requestedMarket]: groups }));
-      // active 夹若已不存在（被删），回落到默认夹。
-      setActiveFavoriteGroupMap((prev) => (
-        groups.includes(prev[requestedMarket]) ? prev : { ...prev, [requestedMarket]: "默认" }
-      ));
+      setActiveFavoriteGroupMap((prev) => {
+        // 用户没手动选过：默认选中最新建的收藏夹（列表最后一个），新收藏即落入此夹。
+        if (!favoriteGroupTouchedRef.current[requestedMarket]) {
+          return { ...prev, [requestedMarket]: groups[groups.length - 1] || "默认" };
+        }
+        // 已手动选过：保留选择，除非该夹已被删，回落默认夹。
+        return groups.includes(prev[requestedMarket]) ? prev : { ...prev, [requestedMarket]: "默认" };
+      });
     } catch (e) {
       setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: getErrorMessage(e, "收藏夹读取失败，请稍后重试。") }));
     } finally {
@@ -5936,6 +6022,7 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
 
   function handleSelectFavoriteGroup(name, targetMarket = market) {
     const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    favoriteGroupTouchedRef.current[requestedMarket] = true;
     setActiveFavoriteGroupMap((prev) => ({ ...prev, [requestedMarket]: name || "默认" }));
   }
 
@@ -6051,7 +6138,9 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
   }
 
   useEffect(() => {
-    if (isStandaloneMarket) return undefined;
+    // 当前市场还没有选中标的时（首屏 / 首次进入该市场），交给 loadDefaultWatchlist 选第一只；
+    // 这里只负责在已有选中代码时重新拉取。
+    if (isStandaloneMarket || !currentCode) return undefined;
     const timer = window.setTimeout(() => {
       load();
     }, 0);
