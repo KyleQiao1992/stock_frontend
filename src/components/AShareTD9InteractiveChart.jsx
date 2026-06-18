@@ -38,18 +38,46 @@ const PERIOD_OPTIONS = [
   { value: "103", label: "月K" },
 ];
 
-const ADJUST_OPTIONS = [
-  { value: "1", label: "前复权" },
-  { value: "0", label: "不复权" },
-  { value: "2", label: "后复权" },
-];
 
 const MARKET_TABS = [
+  { value: "market-trend", label: "趋势大盘" },
   { value: "ashare", label: "A股" },
   { value: "us", label: "美股" },
   { value: "agent", label: "Agent" },
   { value: "factor-research", label: "因子研究" },
 ];
+
+// 趋势大盘要展示的四大指数。secid 用于东方财富，tencentSymbol 用于腾讯兜底。
+const TREND_INDICES = [
+  { code: "000001", name: "上证指数", secid: "1.000001", tencentSymbol: "sh000001" },
+  { code: "000688", name: "科创50", secid: "1.000688", tencentSymbol: "sh000688" },
+  { code: "399001", name: "深证成指", secid: "0.399001", tencentSymbol: "sz399001" },
+  { code: "399006", name: "创业板指", secid: "0.399006", tencentSymbol: "sz399006" },
+];
+
+// 两个子 tab：中长期看 MA60，中短期看 MA20。多头趋势的三个判断条件除均线周期外完全一致。
+const TREND_TABS = [
+  { value: "long", label: "中长期多头趋势", term: "中长期", ma: 60 },
+  { value: "short", label: "中短期多头趋势", term: "中短期", ma: 20 },
+];
+
+// 判断某根（默认最后一根）是否处于多头趋势：CLOSE>MAn、MAn 向上、DIF>0 三者同时成立。
+function evalTrend(rows, maPeriod) {
+  const safe = Array.isArray(rows) ? rows.filter((r) => r && Number.isFinite(r.close)) : [];
+  if (safe.length < maPeriod + 2) return null;
+  const ma = movingAverage(safe, maPeriod);
+  const macd = calcMACDSeries(safe);
+  const i = safe.length - 1;
+  const close = safe[i].close;
+  const maNow = ma[i];
+  const maPrev = ma[i - 1];
+  const dif = macd[i]?.dif;
+  if (![close, maNow, maPrev, dif].every(Number.isFinite)) return null;
+  const c1 = close > maNow; // 收盘价在均线之上
+  const c2 = maNow > maPrev; // 均线向上
+  const c3 = dif > 0; // DIF 在 0 轴之上
+  return { c1, c2, c3, isBull: c1 && c2 && c3, close, maNow, maPrev, dif };
+}
 
 const WATCHLIST_STYLE_OPTIONS = [
   { value: "cards", label: "自选" },
@@ -87,11 +115,6 @@ const RECOMMENDATION_SAFETY_OPTIONS = [
   { value: "low", label: "低" },
 ];
 
-const WAVE_SENSITIVITY_OPTIONS = [
-  { value: "soft", label: "灵敏" },
-  { value: "standard", label: "标准" },
-  { value: "strict", label: "严格" },
-];
 
 function isSixDigitCode(value) {
   const s = String(value || "").trim();
@@ -508,6 +531,86 @@ async function fetchAshareKline({ code, period, adjust, limit }) {
   );
 }
 
+// 指数日线取数。腾讯 kline/kline 为主（不复权，显式 symbol，_var 脚本方式绕过跨域，最稳），东方财富兜底。
+// 注意：指数不能用 fqkline/get（需复权参数，否则返回 bad params），也不能用 guessSecid/toTencentSymbol（会把上证/科创判成深市）。
+async function fetchIndexKline({ secid, tencentSymbol, name, limit = 500 }) {
+  const errors = [];
+
+  // 主源：腾讯不复权日线。
+  const varName = `tencent_index_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const param = `${tencentSymbol},day,,,${limit}`;
+  const tencentUrl = `https://web.ifzq.gtimg.cn/appstock/app/kline/kline?_var=${encodeURIComponent(varName)}&param=${encodeURIComponent(param)}`;
+  for (const loader of [() => loadScriptVariable(tencentUrl, varName), () => loadTencentText(tencentUrl)]) {
+    try {
+      const res = await loader();
+      const node = res?.data?.[tencentSymbol] || res?.data?.[tencentSymbol?.toUpperCase?.()];
+      const arr = Array.isArray(node?.day) ? node.day : Array.isArray(node?.qfqday) ? node.qfqday : null;
+      if (!arr || !arr.length) throw new Error("腾讯指数 K 线为空");
+      let prevClose = null;
+      const parsed = arr
+        .map((item) => {
+          const close = Number(item[2]);
+          const pct = Number.isFinite(prevClose) && prevClose !== 0 ? ((close - prevClose) / prevClose) * 100 : 0;
+          prevClose = close;
+          return {
+            date: item[0],
+            open: Number(item[1]),
+            close,
+            high: Number(item[3]),
+            low: Number(item[4]),
+            volume: Number(item[5]),
+            pct,
+          };
+        })
+        .filter((r) => r.date && [r.open, r.close, r.high, r.low].every(Number.isFinite));
+      if (parsed.length) return { code: tencentSymbol, name, klines: parsed };
+    } catch (e) {
+      errors.push(`tencent: ${e?.message || e}`);
+    }
+  }
+
+  // 兜底：东方财富。
+  const hosts = [
+    "https://push2his.eastmoney.com",
+    "https://79.push2his.eastmoney.com",
+    "https://82.push2his.eastmoney.com",
+  ];
+  for (const host of hosts) {
+    const url = buildEastmoneyKlineUrl({ host, secid, period: "101", adjust: "0", limit });
+    try {
+      const res = await loadMarketJson(url);
+      const data = res && res.data ? res.data : null;
+      const klines = data && Array.isArray(data.klines) ? data.klines : [];
+      if (!data || klines.length === 0) {
+        errors.push(`${host}: 空数据`);
+        continue;
+      }
+      const parsed = klines
+        .map((line) => {
+          const parts = String(line).split(",");
+          return {
+            date: parts[0],
+            open: Number(parts[1]),
+            close: Number(parts[2]),
+            high: Number(parts[3]),
+            low: Number(parts[4]),
+            volume: Number(parts[5]),
+            pct: Number(parts[8]),
+          };
+        })
+        .filter((r) => r.date && [r.open, r.close, r.high, r.low].every(Number.isFinite));
+      if (parsed.length) {
+        return { code: data.code || secid, name: data.name || name, klines: parsed };
+      }
+      errors.push(`${host}: 数据格式异常`);
+    } catch (e) {
+      errors.push(`${host}: ${e?.message || e}`);
+    }
+  }
+
+  throw new Error(`指数行情暂时不可用。最后错误：${errors.slice(-3).join("；")}`);
+}
+
 async function fetchUsKline({ symbol, period, adjust, limit }) {
   const normalized = normalizeUsSymbol(symbol);
   if (!isValidUsSymbol(normalized)) {
@@ -746,6 +849,26 @@ function formatMillionValue(value) {
 function formatPercentValue(value) {
   if (!Number.isFinite(value)) return "-";
   return `${value.toFixed(2)}%`;
+}
+
+// 收藏夹为空时的默认随机池（大盘流动性较好的标的）。
+const ASHARE_FALLBACK_WATCHLIST = [
+  "600519", "000001", "300750", "600036", "000858",
+  "601318", "300059", "002594", "600276", "601012",
+  "000333", "600900", "601899", "002475", "300760",
+];
+const US_FALLBACK_WATCHLIST = [
+  "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL",
+  "META", "TSLA", "AMD", "NFLX", "AVGO",
+];
+
+function pickRandomCodes(pool, count) {
+  const arr = [...pool];
+  for (let i = arr.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr.slice(0, count);
 }
 
 function normalizeWatchlistCodes(input, market) {
@@ -3839,6 +3962,385 @@ async function fetchFactorReturns(mode, startDate, signal, status = "production"
   return payload.data;
 }
 
+// 通达信「多空分野」风格的指数趋势图：粉色山形 K 线 + 一根 MA 线（价格低于 MA 的区段加深阴影）+ 下方 MACD 副图（0 轴下方阴影）。
+// 视觉尽量还原效果图：viewBox 固定，外层用百分比定位叠加文字框。
+const TREND_W = 1000;
+const TREND_MARGIN = { top: 8, right: 56, bottom: 22, left: 10 };
+const TREND_MAIN_H = 300;
+const TREND_GAP = 30;
+const TREND_MACD_H = 150;
+const TREND_H = TREND_MARGIN.top + TREND_MAIN_H + TREND_GAP + TREND_MACD_H + TREND_MARGIN.bottom;
+
+function IndexTrendChart({ rows, maPeriod, displayCount, name }) {
+  const chart = useMemo(() => {
+    const full = Array.isArray(rows) ? rows.filter((r) => r && Number.isFinite(r.close)) : [];
+    if (full.length < 2) return null;
+    // 先用完整数据算指标，再截取展示窗口，确保可见区第一根就有 MA/MACD 值（MA60 需 60 根预热，MACD 约 34 根）。
+    const maFull = movingAverage(full, maPeriod);
+    const macdFull = calcMACDSeries(full);
+    const start = Math.max(0, full.length - (displayCount || full.length));
+    const safe = full.slice(start);
+    const ma = maFull.slice(start);
+    const macd = macdFull.slice(start);
+    if (safe.length < 2) return null;
+
+    const plotW = TREND_W - TREND_MARGIN.left - TREND_MARGIN.right;
+    const mainTop = TREND_MARGIN.top;
+    const mainBottom = mainTop + TREND_MAIN_H;
+    const macdTop = mainBottom + TREND_GAP;
+    const macdBottom = macdTop + TREND_MACD_H;
+
+    let yMin = Infinity;
+    let yMax = -Infinity;
+    safe.forEach((r) => {
+      yMin = Math.min(yMin, r.low);
+      yMax = Math.max(yMax, r.high);
+    });
+    ma.forEach((v) => {
+      if (Number.isFinite(v)) {
+        yMin = Math.min(yMin, v);
+        yMax = Math.max(yMax, v);
+      }
+    });
+    const pad = (yMax - yMin) * 0.06 || 1;
+    yMin -= pad;
+    yMax += pad;
+
+    const xStep = plotW / safe.length;
+    const candleW = Math.max(1.4, Math.min(7, xStep * 0.62));
+    const x = (i) => TREND_MARGIN.left + i * xStep + xStep / 2;
+    const y = (price) => mainTop + ((yMax - price) / Math.max(yMax - yMin, 1e-6)) * TREND_MAIN_H;
+
+    const maPath = ma
+      .map((v, i) => (Number.isFinite(v) ? `${i && Number.isFinite(ma[i - 1]) ? "L" : "M"}${x(i)},${y(v)}` : null))
+      .filter(Boolean)
+      .join(" ");
+
+    // 阴影：收盘价低于 MA 的区段（多空分野里“MA 线下方”）。
+    const belowSegs = [];
+    let seg = null;
+    ma.forEach((v, i) => {
+      const c = safe[i]?.close;
+      const below = Number.isFinite(v) && Number.isFinite(c) && c < v;
+      if (below) {
+        if (!seg) seg = [];
+        seg.push(i);
+      } else if (seg) {
+        belowSegs.push(seg);
+        seg = null;
+      }
+    });
+    if (seg) belowSegs.push(seg);
+    const belowPaths = belowSegs
+      .filter((s) => s.length > 1)
+      .map((s) => {
+        const top = s.map((i) => `${x(i)},${y(ma[i])}`).join(" L");
+        const bottom = s.slice().reverse().map((i) => `${x(i)},${y(safe[i].close)}`).join(" L");
+        return `M${top} L${bottom} Z`;
+      });
+
+    // 价格轴刻度。
+    const priceTicks = Array.from({ length: 5 }, (_, k) => {
+      const v = yMin + ((yMax - yMin) * k) / 4;
+      return { v, y: y(v) };
+    });
+
+    // 日期轴刻度。
+    const dateTicks = [];
+    const dateCount = 6;
+    for (let k = 0; k < dateCount; k += 1) {
+      const i = Math.round((safe.length - 1) * (k / (dateCount - 1)));
+      dateTicks.push({ x: x(i), label: (safe[i]?.date || "").slice(2) });
+    }
+
+    // MACD 面板。
+    let mMin = 0;
+    let mMax = 0;
+    macd.forEach((m) => {
+      [m.dif, m.dea, m.hist].forEach((v) => {
+        if (Number.isFinite(v)) {
+          mMin = Math.min(mMin, v);
+          mMax = Math.max(mMax, v);
+        }
+      });
+    });
+    const mPad = (mMax - mMin) * 0.1 || 1;
+    mMin -= mPad;
+    mMax += mPad;
+    const my = (v) => macdTop + ((mMax - v) / Math.max(mMax - mMin, 1e-6)) * TREND_MACD_H;
+    const zeroY = my(0);
+    const difPath = macd
+      .map((m, i) => (Number.isFinite(m.dif) ? `${i && Number.isFinite(macd[i - 1]?.dif) ? "L" : "M"}${x(i)},${my(m.dif)}` : null))
+      .filter(Boolean)
+      .join(" ");
+    const deaPath = macd
+      .map((m, i) => (Number.isFinite(m.dea) ? `${i && Number.isFinite(macd[i - 1]?.dea) ? "L" : "M"}${x(i)},${my(m.dea)}` : null))
+      .filter(Boolean)
+      .join(" ");
+    // 0 轴下方阴影：DIF 低于 0 的区段填充到 0 轴。
+    const difBelowSegs = [];
+    let dseg = null;
+    macd.forEach((m, i) => {
+      if (Number.isFinite(m.dif) && m.dif < 0) {
+        if (!dseg) dseg = [];
+        dseg.push(i);
+      } else if (dseg) {
+        difBelowSegs.push(dseg);
+        dseg = null;
+      }
+    });
+    if (dseg) difBelowSegs.push(dseg);
+    const difBelowPaths = difBelowSegs
+      .filter((s) => s.length > 1)
+      .map((s) => {
+        const top = s.map((i) => `${x(i)},${my(macd[i].dif)}`).join(" L");
+        return `M${x(s[0])},${zeroY} L${top} L${x(s[s.length - 1])},${zeroY} Z`;
+      });
+
+    const lastMa = [...ma].reverse().find(Number.isFinite) ?? null;
+    const lastMacd = [...macd].reverse().find((m) => Number.isFinite(m?.dif) && Number.isFinite(m?.dea)) ?? null;
+
+    return {
+      safe, ma, macd, x, y, my, zeroY, candleW, mainBottom, macdTop, macdBottom,
+      maPath, belowPaths, difPath, deaPath, difBelowPaths, priceTicks, dateTicks,
+      lastMa, lastMacd,
+    };
+  }, [rows, maPeriod, displayCount]);
+
+  if (!chart) {
+    return <div className="flex h-[360px] items-center justify-center text-sm text-slate-400">暂无数据</div>;
+  }
+
+  return (
+    <svg viewBox={`0 0 ${TREND_W} ${TREND_H}`} className="block w-full">
+      {/* 面板边框 */}
+      <rect x={TREND_MARGIN.left} y={TREND_MARGIN.top} width={TREND_W - TREND_MARGIN.left - TREND_MARGIN.right} height={TREND_MAIN_H} fill="none" stroke="#e2e8f0" />
+      <rect x={TREND_MARGIN.left} y={chart.macdTop} width={TREND_W - TREND_MARGIN.left - TREND_MARGIN.right} height={TREND_MACD_H} fill="none" stroke="#e2e8f0" />
+
+      {/* 主图：收盘价跌破 MA 的弱势区间阴影（沿用 app 绿色弱势语义） */}
+      {chart.belowPaths.map((d, i) => (
+        <path key={`below-${i}`} d={d} fill="#008000" opacity="0.10" />
+      ))}
+
+      {/* 价格刻度线 + 标签 */}
+      {chart.priceTicks.map((t, i) => (
+        <g key={`pt-${i}`}>
+          <line x1={TREND_MARGIN.left} x2={TREND_W - TREND_MARGIN.right} y1={t.y} y2={t.y} stroke="#f1f5f9" />
+          <text x={TREND_W - TREND_MARGIN.right + 4} y={t.y + 3} fontSize="11" fill="#94a3b8">{t.v.toFixed(0)}</text>
+        </g>
+      ))}
+
+      {/* K 线：红涨（实心）/ 绿跌（空心），与主图保持一致 */}
+      {chart.safe.map((r, i) => {
+        const up = r.close >= r.open;
+        const color = up ? "#d50000" : "#008000";
+        const yHigh = chart.y(r.high);
+        const yLow = chart.y(r.low);
+        const yOpen = chart.y(r.open);
+        const yClose = chart.y(r.close);
+        const top = Math.min(yOpen, yClose);
+        const bodyH = Math.max(0.8, Math.abs(yClose - yOpen));
+        return (
+          <g key={r.date}>
+            <line x1={chart.x(i)} x2={chart.x(i)} y1={yHigh} y2={yLow} stroke={color} strokeWidth="0.7" />
+            <rect
+              x={chart.x(i) - chart.candleW / 2}
+              y={top}
+              width={chart.candleW}
+              height={bodyH}
+              fill={up ? color : "#ffffff"}
+              stroke={color}
+              strokeWidth="0.7"
+            />
+          </g>
+        );
+      })}
+
+      {/* MA 线（与主图 MA60 同色） */}
+      <path d={chart.maPath} fill="none" stroke="#009688" strokeWidth="1.4" />
+
+      {/* 日期标签 */}
+      {chart.dateTicks.map((t, i) => (
+        <text key={`dt-${i}`} x={t.x} y={TREND_H - 6} fontSize="11" fill="#94a3b8" textAnchor="middle">{t.label}</text>
+      ))}
+
+      {/* MACD：0 轴下方阴影 + 柱 + DIF/DEA */}
+      {chart.difBelowPaths.map((d, i) => (
+        <path key={`mb-${i}`} d={d} fill="#008000" opacity="0.10" />
+      ))}
+      <line x1={TREND_MARGIN.left} x2={TREND_W - TREND_MARGIN.right} y1={chart.zeroY} y2={chart.zeroY} stroke="#dddddd" strokeDasharray="4 4" />
+      {chart.macd.map((m, i) =>
+        Number.isFinite(m.hist) ? (
+          <line
+            key={`h-${i}`}
+            x1={chart.x(i)}
+            x2={chart.x(i)}
+            y1={chart.zeroY}
+            y2={chart.my(m.hist)}
+            stroke={m.hist >= 0 ? "#d50000" : "#008000"}
+            strokeWidth={Math.max(0.8, chart.candleW * 0.5)}
+            opacity="0.75"
+          />
+        ) : null,
+      )}
+      <path d={chart.difPath} fill="none" stroke="#111827" strokeWidth="1.2" />
+      <path d={chart.deaPath} fill="none" stroke="#b59f00" strokeWidth="1.1" />
+
+      {/* 主图图例：指数名（日线）+ 当前 MA 值。白色描边做底，保证压在 K 线上也清晰。 */}
+      <text
+        x={TREND_MARGIN.left + 4}
+        y={TREND_MARGIN.top + 15}
+        fontSize="14"
+        fontWeight="600"
+        stroke="#ffffff"
+        strokeWidth="3"
+        paintOrder="stroke"
+        fill="#334155"
+      >
+        {`${name || ""}（日线）  MA${maPeriod}：${chart.lastMa != null ? chart.lastMa.toFixed(2) : "--"}`}
+      </text>
+
+      {/* MACD 副图图例：参数 + 当前 DIF / DEA / MACD（柱）值。 */}
+      <text x={TREND_MARGIN.left + 4} y={chart.macdTop + 15} fontSize="13" stroke="#ffffff" strokeWidth="3" paintOrder="stroke">
+        <tspan fill="#475569">MACD(12,26,9)　</tspan>
+        <tspan fill="#111827">DIF：{chart.lastMacd?.dif != null ? chart.lastMacd.dif.toFixed(2) : "--"}　</tspan>
+        <tspan fill="#b59f00">DEA：{chart.lastMacd?.dea != null ? chart.lastMacd.dea.toFixed(2) : "--"}　</tspan>
+        <tspan fill="#d50000">MACD：{chart.lastMacd?.hist != null ? chart.lastMacd.hist.toFixed(2) : "--"}</tspan>
+      </text>
+    </svg>
+  );
+}
+
+function IndexTrendCard({ index, tab }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    fetchIndexKline({ secid: index.secid, tencentSymbol: index.tencentSymbol, name: index.name })
+      .then((res) => {
+        if (!cancelled) setData(res);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e?.message || "加载失败");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [index.secid, index.tencentSymbol, index.name]);
+
+  // 展示窗口 + 预热缓冲：多取 maPeriod 根供指标预热，图表内部只渲染最后 displayCount 根，
+  // 这样可见区第一根就有 MA60/MACD 值，MA 线从最左边开始。
+  const displayCount = tab.ma >= 60 ? 250 : 140;
+  const feedRows = useMemo(() => {
+    const all = data?.klines || [];
+    return all.slice(-(displayCount + tab.ma));
+  }, [data, displayCount, tab.ma]);
+
+  const latest = feedRows[feedRows.length - 1];
+
+  // 最新一根是否满足三个多头条件，得出结论徽标。
+  const trend = useMemo(() => evalTrend(data?.klines || [], tab.ma), [data, tab.ma]);
+
+  return (
+    <Card className="rounded-2xl border-slate-200">
+      <CardContent className="p-4">
+        <div className="mb-2 flex items-baseline justify-between">
+          <div className="flex items-baseline gap-2">
+            <span className="text-base font-semibold text-slate-800">{index.name}</span>
+            <span className="text-xs text-slate-400">{index.code}</span>
+            {trend ? (
+              <span
+                className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                  trend.isBull ? "bg-red-50 text-red-600" : "bg-slate-100 text-slate-500"
+                }`}
+                title={`CLOSE>MA${tab.ma}：${trend.c1 ? "✓" : "✗"}　MA${tab.ma} 向上：${trend.c2 ? "✓" : "✗"}　DIF>0：${trend.c3 ? "✓" : "✗"}`}
+              >
+                {trend.isBull ? `${tab.term}多头趋势` : `非${tab.term}多头趋势`}
+              </span>
+            ) : null}
+          </div>
+          {latest ? (
+            <div className="flex items-baseline gap-2">
+              <span className="text-base font-semibold text-slate-800">{latest.close.toFixed(2)}</span>
+              <span className={`text-xs ${latest.pct >= 0 ? "text-red-600" : "text-green-700"}`}>
+                {Number.isFinite(latest.pct) ? `${latest.pct >= 0 ? "+" : ""}${latest.pct.toFixed(2)}%` : "-"}
+              </span>
+            </div>
+          ) : null}
+        </div>
+
+        {/* 三个条件逐项命中情况 */}
+        {trend ? (
+          <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
+            <span className={trend.c1 ? "text-red-600" : ""}>{trend.c1 ? "✓" : "✗"} CLOSE &gt; MA{tab.ma}</span>
+            <span className={trend.c2 ? "text-red-600" : ""}>{trend.c2 ? "✓" : "✗"} MA{tab.ma} &gt; MA{tab.ma}[1]</span>
+            <span className={trend.c3 ? "text-red-600" : ""}>{trend.c3 ? "✓" : "✗"} DIF &gt; 0</span>
+          </div>
+        ) : null}
+
+        {loading ? (
+          <div className="flex h-[360px] items-center justify-center text-sm text-slate-400">加载中…</div>
+        ) : error ? (
+          <div className="flex h-[360px] items-center justify-center px-4 text-center text-sm text-rose-500">{error}</div>
+        ) : (
+          <IndexTrendChart rows={feedRows} maPeriod={tab.ma} displayCount={displayCount} name={index.name} />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function MarketTrendPageLayout() {
+  const [trendTab, setTrendTab] = useState("long");
+  const activeTab = TREND_TABS.find((t) => t.value === trendTab) || TREND_TABS[0];
+
+  return (
+    <div className="space-y-4">
+      <div className="inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
+        {TREND_TABS.map((tab) => {
+          const active = tab.value === trendTab;
+          return (
+            <button
+              key={tab.value}
+              type="button"
+              onClick={() => setTrendTab(tab.value)}
+              className={`whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium transition ${
+                active ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-900"
+              }`}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* 判断条件说明：随子 tab 切换 MA 周期，其余不变 */}
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm leading-relaxed text-slate-600">
+        <div className="mb-1 font-medium text-slate-800">
+          当市场同时满足以下三个条件时，我们认为市场处于{activeTab.term}多头趋势中：
+        </div>
+        <div>1. CLOSE &gt; MA{activeTab.ma}：收盘价在 {activeTab.ma} 日移动平均线之上</div>
+        <div>2. MA{activeTab.ma} &gt; MA{activeTab.ma}[1]：{activeTab.ma} 日均线高于前一天的数值，即向上移动</div>
+        <div>3. DIF &gt; 0：DIF 线在 0 轴之上</div>
+        <div className="mt-1 text-xs text-slate-400">下方每个指数会按上述条件给出当前是否处于{activeTab.term}多头趋势的结论。</div>
+      </div>
+
+      <div className="grid gap-4 2xl:grid-cols-2">
+        {TREND_INDICES.map((index) => (
+          <IndexTrendCard key={index.code} index={index} tab={activeTab} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function FactorResearchPageLayout() {
   const [factorCategory, setFactorCategory] = useState("mature");
 
@@ -4989,9 +5491,10 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
   const [ashareSuggestOpen, setAshareSuggestOpen] = useState(false);
   const [ashareSuggestFocused, setAshareSuggestFocused] = useState(false);
   const [ashareSuggestIndex, setAshareSuggestIndex] = useState(0);
+  // 初始为空：挂载后 loadDefaultWatchlist 会用收藏夹最新 10 只（或随机 5 只）填充。
   const [watchlistInputMap, setWatchlistInputMap] = useState({
-    ashare: "600519,000001,300750",
-    us: "MSFT,AAPL,NVDA",
+    ashare: "",
+    us: "",
   });
   const [watchlistItemsMap, setWatchlistItemsMap] = useState({ ashare: [], us: [] });
   const [watchlistLoading, setWatchlistLoading] = useState(false);
@@ -5026,7 +5529,7 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
   const [showGaps, setShowGaps] = useState(true);
   const [unfilledOnly, setUnfilledOnly] = useState(true);
   const [showWaves, setShowWaves] = useState(false);
-  const [waveSensitivity, setWaveSensitivity] = useState("standard");
+  const [waveSensitivity] = useState("standard");
   const [chartFullscreen, setChartFullscreen] = useState(false);
   const [drawingTool, setDrawingTool] = useState("none");
   const [drawnLines, setDrawnLines] = useState([]);
@@ -5063,6 +5566,8 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
   const latestColor = latest && latest.close >= latest.open ? "text-red-600" : "text-green-700";
   const prediction = useMemo(() => buildTrendPrediction(rawRows), [rawRows]);
   const waveAnalysis = useMemo(() => detectElliottWave(rows, waveSensitivity), [rows, waveSensitivity]);
+  // 这些 tab 是独立页面，没有个股的代码搜索/周期/复权等控件，也不触发自动取数。
+  const isStandaloneMarket = market === "agent" || market === "factor-research" || market === "market-trend";
   const currentCode = market === "us" ? marketCodes.us : marketCodes.ashare;
   const watchlistInput = market === "us" ? watchlistInputMap.us : watchlistInputMap.ashare;
   const favoriteItems = market === "us" ? favoriteItemsMap.us : favoriteItemsMap.ashare;
@@ -5220,7 +5725,7 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
       } finally {
         if (!controller.signal.aborted) setAshareSuggestLoading(false);
       }
-    }, 220);
+    }, 320);
 
     return () => {
       controller.abort();
@@ -5228,10 +5733,40 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
     };
   }, [market, currentCode, ashareSuggestFocused]);
 
-  async function loadWatchlist(targetMarket = market) {
+  // 默认自选填充：优先展示收藏夹最新 10 只，收藏夹为空则从备选池随机取 5 只。
+  async function loadDefaultWatchlist(targetMarket = market) {
     const requestedMarket = targetMarket === "us" ? "us" : targetMarket === "ashare" ? "ashare" : market;
     if (requestedMarket === "agent") return;
-    const rawInput = requestedMarket === "us" ? watchlistInputMap.us : watchlistInputMap.ashare;
+
+    let codes = [];
+    try {
+      const payload = await fetchFavorites({ market: requestedMarket });
+      const favItems = Array.isArray(payload?.items) ? payload.items : [];
+      codes = [...favItems]
+        .sort((a, b) => (Number(b?.createdAt) || 0) - (Number(a?.createdAt) || 0))
+        .map((item) => item?.code)
+        .filter(Boolean)
+        .slice(0, 10);
+    } catch {
+      // 收藏夹读取失败时回落到随机池。
+    }
+
+    if (!codes.length) {
+      const pool = requestedMarket === "us" ? US_FALLBACK_WATCHLIST : ASHARE_FALLBACK_WATCHLIST;
+      codes = pickRandomCodes(pool, 5);
+    }
+
+    // 同步输入框，保证「生成列表」复现一致。
+    setWatchlistInputMap((prev) => ({ ...prev, [requestedMarket]: codes.join(",") }));
+    await loadWatchlist(requestedMarket, codes);
+  }
+
+  async function loadWatchlist(targetMarket = market, codesOverride = null) {
+    const requestedMarket = targetMarket === "us" ? "us" : targetMarket === "ashare" ? "ashare" : market;
+    if (requestedMarket === "agent") return;
+    const rawInput = codesOverride != null
+      ? (Array.isArray(codesOverride) ? codesOverride.join(",") : codesOverride)
+      : (requestedMarket === "us" ? watchlistInputMap.us : watchlistInputMap.ashare);
     const codes = normalizeWatchlistCodes(rawInput, requestedMarket);
 
     if (!codes.length) {
@@ -5405,7 +5940,7 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
   }
 
   async function load(overrideCode) {
-    if (market === "agent" || market === "factor-research") return;
+    if (isStandaloneMarket) return;
     const rawTargetCode = typeof overrideCode === "string" ? overrideCode : currentCode;
     let targetCode = normalizeCodeForMarket(rawTargetCode, market);
     setLoading(true);
@@ -5516,7 +6051,7 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
   }
 
   useEffect(() => {
-    if (market === "agent" || market === "factor-research") return undefined;
+    if (isStandaloneMarket) return undefined;
     const timer = window.setTimeout(() => {
       load();
     }, 0);
@@ -5525,7 +6060,7 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
   }, [market]);
 
   useEffect(() => {
-    if (market === "agent" || market === "factor-research") return undefined;
+    if (isStandaloneMarket) return undefined;
     const timer = window.setTimeout(() => {
       loadFavorites(market);
     }, 0);
@@ -5534,12 +6069,12 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
   }, [market]);
 
   useEffect(() => {
-    if (market === "agent" || market === "factor-research" || watchlistItems.length > 0) return undefined;
+    if (isStandaloneMarket || watchlistItems.length > 0) return undefined;
     const timer = window.setTimeout(() => {
       if (watchlistStyle === "rows") {
         loadRecommendations(market);
       } else {
-        loadWatchlist(market);
+        loadDefaultWatchlist(market);
       }
     }, 0);
     return () => window.clearTimeout(timer);
@@ -5620,7 +6155,7 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
                   <button
                     key={tab.value}
                     type="button"
-                    className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${active ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-900"}`}
+                    className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium transition ${active ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-900"}`}
                     onClick={() => {
                       setMarket(tab.value);
                       setError("");
@@ -5630,7 +6165,7 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
                         setMarketCodes((prev) => ({ ...prev, us: prev.us || "MSFT" }));
                         setRawRows([]);
                         setMeta({ code: marketCodes.us || "MSFT", name: "" });
-                      } else if (tab.value === "agent" || tab.value === "factor-research") {
+                      } else if (tab.value === "agent" || tab.value === "factor-research" || tab.value === "market-trend") {
                         setRawRows([]);
                         setMeta({ code: "", name: "" });
                       }
@@ -5643,7 +6178,7 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-          {market !== "factor-research" && market !== "agent" && <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
+          {!isStandaloneMarket && <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
             <div className="relative col-span-2 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 md:w-56">
               <Search className="h-4 w-4 text-slate-400" />
               <input
@@ -5688,12 +6223,12 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
                       return;
                     }
                   }
-                  if (e.key === "Enter" && market !== "agent" && market !== "factor-research") {
+                  if (e.key === "Enter" && !isStandaloneMarket) {
                     load(e.currentTarget.value);
                   }
                 }}
                 placeholder={market === "ashare" ? "代码 / 简称 / 拼音首字母" : market === "us" ? "如 AAPL" : market === "agent" ? "Agent 功能待接入" : "因子研究页暂不支持代码查询"}
-                disabled={market === "agent" || market === "factor-research"}
+                disabled={isStandaloneMarket}
                 className="w-full bg-transparent outline-none disabled:cursor-not-allowed disabled:text-slate-400"
               />
               {market === "ashare" && (ashareSuggestOpen || ashareSuggestLoading) && (
@@ -5701,7 +6236,8 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
                   {ashareSuggestLoading && !ashareSuggestions.length ? (
                     <div className="px-3 py-2 text-sm text-slate-500">搜索中...</div>
                   ) : (
-                    ashareSuggestions.map((item, index) => {
+                    <>
+                    {ashareSuggestions.map((item, index) => {
                       const active = index === ashareSuggestIndex;
                       return (
                         <button
@@ -5719,22 +6255,21 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
                           <span className="shrink-0 font-mono text-sm">{item.code}</span>
                         </button>
                       );
-                    })
+                    })}
+                    {ashareSuggestLoading && (
+                      <div className="border-t border-slate-100 px-3 py-1.5 text-xs text-slate-400">搜索中...</div>
+                    )}
+                    </>
                   )}
                 </div>
               )}
             </div>
-            <select value={period} onChange={(e) => setPeriod(e.target.value)} disabled={market === "agent" || market === "factor-research"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
+            <select value={period} onChange={(e) => setPeriod(e.target.value)} disabled={isStandaloneMarket} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               {PERIOD_OPTIONS.map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
               ))}
             </select>
-            <select value={adjust} onChange={(e) => setAdjust(e.target.value)} disabled={market === "agent" || market === "factor-research"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
-              {ADJUST_OPTIONS.map((item) => (
-                <option key={item.value} value={item.value}>{item.label}</option>
-              ))}
-            </select>
-            <select value={displayCount} onChange={(e) => setDisplayCount(Number(e.target.value))} disabled={market === "agent" || market === "factor-research"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
+            <select value={displayCount} onChange={(e) => setDisplayCount(Number(e.target.value))} disabled={isStandaloneMarket} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               <option value={30}>近30根</option>
               <option value={45}>近45根</option>
               <option value={60}>近60根</option>
@@ -5743,30 +6278,21 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
               <option value={180}>近180根</option>
               <option value={240}>近240根</option>
             </select>
-            <select value={tdMode} onChange={(e) => setTdMode(e.target.value)} disabled={market === "agent" || market === "factor-research"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
+            <select value={tdMode} onChange={(e) => setTdMode(e.target.value)} disabled={isStandaloneMarket} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               <option value="current">只显示当前九转</option>
               <option value="full">显示全部1~9转</option>
               <option value="ths">同花顺显示逻辑</option>
               <option value="simple">简化连续计数</option>
             </select>
             <label className="flex items-center gap-1 rounded-xl border bg-white px-3 py-2 text-sm">
-              <input type="checkbox" checked={showGaps} disabled={market === "agent" || market === "factor-research"} onChange={(e) => setShowGaps(e.target.checked)} />
+              <input type="checkbox" checked={showGaps} disabled={isStandaloneMarket} onChange={(e) => setShowGaps(e.target.checked)} />
               断层
             </label>
             <label className="flex items-center gap-1 rounded-xl border bg-white px-3 py-2 text-sm">
-              <input type="checkbox" checked={unfilledOnly} disabled={market === "agent" || market === "factor-research"} onChange={(e) => setUnfilledOnly(e.target.checked)} />
+              <input type="checkbox" checked={unfilledOnly} disabled={isStandaloneMarket} onChange={(e) => setUnfilledOnly(e.target.checked)} />
               未回补
             </label>
-            <label className="flex items-center gap-1 rounded-xl border bg-white px-3 py-2 text-sm">
-              <input type="checkbox" checked={showWaves} disabled={market === "agent" || market === "factor-research"} onChange={(e) => setShowWaves(e.target.checked)} />
-              波浪
-            </label>
-            <select value={waveSensitivity} onChange={(e) => setWaveSensitivity(e.target.value)} disabled={market === "agent" || market === "factor-research"} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
-              {WAVE_SENSITIVITY_OPTIONS.map((item) => (
-                <option key={item.value} value={item.value}>{item.label}</option>
-              ))}
-            </select>
-            <Button onClick={() => load()} disabled={loading || market === "agent" || market === "factor-research"} className="rounded-xl">
+            <Button onClick={() => load()} disabled={loading || isStandaloneMarket} className="rounded-xl">
               <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               {loading ? "加载中" : "查询"}
             </Button>
@@ -5804,7 +6330,7 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
           </div>
         )}
 
-        {market !== "agent" && market !== "factor-research" ? (
+        {!isStandaloneMarket ? (
           <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)_320px]">
             <Card className="rounded-2xl">
               <CardContent className="p-4">
@@ -6052,7 +6578,7 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
                 setMarketCodes((prev) => ({ ...prev, [market]: code }));
                 setError("");
                 window.setTimeout(() => {
-                  if (market !== "agent" && market !== "factor-research") load(code);
+                  if (!isStandaloneMarket) load(code);
                 }, 0);
               }}
               onToggleFavorite={(item) => {
@@ -6062,10 +6588,12 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
           </div>
         ) : market === "agent" ? (
           <AgentChatPanel marketCodes={marketCodes} />
+        ) : market === "market-trend" ? (
+          <MarketTrendPageLayout />
         ) : (
           <FactorResearchPageLayout />
         )}
-        {market !== "agent" && market !== "factor-research" && (
+        {!isStandaloneMarket && (
           <FavoritesToolbar
             market={market}
             items={favoriteItems}
@@ -6093,7 +6621,7 @@ export default function AShareTD9InteractiveChart({ onLogout }) {
             onMoveItem={(item, group) => handleMoveFavorite(item, group, market)}
           />
         )}
-        {chartFullscreen && market !== "agent" && market !== "factor-research" && rows.length > 0 && (
+        {chartFullscreen && !isStandaloneMarket && rows.length > 0 && (
           <div className="fixed inset-0 z-50 bg-slate-950/40 p-3 backdrop-blur-sm md:p-5">
             <div className="flex h-full flex-col rounded-2xl bg-white shadow-2xl">
               <div className="flex flex-col gap-3 border-b px-4 py-4 md:flex-row md:items-start md:justify-between md:px-5">
