@@ -141,17 +141,108 @@ async function loadUsQuoteSnapshot(symbol) {
   };
 }
 
-async function loadUsKline({ symbol, period = "101", limit = 600 }) {
-  const normalized = String(symbol || "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9.-]/g, "")
-    .slice(0, 12);
+function periodToTencentKtype(period) {
+  if (String(period) === "102") return "week";
+  if (String(period) === "103") return "month";
+  return "day";
+}
 
-  if (!/^[A-Z][A-Z0-9.-]{0,11}$/.test(normalized)) {
-    throw new Error("Invalid US stock symbol.");
+function adjustToTencentFq(adjust) {
+  if (String(adjust) === "1") return "qfq";
+  if (String(adjust) === "2") return "hfq";
+  return "";
+}
+
+function parseTencentUsRows(arr) {
+  const rows = arr
+    .map((item) => ({
+      date: item[0],
+      open: Number(item[1]),
+      close: Number(item[2]),
+      high: Number(item[3]),
+      low: Number(item[4]),
+      volume: Number(item[5]),
+      amount: 0,
+      amplitude: 0,
+      pct: 0,
+      change: 0,
+      turnover: 0,
+    }))
+    .filter((r) => r.date && [r.open, r.close, r.high, r.low].every(Number.isFinite));
+
+  let prevClose = null;
+  for (const row of rows) {
+    row.change = prevClose !== null ? row.close - prevClose : 0;
+    row.pct = prevClose ? (row.change / prevClose) * 100 : 0;
+    row.amplitude = row.low !== 0 ? ((row.high - row.low) / row.low) * 100 : 0;
+    prevClose = row.close;
+  }
+  return rows;
+}
+
+// Tencent (gtimg) serves US quotes and is reliably reachable from CN-hosted servers,
+// where Nasdaq's Akamai CDN times out and eastmoney's anti-bot WAF resets Node requests.
+// US symbols need an exchange suffix: .OQ = NASDAQ, .N = NYSE, .A = NYSE American.
+async function loadUsKlineFromTencent({ normalized, period, adjust, boundedLimit }) {
+  const ktype = periodToTencentKtype(period);
+  const fq = adjustToTencentFq(adjust);
+  const suffixes = [".OQ", ".N", ".A", ""];
+  const errors = [];
+  let best = null;
+
+  for (const suffix of suffixes) {
+    const sym = `us${normalized}${suffix}`;
+    const param = `${sym},${ktype},,,${boundedLimit}${fq ? `,${fq}` : ""}`;
+    const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${encodeURIComponent(param)}`;
+    try {
+      const res = await fetch(url, {
+        headers: {
+          Accept: "application/json,text/plain,*/*",
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+          Referer: "https://gu.qq.com/",
+        },
+        signal: AbortSignal.timeout(12000),
+      });
+      if (!res.ok) {
+        errors.push(`${sym}: HTTP ${res.status}`);
+        continue;
+      }
+      const payload = await res.json();
+      const node = payload?.data?.[sym];
+      const arr = (fq && Array.isArray(node?.[`${fq}${ktype}`])) ? node[`${fq}${ktype}`] : node?.[ktype];
+      if (!Array.isArray(arr) || arr.length === 0) {
+        errors.push(`${sym}: empty`);
+        continue;
+      }
+      const rows = parseTencentUsRows(arr).slice(-boundedLimit);
+      if (!rows.length) {
+        errors.push(`${sym}: parse failed`);
+        continue;
+      }
+      // The wrong exchange suffix returns a stub (1-2 bars); keep the richest series.
+      if (!best || rows.length > best.klines.length) {
+        const qt = node?.qt?.[sym];
+        const name = qt && qt[1] ? qt[1] : normalized;
+        best = {
+          code: normalized,
+          name,
+          sourceInfo: `Tencent ${sym} ${ktype} ${fq || "raw"} rows=${rows.length}`,
+          klines: rows,
+        };
+      }
+      // A full series is a confident match; stop early.
+      if (best.klines.length >= Math.min(boundedLimit, 20)) break;
+    } catch (e) {
+      errors.push(`${sym}: ${e?.message || e}`);
+    }
   }
 
-  const boundedLimit = Math.min(Math.max(Number(limit) || 600, 30), 2000);
+  if (best) return best;
+  throw new Error(`tencent US source failed: ${errors.slice(-3).join("; ")}`);
+}
+
+async function loadUsKlineFromNasdaq({ normalized, period, boundedLimit }) {
   const now = new Date();
   const from = formatDate(addYears(now, -8));
   const to = formatDate(now);
@@ -235,6 +326,33 @@ async function loadUsKline({ symbol, period = "101", limit = 600 }) {
   };
 }
 
+async function loadUsKline({ symbol, period = "101", limit = 600, adjust = "1" }) {
+  const normalized = String(symbol || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9.-]/g, "")
+    .slice(0, 12);
+
+  if (!/^[A-Z][A-Z0-9.-]{0,11}$/.test(normalized)) {
+    throw new Error("Invalid US stock symbol.");
+  }
+
+  const boundedLimit = Math.min(Math.max(Number(limit) || 600, 30), 2000);
+
+  // Prefer Tencent (reliable from CN servers); fall back to Nasdaq if it is empty/unreachable.
+  try {
+    return await loadUsKlineFromTencent({ normalized, period, adjust, boundedLimit });
+  } catch (tencentError) {
+    try {
+      return await loadUsKlineFromNasdaq({ normalized, period, boundedLimit });
+    } catch (nasdaqError) {
+      throw new Error(
+        `US kline unavailable. tencent: ${tencentError?.message || tencentError}; ` +
+          `nasdaq: ${nasdaqError?.message || nasdaqError}`,
+      );
+    }
+  }
+}
+
 export function createUsKlineHandler() {
   return async function usKlineHandler(req, res) {
     try {
@@ -243,6 +361,7 @@ export function createUsKlineHandler() {
         symbol: requestUrl.searchParams.get("symbol") || "",
         period: requestUrl.searchParams.get("period") || "101",
         limit: requestUrl.searchParams.get("limit") || "600",
+        adjust: requestUrl.searchParams.get("adjust") || "1",
       });
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
