@@ -10,6 +10,8 @@ import { createFavoritesHandler, createFavoriteGroupsHandler } from "./server/fa
 import { createFavoritesBacktestHandler } from "./server/favoritesBacktestHandler.js";
 import { createRedisRecommendationsHandler } from "./server/redisHandlers.js";
 import { createUsKlineHandler } from "./server/usKline.js";
+import { createKlineForecastHandler } from "./server/klineForecast.js";
+import { createBoardFundflowHandler } from "./server/boardFundflow.js";
 import { createMacdFactorReturnsHandler } from "./server/macdFactorHandler.js";
 import { createMacdFactorDetailHandler } from "./server/macdFactorDetailHandler.js";
 import { createFactorsHandler } from "./server/factorsHandler.js";
@@ -21,6 +23,8 @@ import { authMiddleware } from "./server/authMiddleware.js";
 function usKlinePlugin() {
   loadServerEnv();
   const handler = createUsKlineHandler();
+  const klineForecastHandler = createKlineForecastHandler();
+  const boardFundflowHandler = createBoardFundflowHandler();
   const ashareFinanceHandler = createAshareFinanceHandler();
   const ashareProfileHandler = createAshareProfileHandler();
   const ashareSearchHandler = createAshareSearchHandler();
@@ -39,6 +43,8 @@ function usKlinePlugin() {
     middlewares.use("/api/auth", authHandler);
     middlewares.use("/api", authMiddleware);
     middlewares.use("/api/us-kline", handler);
+    middlewares.use("/api/kline-forecast", klineForecastHandler);
+    middlewares.use("/api/board-fundflow", boardFundflowHandler);
     middlewares.use("/api/ashare-finance", ashareFinanceHandler);
     middlewares.use("/api/ashare-profile", ashareProfileHandler);
     middlewares.use("/api/ashare-search", ashareSearchHandler);
