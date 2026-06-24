@@ -399,40 +399,90 @@ async function computeTodayMarket() {
   return { date, ...panels, history, updatedAt: new Date().toISOString() };
 }
 
+// ===== 盘面快照缓存（stale-while-revalidate）=====
+// 全市场快照重算要 10~45s，纯靠 TTL 缓存的话每次过期都会有人吃满这段慢加载。
+// 这里改成「新鲜期内直接给缓存，过了新鲜期仍先给旧数据、后台静默重算」，
+// 配一层进程内内存兜底（Redis 不可用时也能快）+ 单飞锁（并发只触发一次重算）。
+const CACHE_KEY = "today-market:v1";
+const CACHE_TS_KEY = "today-market:v1:ts"; // 缓存写入时刻（ms），用于判断新鲜/陈旧。
+const FRESH_MS = 10 * 60 * 1000; // 10 分钟内直接返回缓存，不重算。
+const STALE_MS = 30 * 60 * 1000; // 10~30 分钟返回旧数据并后台刷新；超过则当作冷启动同步重算。
+const REDIS_TTL_SEC = Math.round(STALE_MS / 1000);
+
+let memEntry = null; // { body, cachedAt } —— 进程内缓存，Redis 不可用时兜底。
+let refreshing = null; // 单飞：进行中的重算 Promise，避免并发重复打外部接口。
+
+// 读缓存：先看进程内，再回落 Redis（顺带把 Redis 命中回填到内存，缩短后续判断）。
+async function readCache(redis) {
+  if (memEntry) return memEntry;
+  if (!redis) return null;
+  try {
+    const [body, ts] = await Promise.all([redis.get(CACHE_KEY), redis.get(CACHE_TS_KEY)]);
+    if (!body) return null;
+    memEntry = { body, cachedAt: Number(ts) || 0 };
+    return memEntry;
+  } catch {
+    return null;
+  }
+}
+
+// 重算并写两级缓存。单飞：已有重算在跑就复用同一个 Promise。
+function refreshCache(redis) {
+  if (refreshing) return refreshing;
+  refreshing = (async () => {
+    const payload = await computeTodayMarket();
+    const body = JSON.stringify(payload);
+    memEntry = { body, cachedAt: Date.now() };
+    if (redis) {
+      try {
+        await Promise.all([
+          redis.set(CACHE_KEY, body, { EX: REDIS_TTL_SEC }),
+          redis.set(CACHE_TS_KEY, String(memEntry.cachedAt), { EX: REDIS_TTL_SEC }),
+        ]);
+      } catch {
+        // 缓存写失败不影响返回。
+      }
+    }
+    return body;
+  })().finally(() => {
+    refreshing = null;
+  });
+  return refreshing;
+}
+
 export function createTodayMarketHandler() {
   return async function todayMarketHandler(req, res) {
-    const cacheKey = "today-market:v1";
+    const sendJson = (status, body) => {
+      res.statusCode = status;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(body);
+    };
+
     let redis = null;
     try {
       redis = await getRedisClient();
-      const cached = await redis.get(cacheKey);
-      if (cached) {
-        res.statusCode = 200;
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(cached);
-        return;
-      }
     } catch {
-      // Redis 不可用（连接失败或 get 出错）则退化为实时计算，下面写缓存也会被 if (redis) 跳过。
+      // Redis 不可用则只走进程内内存缓存兜底。
     }
 
-    try {
-      const payload = await computeTodayMarket();
-      const body = JSON.stringify(payload);
-      if (redis) {
-        try {
-          await redis.set(cacheKey, body, { EX: 300 }); // 盘面快照缓存 5 分钟。
-        } catch {
-          // 缓存写失败不影响返回。
-        }
+    const entry = await readCache(redis);
+    if (entry) {
+      const age = Date.now() - entry.cachedAt;
+      if (age < STALE_MS) {
+        // 还在陈旧窗口内：直接返回（可能略旧）。超过新鲜期则后台静默刷新，下次就是新数据。
+        if (age >= FRESH_MS) refreshCache(redis).catch(() => {});
+        sendJson(200, entry.body);
+        return;
       }
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(body);
+    }
+
+    // 冷启动或缓存已彻底过期：只能同步等这次重算（单飞复用）。
+    try {
+      sendJson(200, await refreshCache(redis));
     } catch (error) {
-      res.statusCode = 502;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify({ error: error?.message || String(error) }));
+      // 重算失败时，若还有可用的旧缓存，宁可返回旧数据也别报错。
+      if (entry) sendJson(200, entry.body);
+      else sendJson(502, JSON.stringify({ error: error?.message || String(error) }));
     }
   };
 }
