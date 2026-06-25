@@ -1,0 +1,84 @@
+{
+  "version": "locked-2026-06-25",
+  "_note": "停牌预警规则配置。阈值/指数均已对交易所现行原文锁定，依据见 docs/suspension-alert-rules.md。",
+  "deviationFormula": "(stockClose_end / stockPrevClose_start - 1) * 100 - (indexClose_end / indexPrevClose_start - 1) * 100",
+  "calc": {
+    "priceBasis": "no-adjust",
+    "windowUnit": "trading-days",
+    "skipSuspendedDays": true,
+    "_deviationDef": "收盘价涨跌幅偏离值 = 单只证券涨跌幅 - 对应分类指数涨跌幅（整段窗口一次算）"
+  },
+  "resetRule": "严重异常波动/异常波动指标自交易所公布的次一交易日或复牌之日起重新计算（『最近一轮』需持久化上一次触发日）",
+  "riskTiers": {
+    "approachRatio": 0.8,
+    "levels": ["normal", "near_abnormal", "abnormal_or_near_serious", "serious", "announced_suspend"]
+  },
+  "stThresholdChange": {
+    "effectiveDate": "2026-07-06",
+    "_reason": "主板风险警示股（ST/*ST）涨跌幅限制由5%调整为10%，自2026-07-06实施，异动偏离值阈值随之由±12%调整为±20%"
+  },
+  "boards": {
+    "SH_MAIN": {
+      "label": "沪市主板",
+      "codePrefixes": ["60"],
+      "benchmarkIndex": { "name": "上证指数", "code": "000001" },
+      "abnormal": {
+        "windowDays": 3,
+        "deviationPct": 20,
+        "stDeviationPct": { "value": 12, "changesTo": 20, "effectiveDate": "2026-07-06" },
+        "turnoverRatioX": 30,
+        "cumTurnoverPct": 20
+      },
+      "serious": {
+        "dev10": { "up": 100, "down": -50 },
+        "dev30": { "up": 200, "down": -70 },
+        "sameDirAbnormalCount": { "windowDays": 10, "count": 4, "_each": "一次 = 一轮3日±20%同向异常波动" }
+      }
+    },
+    "SZ_MAIN": {
+      "label": "深市主板",
+      "codePrefixes": ["000", "001", "002", "003"],
+      "benchmarkIndex": { "name": "深证A股指数", "code": "399107" },
+      "abnormal": {
+        "windowDays": 3,
+        "deviationPct": 20,
+        "stDeviationPct": { "value": 12, "changesTo": 20, "effectiveDate": "2026-07-06" },
+        "turnoverRatioX": 30,
+        "cumTurnoverPct": 20
+      },
+      "serious": {
+        "dev10": { "up": 100, "down": -50 },
+        "dev30": { "up": 200, "down": -70 },
+        "sameDirAbnormalCount": { "windowDays": 10, "count": 4, "_each": "一次 = 一轮3日±20%同向异常波动" }
+      }
+    },
+    "STAR": {
+      "label": "科创板",
+      "codePrefixes": ["688"],
+      "benchmarkIndex": { "name": "上证科创板50成份指数（科创50）", "code": "000688" },
+      "abnormal": { "windowDays": 3, "deviationPct": 30, "turnoverRatioX": 30, "cumTurnoverPct": 20 },
+      "serious": {
+        "dev10": { "up": 100, "down": -50 },
+        "dev30": { "up": 200, "down": -70 },
+        "sameDirAbnormalCount": { "windowDays": 10, "count": 3, "_each": "一次 = 一轮3日±30%同向异常波动" }
+      }
+    },
+    "CHINEXT": {
+      "label": "创业板",
+      "codePrefixes": ["300", "301"],
+      "benchmarkIndex": { "name": "创业板综合指数", "code": "399102" },
+      "abnormal": { "windowDays": 3, "deviationPct": 30, "turnoverRatioX": 30, "cumTurnoverPct": 20 },
+      "serious": {
+        "dev10": { "up": 100, "down": -50 },
+        "dev30": { "up": 200, "down": -70 },
+        "sameDirAbnormalCount": { "windowDays": 10, "count": 3, "_each": "一次 = 一轮3日±30%同向异常波动" }
+      }
+    },
+    "BSE": {
+      "label": "北交所",
+      "codePrefixes": ["8", "4", "920"],
+      "status": "TODO_separate_ruleset",
+      "_note": "北交所规则不同（涨跌幅30%等），需单独建表，勿套沪深。自选含北交所时单独提示。"
+    }
+  }
+}
