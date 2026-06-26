@@ -326,6 +326,40 @@ async function loadUsKlineFromNasdaq({ normalized, period, boundedLimit }) {
   };
 }
 
+// Tencent's qt.gtimg.cn quote line uses the SAME field layout for US stocks as A-shares:
+// [38]=turnover rate %, [39]=PE (TTM), [44]=float market cap (亿), [45]=total market cap (亿).
+// Market-cap fields are in 亿 (1e8) USD; multiply to get absolute dollars.
+// NOTE: this endpoint resolves the bare `usSYMBOL` form (no .OQ/.N suffix) and returns GBK text.
+async function loadUsQuoteMeta(normalized) {
+  const res = await fetch(`https://qt.gtimg.cn/q=us${normalized}`, {
+    headers: {
+      Accept: "text/plain,*/*",
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+      Referer: "https://gu.qq.com/",
+    },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`Tencent quote HTTP ${res.status}`);
+
+  // GBK-encoded; a Chinese name byte can be 0x7E (~), so decode before splitting on ~.
+  const text = new TextDecoder("gbk").decode(await res.arrayBuffer());
+  const body = text.match(/"([^"]*)"/)?.[1];
+  const fields = body ? body.split("~") : [];
+  if (fields.length < 46) throw new Error("Tencent quote unavailable"); // e.g. v_pv_none_match
+
+  const turnoverRate = Number(fields[38]);
+  const peRatio = Number(fields[39]);
+  const floatCapYi = Number(fields[44]);
+  const totalCapYi = Number(fields[45]);
+  return {
+    marketCap: Number.isFinite(totalCapYi) ? totalCapYi * 1e8 : null,
+    floatMarketCap: Number.isFinite(floatCapYi) ? floatCapYi * 1e8 : null,
+    peRatio: Number.isFinite(peRatio) ? peRatio : null,
+    turnoverRate: Number.isFinite(turnoverRate) ? turnoverRate : null,
+  };
+}
+
 async function loadUsKline({ symbol, period = "101", limit = 600, adjust = "1" }) {
   const normalized = String(symbol || "")
     .toUpperCase()
@@ -339,18 +373,35 @@ async function loadUsKline({ symbol, period = "101", limit = 600, adjust = "1" }
   const boundedLimit = Math.min(Math.max(Number(limit) || 600, 30), 2000);
 
   // Prefer Tencent (reliable from CN servers); fall back to Nasdaq if it is empty/unreachable.
-  try {
-    return await loadUsKlineFromTencent({ normalized, period, adjust, boundedLimit });
-  } catch (tencentError) {
+  const klinePromise = (async () => {
     try {
-      return await loadUsKlineFromNasdaq({ normalized, period, boundedLimit });
-    } catch (nasdaqError) {
-      throw new Error(
-        `US kline unavailable. tencent: ${tencentError?.message || tencentError}; ` +
-          `nasdaq: ${nasdaqError?.message || nasdaqError}`,
-      );
+      return await loadUsKlineFromTencent({ normalized, period, adjust, boundedLimit });
+    } catch (tencentError) {
+      try {
+        return await loadUsKlineFromNasdaq({ normalized, period, boundedLimit });
+      } catch (nasdaqError) {
+        throw new Error(
+          `US kline unavailable. tencent: ${tencentError?.message || tencentError}; ` +
+            `nasdaq: ${nasdaqError?.message || nasdaqError}`,
+          { cause: nasdaqError },
+        );
+      }
     }
-  }
+  })();
+
+  // Market-cap/PE/turnover are best-effort: never let a quote miss break the kline response.
+  const [base, meta] = await Promise.all([
+    klinePromise,
+    loadUsQuoteMeta(normalized).catch(() => null),
+  ]);
+
+  return {
+    ...base,
+    marketCap: meta?.marketCap ?? null,
+    floatMarketCap: meta?.floatMarketCap ?? null,
+    peRatio: meta?.peRatio ?? null,
+    turnoverRate: meta?.turnoverRate ?? null,
+  };
 }
 
 export function createUsKlineHandler() {

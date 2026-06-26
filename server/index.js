@@ -9,6 +9,7 @@ import { createFavoritesHandler, createFavoriteGroupsHandler } from "./favorites
 import { createFavoritesBacktestHandler } from "./favoritesBacktestHandler.js";
 import { createRedisRecommendationsHandler } from "./redisHandlers.js";
 import { createUsKlineHandler } from "./usKline.js";
+import { createUsProfileHandler } from "./usProfile.js";
 import { createKlineForecastHandler } from "./klineForecast.js";
 import { createBoardFundflowHandler } from "./boardFundflow.js";
 import { createTodayMarketHandler } from "./todayMarket.js";
@@ -37,6 +38,7 @@ app.use("/api/auth", createAuthHandler());
 app.use("/api", authMiddleware);
 
 app.get("/api/us-kline", createUsKlineHandler());
+app.get("/api/us-profile", createUsProfileHandler());
 app.post("/api/kline-forecast", createKlineForecastHandler());
 app.get("/api/board-fundflow", createBoardFundflowHandler());
 app.get("/api/today-market", createTodayMarketHandler());

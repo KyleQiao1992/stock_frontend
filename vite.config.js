@@ -10,6 +10,7 @@ import { createFavoritesHandler, createFavoriteGroupsHandler } from "./server/fa
 import { createFavoritesBacktestHandler } from "./server/favoritesBacktestHandler.js";
 import { createRedisRecommendationsHandler } from "./server/redisHandlers.js";
 import { createUsKlineHandler } from "./server/usKline.js";
+import { createUsProfileHandler } from "./server/usProfile.js";
 import { createKlineForecastHandler } from "./server/klineForecast.js";
 import { createBoardFundflowHandler } from "./server/boardFundflow.js";
 import { createTodayMarketHandler } from "./server/todayMarket.js";
@@ -25,6 +26,7 @@ import { authMiddleware } from "./server/authMiddleware.js";
 function usKlinePlugin() {
   loadServerEnv();
   const handler = createUsKlineHandler();
+  const usProfileHandler = createUsProfileHandler();
   const klineForecastHandler = createKlineForecastHandler();
   const boardFundflowHandler = createBoardFundflowHandler();
   const todayMarketHandler = createTodayMarketHandler();
@@ -47,6 +49,7 @@ function usKlinePlugin() {
     middlewares.use("/api/auth", authHandler);
     middlewares.use("/api", authMiddleware);
     middlewares.use("/api/us-kline", handler);
+    middlewares.use("/api/us-profile", usProfileHandler);
     middlewares.use("/api/kline-forecast", klineForecastHandler);
     middlewares.use("/api/board-fundflow", boardFundflowHandler);
     middlewares.use("/api/today-market", todayMarketHandler);
