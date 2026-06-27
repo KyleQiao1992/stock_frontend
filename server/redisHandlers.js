@@ -21,9 +21,12 @@ async function enrichAShareNames(items) {
 }
 
 function normalizeRecommendationFactor(value) {
+  // Factor names come from factor_dim (e.g. "factor1", "amihud_20"): lowercase
+  // identifiers of letters/digits/underscores that start with a letter. The
+  // pattern stays strict to keep arbitrary strings out of the Redis key.
   const factor = String(value || "").trim().toLowerCase();
-  if (!/^factor[1-9]\d*$/.test(factor)) {
-    throw new Error("Invalid factor. Expected factorN (N >= 1).");
+  if (!/^[a-z][a-z0-9_]{0,63}$/.test(factor)) {
+    throw new Error("Invalid factor. Expected a factor_dim name (e.g. factor1, amihud_20).");
   }
   return factor;
 }
@@ -44,8 +47,8 @@ function normalizeRecommendationMarketSuffix(value) {
 }
 
 function assertAllowedRecommendationKey(key) {
-  if (/^factor[1-9]\d*_(cn|us)_\d{8}$/.test(key)) return;
-  throw new Error("Invalid recommendation key. Expected factorN_cn_YYYYMMDD (N >= 1).");
+  if (/^[a-z][a-z0-9_]{0,63}_(cn|us)_\d{8}$/.test(key)) return;
+  throw new Error("Invalid recommendation key. Expected <factor>_(cn|us)_YYYYMMDD.");
 }
 
 export async function readRedisValue(client, key) {
