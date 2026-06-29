@@ -203,15 +203,18 @@ function countSameDirAbnormal(rows, idxByDate, threshold, windowDays) {
   const L = rows.length;
   let up = 0;
   let down = 0;
-  let prevTriggered = 0; // 0 无 / 1 涨向 / -1 跌向
   const from = Math.max(3, L - windowDays);
-  for (let i = from; i < L; i += 1) {
+  const dirAt = (i) => {
     const d = dev3At(rows, idxByDate, i);
-    let cur = 0;
-    if (Number.isFinite(d)) {
-      if (d >= threshold) cur = 1;
-      else if (d <= -threshold) cur = -1;
-    }
+    if (!Number.isFinite(d)) return 0; // 0 无 / 1 涨向 / -1 跌向
+    if (d >= threshold) return 1;
+    if (d <= -threshold) return -1;
+    return 0;
+  };
+  // 用窗口左边界前一天的状态播种，避免把跨边界延续的同一轮触发误计成窗口内新发生的一次。
+  let prevTriggered = dirAt(from - 1);
+  for (let i = from; i < L; i += 1) {
+    const cur = dirAt(i);
     if (cur !== 0 && cur !== prevTriggered) {
       if (cur > 0) up += 1;
       else down += 1;
@@ -301,6 +304,7 @@ async function computeRisk(code, passedName = "") {
   const announced = feed[code] || null;
 
   let level;
+  let levelLabel = null; // 橙色档按 abnormalHit/nearSerious 动态命名，其余走 LEVEL_META 默认
   if (announced) {
     level = "announced_suspend";
     reasons.push(
@@ -313,6 +317,7 @@ async function computeRisk(code, passedName = "") {
     reasons.push(`已达严重异常波动 → 高停牌核查风险：${seriousHits.join("；")}`);
   } else if (abnormalHit || nearSerious) {
     level = "abnormal_or_near_serious";
+    levelLabel = abnormalHit ? "已触发异常波动" : "接近严重异常波动";
     if (abnormalHit) reasons.push(`已触发异常波动：近3日累计偏离${fmt(dev3)}（阈值±${abnThreshold}%）`);
     if (nearSerious) reasons.push(`接近严重异常波动（10日${fmt(dev10)} / 30日${fmt(dev30)} / 同向${eventCount}次）`);
   } else if (nearAbnormal) {
@@ -330,7 +335,7 @@ async function computeRisk(code, passedName = "") {
     board: board.label,
     isST,
     level,
-    levelLabel: meta.label,
+    levelLabel: levelLabel || meta.label,
     color: meta.color,
     rank: meta.rank,
     asOf: stock.rows[stock.rows.length - 1].date,
