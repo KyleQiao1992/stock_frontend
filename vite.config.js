@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { loadServerEnv } from "./server/env.js";
 import { createAshareFinanceHandler } from "./server/ashareFinance.js";
+import { createAshareFundFlowHandler } from "./server/ashareFundFlow.js";
 import { createAshareProfileHandler } from "./server/ashareProfile.js";
 import { createAshareSearchHandler } from "./server/ashareSearch.js";
 import { createFavoritesHandler, createFavoriteGroupsHandler } from "./server/favoritesHandlers.js";
@@ -32,6 +33,7 @@ function usKlinePlugin() {
   const todayMarketHandler = createTodayMarketHandler();
   const suspensionAlertHandler = createSuspensionAlertHandler();
   const ashareFinanceHandler = createAshareFinanceHandler();
+  const ashareFundFlowHandler = createAshareFundFlowHandler();
   const ashareProfileHandler = createAshareProfileHandler();
   const ashareSearchHandler = createAshareSearchHandler();
   const redisRecommendationsHandler = createRedisRecommendationsHandler();
@@ -55,6 +57,7 @@ function usKlinePlugin() {
     middlewares.use("/api/today-market", todayMarketHandler);
     middlewares.use("/api/suspension-alert", suspensionAlertHandler);
     middlewares.use("/api/ashare-finance", ashareFinanceHandler);
+    middlewares.use("/api/ashare-fund-flow", ashareFundFlowHandler);
     middlewares.use("/api/ashare-profile", ashareProfileHandler);
     middlewares.use("/api/ashare-search", ashareSearchHandler);
     middlewares.use("/api/recommendations", redisRecommendationsHandler);
