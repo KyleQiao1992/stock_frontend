@@ -1,6 +1,7 @@
 import { Component, useState } from "react";
 import AShareTD9InteractiveChart from "./components/AShareTD9InteractiveChart";
 import LoginPage from "./components/LoginPage";
+import { useTheme } from "./theme";
 
 class AppErrorBoundary extends Component {
   constructor(props) {
@@ -21,7 +22,7 @@ class AppErrorBoundary extends Component {
       const message = this.state.error instanceof Error ? this.state.error.message : "页面渲染异常";
 
       return (
-        <div className="min-h-screen bg-slate-50 p-6 text-slate-900">
+        <div className="min-h-screen bg-canvas p-6 text-slate-900">
           <div className="mx-auto max-w-xl rounded-2xl border border-red-200 bg-red-50 p-5 text-red-800 shadow-sm">
             <div className="text-lg font-semibold">页面遇到异常</div>
             <div className="mt-2 text-sm leading-6">
@@ -52,6 +53,7 @@ function getStoredAuth() {
 
 export default function App() {
   const [auth, setAuth] = useState(() => getStoredAuth());
+  const { preference: themePreference, setPreference: setThemePreference } = useTheme();
 
   function handleLogout() {
     localStorage.removeItem("token");
@@ -66,7 +68,11 @@ export default function App() {
 
   return (
     <AppErrorBoundary>
-      <AShareTD9InteractiveChart onLogout={handleLogout} />
+      <AShareTD9InteractiveChart
+        onLogout={handleLogout}
+        themePreference={themePreference}
+        onThemeChange={setThemePreference}
+      />
     </AppErrorBoundary>
   );
 }

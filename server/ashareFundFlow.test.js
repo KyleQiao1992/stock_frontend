@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  isPartialRow,
   parseEastmoneyDataPcPayload,
   parseEastmoneyFundFlowPayload,
   parseStockDdxHtml,
+  settledPayload,
 } from "./ashareFundFlow.js";
 
 test("maps the AKShare-compatible Eastmoney field order", () => {
@@ -86,4 +88,88 @@ test("maps the Eastmoney DataPC historical response and sorts it by date", () =>
   assert.equal(result.latest.smallNetAmount, 17_114_900);
   assert.equal(result.latest.smallNetRatio, 6.27);
   assert.equal(result.rows[0].mainNetAmount, -30_000_000);
+});
+
+test("flags an unsettled session but not a closed one", () => {
+  const row = { date: "2026-08-18" };
+  // 14:30 Shanghai on the same trading day: the daily figure is still moving.
+  assert.equal(isPartialRow(row, new Date("2026-08-18T06:30:00Z")), true);
+  // 15:30 Shanghai: settled.
+  assert.equal(isPartialRow(row, new Date("2026-08-18T07:30:00Z")), false);
+  // A previous trading day is settled regardless of the clock.
+  assert.equal(isPartialRow({ date: "2026-08-17" }, new Date("2026-08-18T06:30:00Z")), false);
+  assert.equal(isPartialRow(null, new Date("2026-08-18T06:30:00Z")), false);
+});
+
+test("reports how many rows actually back each window", () => {
+  const payload = {
+    data: { klines: ["2026-07-21,100,20,30,40,60,1.5,0.3,0.4,0.5,0.8,12.34,2.1,0,0"] },
+  };
+
+  const result = parseEastmoneyFundFlowPayload(payload, "600519", 30);
+  assert.equal(result.summary.fiveDay.sampleSize, 1);
+  assert.equal(result.summary.fiveDay.complete, false);
+  assert.equal(result.summary.tenDay.complete, false);
+  assert.equal(result.asOfDate, "2026-07-21");
+});
+
+test("reports missing amounts as null rather than a flat zero", () => {
+  const html = `
+    <table>
+      <tr><th>日期</th><th>DDX</th><th>DDY</th><th>DDZ</th><th>BBD(万元)</th></tr>
+      <tr><td>2026-07-21</td><td>0.12</td><td>-0.23</td><td>4.56</td><td>1,234.5万元</td></tr>
+    </table>
+  `;
+
+  const result = parseStockDdxHtml(html, "600519", 30);
+  assert.equal(result.summary.fiveDay.mainNetAmount, null);
+  assert.equal(result.summary.fiveDay.smallNetAmount, null);
+  assert.equal(result.summary.retailTrend, null);
+});
+
+test("declares which metric family the payload actually carries", () => {
+  const primary = parseEastmoneyFundFlowPayload(
+    { data: { klines: ["2026-07-21,100,20,30,40,60,1.5,0.3,0.4,0.5,0.8,12.34,2.1,0,0"] } },
+    "600519",
+    30,
+  );
+  assert.equal(primary.metrics.dde.available, false);
+  assert.equal(primary.metrics.retailProxy.available, true);
+  assert.equal(primary.latest.dde, null);
+
+  const fallback = parseStockDdxHtml(
+    `<table>
+      <tr><th>日期</th><th>DDX</th><th>DDY</th><th>DDZ</th><th>BBD(万元)</th></tr>
+      <tr><td>2026-07-21</td><td>0.12</td><td>-0.23</td><td>4.56</td><td>1,234.5万元</td></tr>
+    </table>`,
+    "600519",
+    30,
+  );
+  assert.equal(fallback.metrics.dde.available, true);
+  assert.equal(fallback.metrics.retailProxy.available, false);
+});
+
+test("drops the intraday row before it reaches the long-lived cache", () => {
+  const payload = {
+    code: "003036",
+    source: { key: "akshare-eastmoney", name: "AKShare / 东方财富", mode: "primary" },
+    fallbackUsed: false,
+    partial: true,
+    rows: [
+      { date: "2026-08-17", smallNetAmount: -33_982_552, partial: false },
+      { date: "2026-08-18", smallNetAmount: 15_065_373, partial: true },
+    ],
+  };
+
+  const settled = settledPayload(payload);
+  assert.equal(settled.rows.length, 1);
+  assert.equal(settled.asOfDate, "2026-08-17");
+  assert.equal(settled.partial, false);
+  assert.equal(settled.summary.fiveDay.smallNetAmount, -33_982_552);
+
+  // A settled payload passes through untouched, and a single unsettled row
+  // leaves nothing worth keeping.
+  const closed = { ...payload, partial: false };
+  assert.equal(settledPayload(closed), closed);
+  assert.equal(settledPayload({ ...payload, rows: [payload.rows[1]] }), null);
 });

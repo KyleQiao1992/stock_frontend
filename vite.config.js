@@ -15,6 +15,7 @@ import { createUsProfileHandler } from "./server/usProfile.js";
 import { createKlineForecastHandler } from "./server/klineForecast.js";
 import { createBoardFundflowHandler } from "./server/boardFundflow.js";
 import { createTodayMarketHandler } from "./server/todayMarket.js";
+import { createMarketHeatmapHandler } from "./server/marketHeatmap.js";
 import { createSuspensionAlertHandler } from "./server/suspensionAlert.js";
 import { createMacdFactorReturnsHandler } from "./server/macdFactorHandler.js";
 import { createMacdFactorDetailHandler } from "./server/macdFactorDetailHandler.js";
@@ -31,6 +32,7 @@ function usKlinePlugin() {
   const klineForecastHandler = createKlineForecastHandler();
   const boardFundflowHandler = createBoardFundflowHandler();
   const todayMarketHandler = createTodayMarketHandler();
+  const marketHeatmapHandler = createMarketHeatmapHandler();
   const suspensionAlertHandler = createSuspensionAlertHandler();
   const ashareFinanceHandler = createAshareFinanceHandler();
   const ashareFundFlowHandler = createAshareFundFlowHandler();
@@ -55,6 +57,7 @@ function usKlinePlugin() {
     middlewares.use("/api/kline-forecast", klineForecastHandler);
     middlewares.use("/api/board-fundflow", boardFundflowHandler);
     middlewares.use("/api/today-market", todayMarketHandler);
+    middlewares.use("/api/market-heatmap", marketHeatmapHandler);
     middlewares.use("/api/suspension-alert", suspensionAlertHandler);
     middlewares.use("/api/ashare-finance", ashareFinanceHandler);
     middlewares.use("/api/ashare-fund-flow", ashareFundFlowHandler);

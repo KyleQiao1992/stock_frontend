@@ -12,6 +12,11 @@ const PRIMARY_CACHE_SECONDS = 300;
 const STALE_CACHE_SECONDS = 45 * 86400;
 const memoryCache = new Map();
 
+const MARKET_TIME_ZONE = "Asia/Shanghai";
+// A-share sessions close at 15:00; Eastmoney needs a few minutes to settle the
+// final daily figure, so anything earlier is still an intraday snapshot.
+const MARKET_SETTLED_MINUTES = 15 * 60 + 5;
+
 const FETCH_HEADERS = {
   Accept: "application/json,text/plain,*/*",
   "User-Agent":
@@ -49,15 +54,51 @@ function parseAmountText(value) {
 }
 
 function sumFinite(rows, key) {
-  return rows.reduce((total, row) => {
+  // Returns null rather than 0 when nothing contributed, so "no data" cannot be
+  // read as "flat".
+  let total = null;
+  for (const row of rows) {
     const value = row?.[key];
-    return Number.isFinite(value) ? total + value : total;
-  }, 0);
+    if (Number.isFinite(value)) total = (total ?? 0) + value;
+  }
+  return total;
 }
 
 function averageFinite(rows, key) {
   const values = rows.map((row) => row?.[key]).filter(Number.isFinite);
   return values.length ? values.reduce((total, value) => total + value, 0) / values.length : null;
+}
+
+const MARKET_CLOCK = new Intl.DateTimeFormat("en-CA", {
+  timeZone: MARKET_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+function marketClock(now) {
+  const parts = Object.fromEntries(
+    MARKET_CLOCK.formatToParts(now).map((part) => [part.type, part.value]),
+  );
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    minutes: (Number(parts.hour) % 24) * 60 + Number(parts.minute),
+  };
+}
+
+// The newest row keeps moving while the session is open, so it must never be
+// presented - or cached long-term - as a settled daily figure.
+export function isPartialRow(row, now = new Date()) {
+  if (!row?.date) return false;
+  const clock = marketClock(now);
+  return row.date === clock.date && clock.minutes < MARKET_SETTLED_MINUTES;
+}
+
+function errorMessage(error) {
+  return error?.message || String(error);
 }
 
 function trendFromAmount(value) {
@@ -227,40 +268,82 @@ export function parseStockDdxHtml(html, code, limit = 30) {
   });
 }
 
-function buildFundFlowPayload({ code, rows, source, fallbackUsed }) {
+// A window can be shorter than the label suggests when the source only returned
+// a handful of rows, so every window reports how much data actually backs it.
+function windowSummary(rows, days) {
+  const window = rows.slice(-days);
+  return {
+    days,
+    sampleSize: window.length,
+    complete: window.length >= days,
+    mainNetAmount: sumFinite(window, "mainNetAmount"),
+    smallNetAmount: sumFinite(window, "smallNetAmount"),
+    mainNetRatioAvg: averageFinite(window, "mainNetRatio"),
+    smallNetRatioAvg: averageFinite(window, "smallNetRatio"),
+  };
+}
+
+function buildFundFlowPayload({ code, rows: inputRows, source, fallbackUsed, now = new Date() }) {
+  const lastIndex = inputRows.length - 1;
+  const partial = isPartialRow(inputRows[lastIndex], now);
+  const rows = inputRows.map((row, index) => ({
+    ...row,
+    partial: partial && index === lastIndex,
+  }));
   const latest = rows.at(-1) || null;
-  const recent5 = rows.slice(-5);
-  const recent10 = rows.slice(-10);
-  const small5 = sumFinite(recent5, "smallNetAmount");
+  const fiveDay = windowSummary(rows, 5);
+  const isFallback = source.key === "stockddx";
 
   return {
     code,
     source,
     fallbackUsed,
     isProxy: true,
+    // Only the fallback source carries DDX/DDY/DDZ; the primary one carries
+    // Eastmoney order-size buckets. Say which of the two this payload holds
+    // instead of leaving the missing family as a silent null.
+    metrics: {
+      retailProxy: {
+        field: "smallNetAmount",
+        unit: "CNY",
+        available: !isFallback,
+        note: "东方财富小单成交净额，非同花顺 DDE 散户数量（户），两者口径与量纲均不同。",
+      },
+      dde: {
+        fields: ["ddx", "ddy", "ddz", "bbd"],
+        available: isFallback,
+        note: isFallback ? null : "主数据源不提供 DDE 系列指标，rows[].dde 恒为 null。",
+      },
+    },
     proxyDescription:
-      source.key === "stockddx"
+      isFallback
         ? "备用源提供 DDX/DDY/DDZ；相关指标仍是基于成交结构的估算，不代表真实账户人数。"
         : "小单资金流用于观察散户资金倾向，不代表真实散户账户数量。",
-    updatedAt: new Date().toISOString(),
+    updatedAt: now.toISOString(),
+    asOfDate: latest?.date || null,
+    partial,
     latest,
     summary: {
-      retailTrend: source.key === "stockddx" ? null : trendFromAmount(small5),
-      fiveDay: {
-        mainNetAmount: sumFinite(recent5, "mainNetAmount"),
-        smallNetAmount: small5,
-        mainNetRatioAvg: averageFinite(recent5, "mainNetRatio"),
-        smallNetRatioAvg: averageFinite(recent5, "smallNetRatio"),
-      },
-      tenDay: {
-        mainNetAmount: sumFinite(recent10, "mainNetAmount"),
-        smallNetAmount: sumFinite(recent10, "smallNetAmount"),
-        mainNetRatioAvg: averageFinite(recent10, "mainNetRatio"),
-        smallNetRatioAvg: averageFinite(recent10, "smallNetRatio"),
-      },
+      retailTrend: isFallback ? null : trendFromAmount(fiveDay.smallNetAmount),
+      fiveDay,
+      tenDay: windowSummary(rows, 10),
     },
     rows,
   };
+}
+
+// Strips the still-moving intraday row so a half-finished session can never be
+// resurrected from the long-lived cache and served as a settled day.
+export function settledPayload(payload) {
+  if (!payload?.partial || !Array.isArray(payload.rows)) return payload || null;
+  const rows = payload.rows.filter((row) => !row.partial);
+  if (!rows.length) return null;
+  return buildFundFlowPayload({
+    code: payload.code,
+    rows,
+    source: payload.source,
+    fallbackUsed: payload.fallbackUsed,
+  });
 }
 
 function mergePrimaryHistory(current, previous, limit) {
@@ -312,7 +395,10 @@ async function fetchPrimary(code, limit) {
     _: String(Date.now()),
   });
   let lastError = null;
+  let best = null;
 
+  // push2delay answers with a single row while the push2his hosts are down, so
+  // accepting the first success would silently return a one-day "history".
   for (const host of PRIMARY_HOSTS) {
     try {
       const response = await fetch(`${host}/api/qt/stock/fflow/daykline/get?${params}`, {
@@ -320,11 +406,14 @@ async function fetchPrimary(code, limit) {
         signal: AbortSignal.timeout(10000),
       });
       if (!response.ok) throw new Error(`Eastmoney HTTP ${response.status}`);
-      return parseEastmoneyFundFlowPayload(await response.json(), code, limit);
+      const payload = parseEastmoneyFundFlowPayload(await response.json(), code, limit);
+      if (!best || payload.rows.length > best.rows.length) best = payload;
+      if (best.rows.length >= limit) return best;
     } catch (error) {
       lastError = error;
     }
   }
+  if (best) return best;
   throw lastError || new Error("AKShare-compatible source is unavailable.");
 }
 
@@ -354,9 +443,9 @@ async function readCache(cacheKey) {
     if (cached) {
       const payload = JSON.parse(cached);
       memoryCache.set(cacheKey, {
+        ...(memoryCache.get(cacheKey) || {}),
         payload,
         expiresAt: Date.now() + PRIMARY_CACHE_SECONDS * 1000,
-        staleUntil: Date.now() + STALE_CACHE_SECONDS * 1000,
       });
       return { payload, stale: false };
     }
@@ -367,18 +456,23 @@ async function readCache(cacheKey) {
 }
 
 async function writeCache(cacheKey, payload) {
+  const previous = memoryCache.get(cacheKey);
+  const settled = settledPayload(payload);
   memoryCache.set(cacheKey, {
     payload,
     expiresAt: Date.now() + PRIMARY_CACHE_SECONDS * 1000,
-    staleUntil: Date.now() + STALE_CACHE_SECONDS * 1000,
+    stalePayload: settled || previous?.stalePayload || null,
+    staleUntil: settled ? Date.now() + STALE_CACHE_SECONDS * 1000 : previous?.staleUntil || 0,
   });
   try {
     const redis = await getRedisClient();
-    const body = JSON.stringify(payload);
-    await Promise.all([
-      redis.set(cacheKey, body, { EX: PRIMARY_CACHE_SECONDS }),
-      redis.set(`${cacheKey}:stale`, body, { EX: STALE_CACHE_SECONDS }),
-    ]);
+    const writes = [redis.set(cacheKey, JSON.stringify(payload), { EX: PRIMARY_CACHE_SECONDS })];
+    if (settled) {
+      writes.push(
+        redis.set(`${cacheKey}:stale`, JSON.stringify(settled), { EX: STALE_CACHE_SECONDS }),
+      );
+    }
+    await Promise.all(writes);
   } catch {
     // Redis is optional.
   }
@@ -386,7 +480,7 @@ async function writeCache(cacheKey, payload) {
 
 async function readStaleCache(cacheKey) {
   const memory = memoryCache.get(cacheKey);
-  if (memory && memory.staleUntil > Date.now()) return memory.payload;
+  if (memory?.stalePayload && memory.staleUntil > Date.now()) return memory.stalePayload;
   try {
     const redis = await getRedisClient();
     const cached = await redis.get(`${cacheKey}:stale`);
@@ -414,16 +508,30 @@ async function loadFundFlow(code, limit) {
 
   try {
     const payload = await fetchFallback(code, limit);
-    payload.primaryError = primaryError?.message || String(primaryError);
+    payload.primaryError = errorMessage(primaryError);
     await writeCache(cacheKey, payload);
     return payload;
   } catch (fallbackError) {
     const stale = await readStaleCache(cacheKey);
     if (stale) {
+      const cachedAt = stale.updatedAt || null;
+      const ageSeconds = cachedAt
+        ? Math.max(0, Math.round((Date.now() - Date.parse(cachedAt)) / 1000))
+        : null;
+      const ageText =
+        Number.isFinite(ageSeconds) ? `约 ${(ageSeconds / 86400).toFixed(1)} 天前` : "时间未知";
       return {
         ...stale,
         stale: true,
-        warning: "主数据源和备用源暂时不可用，当前展示最近一次成功缓存。",
+        cachedAt,
+        ageSeconds,
+        // Both upstreams are down: say how old this really is instead of letting
+        // a weeks-old snapshot pass for a current reading.
+        primaryError: errorMessage(primaryError),
+        fallbackError: errorMessage(fallbackError),
+        warning:
+          `主数据源和备用源均不可用，当前展示 ${cachedAt || "最近一次"} 的缓存（${ageText}），` +
+          `数据截至 ${stale.asOfDate || "未知交易日"}。`,
       };
     }
     throw new Error(
