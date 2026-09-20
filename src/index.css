@@ -144,3 +144,37 @@ input,
 select {
   font: inherit;
 }
+
+/* Chan structure overlays: theme-aware and independent of candle colors. */
+:root {
+  --chan-bi: #b78200;
+  --chan-top: #e66b62;
+  --chan-bottom: #169c6b;
+  --chan-active: #397edb;
+  --chan-active-fill: rgba(47, 111, 237, 0.13);
+  --chan-zone-0: rgba(211, 160, 0, 0.14);
+  --chan-zone-1: rgba(92, 128, 204, 0.12);
+  --chan-zone-2: rgba(153, 102, 187, 0.12);
+  --chan-zone-border: rgba(160, 126, 47, 0.5);
+}
+.dark {
+  --chan-bi: #ffd54f;
+  --chan-top: #ff8a80;
+  --chan-bottom: #69f0ae;
+  --chan-active: #7eb6ff;
+  --chan-active-fill: rgba(47, 111, 237, 0.22);
+  --chan-zone-0: rgba(255, 193, 7, 0.18);
+  --chan-zone-1: rgba(66, 165, 245, 0.16);
+  --chan-zone-2: rgba(171, 71, 188, 0.16);
+  --chan-zone-border: rgba(215, 170, 63, 0.55);
+}
+
+/* Keep title/favorite together; toolbar groups wrap without squeezing the title. */
+.chart-panel-tools > * {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+.chart-panel-tools button,
+.chart-panel-tools label {
+  white-space: nowrap;
+}

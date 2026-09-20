@@ -52,9 +52,14 @@ async function fetchAllStocksSnapshot() {
       `&fid=f3&fs=${ALL_A_FS}&fields=f12,f13,f14,f2,f3,f17,f20`
     );
   }
-  function parse(payload) {
+  // 未经过滤的原始条目。用来区分两种"拿不到数据"：接口真的没返回，
+  // 还是返回了 5899 条但当日行情字段全是 "-"（非交易时段东财会整体重置）。
+  function rawRows(payload) {
     const list = payload?.data?.diff;
-    const arr = Array.isArray(list) ? list : list && typeof list === "object" ? Object.values(list) : [];
+    return Array.isArray(list) ? list : list && typeof list === "object" ? Object.values(list) : [];
+  }
+  function parse(payload) {
+    const arr = rawRows(payload);
     return arr
       .map((d) => ({
         code: String(d.f12 || ""),
@@ -80,6 +85,12 @@ async function fetchAllStocksSnapshot() {
       const total = Number(firstPayload?.data?.total) || 0;
       let rows = parse(firstPayload);
       if (!rows.length) {
+        // 条目在、但一条实时行情都没有 ⇒ 非交易时段。这是东财全网统一状态，
+        // 换 host 也一样，直接上报给调用方去回放上一交易日的快照。
+        const raw = rawRows(firstPayload);
+        if (raw.length && !raw.some((d) => Number.isFinite(Number(d.f3)))) {
+          return { stocks: [], live: false };
+        }
         errors.push(`${host}: empty(total=${total})`);
         continue;
       }
@@ -101,7 +112,7 @@ async function fetchAllStocksSnapshot() {
         rows = rows.concat(...rest);
       }
       const seen = new Set();
-      return rows.filter((s) => (seen.has(s.code) ? false : seen.add(s.code)));
+      return { stocks: rows.filter((s) => (seen.has(s.code) ? false : seen.add(s.code))), live: true };
     } catch (e) {
       errors.push(`${host}: ${e?.message || e}`);
     }
@@ -361,10 +372,15 @@ async function computeTodayMarket() {
   // 注意：push2ex 涨停池历史只保留约 15 个交易日，更早的日期会返回 tc=0，自然被过滤掉，
   // 所以多日面板实际约 3 周窗口（要更长需自行落库累积，超出当前范围）。
   const candidates = recentWeekdays(HISTORY_DAYS + 6);
-  const [stocks, ztMap] = await Promise.all([
+  const [snap, ztMap] = await Promise.all([
     fetchAllStocksSnapshot(),
     fetchPoolsForDates("zt", candidates, 8),
   ]);
+  if (!snap.live) {
+    console.log("[today-market] 非交易时段：东财当日行情字段为 dash，回落到最近一次有效快照");
+    return { live: false };
+  }
+  const stocks = snap.stocks;
 
   const tradingDays = candidates.filter((d) => (ztMap.get(d)?.tc ?? 0) > 0); // 升序
   if (!tradingDays.length) throw new Error("未取到任何交易日的涨停池数据");
@@ -396,7 +412,7 @@ async function computeTodayMarket() {
       `dt=${dtMap.get(todayDate)?.tc} zb=${zbMap.get(todayDate)?.tc} histDays=${history.length} totalMs=${Date.now() - t0}`,
   );
 
-  return { date, ...panels, history, updatedAt: new Date().toISOString() };
+  return { live: true, date, ...panels, history, updatedAt: new Date().toISOString() };
 }
 
 // ===== 盘面快照缓存（stale-while-revalidate）=====
@@ -409,8 +425,26 @@ const FRESH_MS = 10 * 60 * 1000; // 10 分钟内直接返回缓存，不重算�
 const STALE_MS = 30 * 60 * 1000; // 10~30 分钟返回旧数据并后台刷新；超过则当作冷启动同步重算。
 const REDIS_TTL_SEC = Math.round(STALE_MS / 1000);
 
+// 最近一次拿到真实行情的快照，TTL 7 天，足够跨过周末和小长假。
+// 非交易时段展示的就是它：上一交易日的收盘盘面，并标注数据截止时间。
+const LAST_GOOD_KEY = "today-market:v1:lastgood";
+const LAST_GOOD_TTL_SEC = 7 * 24 * 60 * 60;
+
 let memEntry = null; // { body, cachedAt } —— 进程内缓存，Redis 不可用时兜底。
+let memLastGood = null; // 最近一次有效快照的进程内副本。
 let refreshing = null; // 单飞：进行中的重算 Promise，避免并发重复打外部接口。
+
+async function readLastGood(redis) {
+  if (memLastGood) return memLastGood;
+  if (!redis) return null;
+  try {
+    const v = await redis.get(LAST_GOOD_KEY);
+    if (v) memLastGood = v;
+    return v;
+  } catch {
+    return null;
+  }
+}
 
 // 读缓存：先看进程内，再回落 Redis（顺带把 Redis 命中回填到内存，缩短后续判断）。
 async function readCache(redis) {
@@ -431,13 +465,35 @@ function refreshCache(redis) {
   if (refreshing) return refreshing;
   refreshing = (async () => {
     const payload = await computeTodayMarket();
+
+    // 非交易时段：别用没有行情的空结果覆盖缓存，回放最近一次有效快照。
+    if (!payload.live) {
+      const last = await readLastGood(redis);
+      if (last) {
+        const body = JSON.stringify({ ...JSON.parse(last), stale: true, marketClosed: true });
+        memEntry = { body, cachedAt: Date.now() };
+        return body;
+      }
+      const body = JSON.stringify({
+        live: false,
+        marketClosed: true,
+        history: [],
+        updatedAt: new Date().toISOString(),
+        notice: "当前非交易时段，东方财富暂未推送行情数据。开盘（09:30）后自动恢复。",
+      });
+      memEntry = { body, cachedAt: Date.now() };
+      return body;
+    }
+
     const body = JSON.stringify(payload);
     memEntry = { body, cachedAt: Date.now() };
+    memLastGood = body;
     if (redis) {
       try {
         await Promise.all([
           redis.set(CACHE_KEY, body, { EX: REDIS_TTL_SEC }),
           redis.set(CACHE_TS_KEY, String(memEntry.cachedAt), { EX: REDIS_TTL_SEC }),
+          redis.set(LAST_GOOD_KEY, body, { EX: LAST_GOOD_TTL_SEC }),
         ]);
       } catch {
         // 缓存写失败不影响返回。
