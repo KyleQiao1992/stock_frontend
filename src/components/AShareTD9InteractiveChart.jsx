@@ -2274,39 +2274,27 @@ function TurnoverSparkline({ rows, currentRate, days = 30 }) {
       .filter(Boolean);
   }, [rows, currentRate, days]);
 
-  if (series.length < 2) {
-    return (
-      <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-6 text-center">
-        <div className="text-xs font-medium text-slate-600">近 30 日资金趋势</div>
-        <div className="mt-2 text-[11px] leading-5 text-slate-400">
-          当前仅取得 {series.length} 个交易日的数据，至少需要 2 日才能绘制趋势线。
-          <br />
-          系统会按交易日持续累计，后续自动显示。
-        </div>
-      </div>
-    );
-  }
-
   const W = 200;
   const H = 56;
   const PAD = 5;
+  const hasSeries = series.length >= 2;
   const values = series.map((d) => d.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const min = hasSeries ? Math.min(...values) : 0;
+  const max = hasSeries ? Math.max(...values) : 0;
   const span = max - min || 1;
-  const stepX = (W - PAD * 2) / (series.length - 1);
+  const stepX = hasSeries ? (W - PAD * 2) / (series.length - 1) : 0;
   const points = series.map((d, i) => {
     const x = PAD + i * stepX;
     const y = PAD + (H - PAD * 2) * (1 - (d.value - min) / span);
     return [x, y];
   });
   const polyline = points.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
-  const activeIdx = hoverIdx == null ? series.length - 1 : Math.min(hoverIdx, series.length - 1);
-  const active = series[activeIdx];
-  const activePt = points[activeIdx];
+  const activeIdx = hasSeries ? (hoverIdx == null ? series.length - 1 : Math.min(hoverIdx, series.length - 1)) : 0;
+  const active = hasSeries ? series[activeIdx] : null;
+  const activePt = hasSeries ? points[activeIdx] : null;
 
   const handleMove = (e) => {
-    if (!svgRef.current) return;
+    if (!hasSeries || !svgRef.current) return;
     const rect = svgRef.current.getBoundingClientRect();
     if (!rect.width) return;
     const svgX = ((e.clientX - rect.left) / rect.width) * W;
@@ -2330,42 +2318,50 @@ function TurnoverSparkline({ rows, currentRate, days = 30 }) {
       </button>
       {open && (
         <span className="absolute left-0 top-5 z-30 w-60 rounded-xl border bg-white p-3 shadow-lg">
-          <span className="mb-1 flex items-center justify-between text-[11px]">
-            <span className="text-slate-500">{hoverIdx == null ? `近${series.length}日换手率` : active.date}</span>
-            <span className="font-medium text-slate-700">{active.value.toFixed(2)}%</span>
-          </span>
-          <svg
-            ref={svgRef}
-            width={W}
-            height={H}
-            viewBox={`0 0 ${W} ${H}`}
-            className="block"
-            onMouseMove={handleMove}
-            onMouseLeave={() => setHoverIdx(null)}
-          >
-            <polyline
-              fill="none"
-              stroke="#2563eb"
-              strokeWidth="1.5"
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              points={polyline}
-            />
-            <line
-              x1={activePt[0]}
-              y1={PAD}
-              x2={activePt[0]}
-              y2={H - PAD}
-              stroke="var(--chart-grid)"
-              strokeWidth="1"
-              strokeDasharray="2 2"
-            />
-            <circle cx={activePt[0]} cy={activePt[1]} r="2.5" fill="#2563eb" />
-          </svg>
-          <span className="mt-1 flex justify-between text-[11px] text-slate-400">
-            <span>低 {min.toFixed(2)}%</span>
-            <span>高 {max.toFixed(2)}%</span>
-          </span>
+          {hasSeries ? (
+            <>
+              <span className="mb-1 flex items-center justify-between text-[11px]">
+                <span className="text-slate-500">{hoverIdx == null ? `近${series.length}日换手率` : active.date}</span>
+                <span className="font-medium text-slate-700">{active.value.toFixed(2)}%</span>
+              </span>
+              <svg
+                ref={svgRef}
+                width={W}
+                height={H}
+                viewBox={`0 0 ${W} ${H}`}
+                className="block"
+                onMouseMove={handleMove}
+                onMouseLeave={() => setHoverIdx(null)}
+              >
+                <polyline
+                  fill="none"
+                  stroke="#2563eb"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  points={polyline}
+                />
+                <line
+                  x1={activePt[0]}
+                  y1={PAD}
+                  x2={activePt[0]}
+                  y2={H - PAD}
+                  stroke="var(--chart-grid)"
+                  strokeWidth="1"
+                  strokeDasharray="2 2"
+                />
+                <circle cx={activePt[0]} cy={activePt[1]} r="2.5" fill="#2563eb" />
+              </svg>
+              <span className="mt-1 flex justify-between text-[11px] text-slate-400">
+                <span>低 {min.toFixed(2)}%</span>
+                <span>高 {max.toFixed(2)}%</span>
+              </span>
+            </>
+          ) : (
+            <span className="block text-[11px] leading-5 text-slate-500">
+              当前仅取得 {series.length} 个交易日的换手率数据，至少需要 2 日才能绘制趋势线。
+            </span>
+          )}
         </span>
       )}
     </span>
