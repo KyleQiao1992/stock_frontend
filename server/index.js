@@ -11,6 +11,7 @@ import { createFavoritesBacktestHandler } from "./favoritesBacktestHandler.js";
 import { createRedisRecommendationsHandler } from "./redisHandlers.js";
 import { createUsKlineHandler } from "./usKline.js";
 import { createUsProfileHandler } from "./usProfile.js";
+import { createHkKlineHandler, createHkSearchHandler } from "./hkMarket.js";
 import { createKlineForecastHandler } from "./klineForecast.js";
 import { createBoardFundflowHandler } from "./boardFundflow.js";
 import { createTodayMarketHandler } from "./todayMarket.js";
@@ -41,6 +42,8 @@ app.use("/api", authMiddleware);
 
 app.get("/api/us-kline", createUsKlineHandler());
 app.get("/api/us-profile", createUsProfileHandler());
+app.get("/api/hk-kline", createHkKlineHandler());
+app.get("/api/hk-search", createHkSearchHandler());
 app.post("/api/kline-forecast", createKlineForecastHandler());
 app.get("/api/board-fundflow", createBoardFundflowHandler());
 app.get("/api/today-market", createTodayMarketHandler());

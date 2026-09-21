@@ -354,6 +354,12 @@ function industryDetail(name) {
 }
 
 export function createMarketHeatmapHandler() {
+  // 服务启动时就在后台连接 Redis 并把快照放入进程内存。这样用户第一次打开
+  // 趋势大盘时无需再等待远端 Redis 建连和 180KB 数据读取。
+  getRedisClient()
+    .then((redis) => Promise.all([readCache(redis), readLastGood(redis)]))
+    .catch(() => {});
+
   return async function marketHeatmapHandler(req, res) {
     if (handleHeatmapHistory(req, res)) return;
     const sendJson = (status, body) => {

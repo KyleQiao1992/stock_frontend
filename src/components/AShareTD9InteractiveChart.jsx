@@ -2,7 +2,7 @@ import StockAnalysisPanel from "./StockAnalysisPanel";
 import ChanOverlay from "./ChanOverlay";
 import ChanControls from "./ChanControls";
 import { analyzeChan } from "../lib/chan/index.js";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Component, Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertCircle,
@@ -61,11 +61,13 @@ const PERIOD_OPTIONS = [
   { value: "102", label: "周K" },
   { value: "103", label: "月K" },
 ];
+const EMPTY_LIST = Object.freeze([]);
 
 
 const MARKET_TABS = [
   { value: "market-trend", label: "趋势大盘" },
   { value: "ashare", label: "A股" },
+  { value: "hk", label: "港股" },
   { value: "us", label: "美股" },
   { value: "agent", label: "Agent" },
   { value: "factor-research", label: "因子研究" },
@@ -788,6 +790,22 @@ async function fetchUsKline({ symbol, period, adjust, limit }) {
   throw new Error(`美股行情暂时不可用。已尝试无 key 历史行情源，但都失败了。最后错误：${errors.slice(-3).join("；")}`);
 }
 
+async function fetchHkKline({ code, period, adjust, limit }) {
+  const normalized = normalizeHkCode(code);
+  if (!isValidHkCode(normalized)) throw new Error("请输入有效的港股代码，例如 00700、09988。");
+  const params = new URLSearchParams({
+    code: normalized,
+    period,
+    adjust,
+    limit: String(limit || 600),
+  });
+  const res = await apiFetch(`/api/hk-kline?${params.toString()}`, { method: "GET", cache: "no-store" });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+  if (!Array.isArray(payload?.klines) || !payload.klines.length) throw new Error("腾讯港股行情返回空数据。");
+  return payload;
+}
+
 function calcSimpleTD9(rows) {
   let up = 0;
   let down = 0;
@@ -1434,6 +1452,10 @@ const US_FALLBACK_WATCHLIST = [
   "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL",
   "META", "TSLA", "AMD", "NFLX", "AVGO",
 ];
+const HK_FALLBACK_WATCHLIST = [
+  "00700", "09988", "03690", "00005", "00941",
+  "02318", "01299", "01810", "09888", "09618",
+];
 
 function pickRandomCodes(pool, count) {
   const arr = [...pool];
@@ -1453,8 +1475,8 @@ function normalizeWatchlistCodes(input, market) {
   const seen = new Set();
   const normalized = [];
   for (const part of parts) {
-    const code = market === "ashare" ? onlyDigits(part) : normalizeUsSymbol(part);
-    const valid = market === "ashare" ? isSixDigitCode(code) : isValidUsSymbol(code);
+    const code = normalizeCodeForMarket(part, market);
+    const valid = market === "ashare" ? isSixDigitCode(code) : market === "hk" ? isValidHkCode(code) : isValidUsSymbol(code);
     if (!valid || seen.has(code)) continue;
     seen.add(code);
     normalized.push(code);
@@ -1463,7 +1485,24 @@ function normalizeWatchlistCodes(input, market) {
 }
 
 function normalizeCodeForMarket(value, market) {
-  return market === "ashare" ? onlyDigits(value) : normalizeUsSymbol(value);
+  if (market === "ashare") return onlyDigits(value);
+  if (market === "hk") return normalizeHkCode(value);
+  return normalizeUsSymbol(value);
+}
+
+function normalizeHkCode(value) {
+  let raw = String(value || "").trim().toUpperCase();
+  raw = raw.replace(/^HK/, "").replace(/\.HK$/, "");
+  if (!/^\d{1,5}$/.test(raw)) return "";
+  return raw.padStart(5, "0");
+}
+
+function isValidHkCode(value) {
+  return /^\d{5}$/.test(String(value || ""));
+}
+
+function normalizeEquityMarket(value, fallback = "ashare") {
+  return ["ashare", "hk", "us"].includes(value) ? value : fallback;
 }
 
 function getErrorMessage(error, fallback = "操作失败，请稍后重试。") {
@@ -1549,6 +1588,20 @@ async function fetchAshareSuggestions(query, options = {}) {
   if (!res.ok) {
     throw new Error(payload?.error || `HTTP ${res.status}`);
   }
+  return Array.isArray(payload?.items) ? payload.items : [];
+}
+
+async function fetchHkSuggestions(query, options = {}) {
+  const keyword = String(query || "").trim();
+  if (!keyword) return [];
+  const params = new URLSearchParams({ q: keyword });
+  const res = await apiFetch(`/api/hk-search?${params.toString()}`, {
+    method: "GET",
+    cache: "no-store",
+    signal: options.signal,
+  });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
   return Array.isArray(payload?.items) ? payload.items : [];
 }
 
@@ -2274,39 +2327,27 @@ function TurnoverSparkline({ rows, currentRate, days = 30 }) {
       .filter(Boolean);
   }, [rows, currentRate, days]);
 
-  if (series.length < 2) {
-    return (
-      <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-6 text-center">
-        <div className="text-xs font-medium text-slate-600">近 30 日资金趋势</div>
-        <div className="mt-2 text-[11px] leading-5 text-slate-400">
-          当前仅取得 {series.length} 个交易日的数据，至少需要 2 日才能绘制趋势线。
-          <br />
-          系统会按交易日持续累计，后续自动显示。
-        </div>
-      </div>
-    );
-  }
-
   const W = 200;
   const H = 56;
   const PAD = 5;
+  const hasSeries = series.length >= 2;
   const values = series.map((d) => d.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const min = hasSeries ? Math.min(...values) : 0;
+  const max = hasSeries ? Math.max(...values) : 0;
   const span = max - min || 1;
-  const stepX = (W - PAD * 2) / (series.length - 1);
+  const stepX = hasSeries ? (W - PAD * 2) / (series.length - 1) : 0;
   const points = series.map((d, i) => {
     const x = PAD + i * stepX;
     const y = PAD + (H - PAD * 2) * (1 - (d.value - min) / span);
     return [x, y];
   });
   const polyline = points.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
-  const activeIdx = hoverIdx == null ? series.length - 1 : Math.min(hoverIdx, series.length - 1);
-  const active = series[activeIdx];
-  const activePt = points[activeIdx];
+  const activeIdx = hasSeries ? (hoverIdx == null ? series.length - 1 : Math.min(hoverIdx, series.length - 1)) : 0;
+  const active = hasSeries ? series[activeIdx] : null;
+  const activePt = hasSeries ? points[activeIdx] : null;
 
   const handleMove = (e) => {
-    if (!svgRef.current) return;
+    if (!hasSeries || !svgRef.current) return;
     const rect = svgRef.current.getBoundingClientRect();
     if (!rect.width) return;
     const svgX = ((e.clientX - rect.left) / rect.width) * W;
@@ -2330,42 +2371,50 @@ function TurnoverSparkline({ rows, currentRate, days = 30 }) {
       </button>
       {open && (
         <span className="absolute left-0 top-5 z-30 w-60 rounded-xl border bg-white p-3 shadow-lg">
-          <span className="mb-1 flex items-center justify-between text-[11px]">
-            <span className="text-slate-500">{hoverIdx == null ? `近${series.length}日换手率` : active.date}</span>
-            <span className="font-medium text-slate-700">{active.value.toFixed(2)}%</span>
-          </span>
-          <svg
-            ref={svgRef}
-            width={W}
-            height={H}
-            viewBox={`0 0 ${W} ${H}`}
-            className="block"
-            onMouseMove={handleMove}
-            onMouseLeave={() => setHoverIdx(null)}
-          >
-            <polyline
-              fill="none"
-              stroke="#2563eb"
-              strokeWidth="1.5"
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              points={polyline}
-            />
-            <line
-              x1={activePt[0]}
-              y1={PAD}
-              x2={activePt[0]}
-              y2={H - PAD}
-              stroke="var(--chart-grid)"
-              strokeWidth="1"
-              strokeDasharray="2 2"
-            />
-            <circle cx={activePt[0]} cy={activePt[1]} r="2.5" fill="#2563eb" />
-          </svg>
-          <span className="mt-1 flex justify-between text-[11px] text-slate-400">
-            <span>低 {min.toFixed(2)}%</span>
-            <span>高 {max.toFixed(2)}%</span>
-          </span>
+          {hasSeries ? (
+            <>
+              <span className="mb-1 flex items-center justify-between text-[11px]">
+                <span className="text-slate-500">{hoverIdx == null ? `近${series.length}日换手率` : active.date}</span>
+                <span className="font-medium text-slate-700">{active.value.toFixed(2)}%</span>
+              </span>
+              <svg
+                ref={svgRef}
+                width={W}
+                height={H}
+                viewBox={`0 0 ${W} ${H}`}
+                className="block"
+                onMouseMove={handleMove}
+                onMouseLeave={() => setHoverIdx(null)}
+              >
+                <polyline
+                  fill="none"
+                  stroke="#2563eb"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                  strokeLinecap="round"
+                  points={polyline}
+                />
+                <line
+                  x1={activePt[0]}
+                  y1={PAD}
+                  x2={activePt[0]}
+                  y2={H - PAD}
+                  stroke="var(--chart-grid)"
+                  strokeWidth="1"
+                  strokeDasharray="2 2"
+                />
+                <circle cx={activePt[0]} cy={activePt[1]} r="2.5" fill="#2563eb" />
+              </svg>
+              <span className="mt-1 flex justify-between text-[11px] text-slate-400">
+                <span>低 {min.toFixed(2)}%</span>
+                <span>高 {max.toFixed(2)}%</span>
+              </span>
+            </>
+          ) : (
+            <span className="block text-[11px] leading-5 text-slate-500">
+              当前仅取得 {series.length} 个交易日的换手率数据，至少需要 2 日才能绘制趋势线。
+            </span>
+          )}
         </span>
       )}
     </span>
@@ -5452,12 +5501,17 @@ const FACTOR_RETURN_PERIODS = [
 ];
 
 function FactorBarChart({ data, label }) {
-  const maxAbs = Math.max(...data.map((d) => Math.abs(d.value)), 0.01);
+  const safeData = (Array.isArray(data) ? data : []).flatMap((item) => {
+    const value = Number(item?.value);
+    if (!item || !Number.isFinite(value)) return [];
+    return [{ ...item, factor: String(item.factor || "-"), value }];
+  });
+  const maxAbs = Math.max(...safeData.map((d) => Math.abs(d.value)), 0.01);
   return (
     <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
       <div className="mb-4 text-sm font-semibold text-slate-700">{label}</div>
       <div className="space-y-2.5">
-        {data.map((item) => {
+        {safeData.map((item) => {
           const isPos = item.value >= 0;
           const pct = (Math.abs(item.value) / maxAbs) * 100;
           return (
@@ -5521,7 +5575,12 @@ async function fetchFactorReturns(mode, startDate, signal, status = "production"
   const res = await apiFetch(`/api/factor-returns?${params}`, { cache: "no-store", signal });
   const payload = await res.json().catch(() => null);
   if (!res.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
-  return payload.data;
+  if (!payload.data || typeof payload.data !== "object" || Array.isArray(payload.data)) {
+    throw new Error("因子收益接口返回格式异常");
+  }
+  return Object.fromEntries(
+    FACTOR_RETURN_PERIODS.map(({ key }) => [key, Array.isArray(payload.data[key]) ? payload.data[key] : []]),
+  );
 }
 
 // 通达信「多空分野」风格的指数趋势图：粉色山形 K 线 + 一根 MA 线（价格低于 MA 的区段加深阴影）+ 下方 MACD 副图（0 轴下方阴影）。
@@ -6752,6 +6811,45 @@ const HEATMAP_METRICS = [
   { value: "floatCap", label: "流通市值" },
 ];
 
+// 热力图响应约 180KB，服务重启后的首次请求还要连接 Redis/抓取全市场。
+// 在当前浏览器会话保留最近一次成功快照：重新加载页面或切回趋势大盘时先画旧快照，
+// 同时在后台请求新数据，避免用户面对一整块空白加载区。
+const HEATMAP_SESSION_CACHE_KEY = "market-heatmap:latest:v1";
+const HEATMAP_SESSION_CACHE_MS = 24 * 60 * 60 * 1000;
+let heatmapMemoryCache = null;
+
+function readHeatmapClientCache() {
+  if (heatmapMemoryCache && Date.now() - heatmapMemoryCache.at < HEATMAP_SESSION_CACHE_MS) {
+    return heatmapMemoryCache.body;
+  }
+  try {
+    const cached = JSON.parse(sessionStorage.getItem(HEATMAP_SESSION_CACHE_KEY) || "null");
+    if (
+      cached &&
+      Date.now() - Number(cached.at) < HEATMAP_SESSION_CACHE_MS &&
+      Array.isArray(cached.body?.industries) &&
+      cached.body.industries.length > 0
+    ) {
+      heatmapMemoryCache = cached;
+      return cached.body;
+    }
+  } catch {
+    // 隐私模式或存储配额受限时直接回到正常网络加载。
+  }
+  return null;
+}
+
+function writeHeatmapClientCache(body) {
+  if (!Array.isArray(body?.industries) || body.industries.length === 0) return;
+  const cached = { body, at: Date.now() };
+  heatmapMemoryCache = cached;
+  try {
+    sessionStorage.setItem(HEATMAP_SESSION_CACHE_KEY, JSON.stringify(cached));
+  } catch {
+    // 内存缓存仍然可用。
+  }
+}
+
 // 行业视图最多铺多少个行业；个股视图要留出位置塞成分股，块数少一些。
 const HEATMAP_INDUSTRY_LIMIT = 42;
 const HEATMAP_GROUP_LIMIT = 24;
@@ -6886,10 +6984,11 @@ function MarketHeatmapPanel({ onOpenStock }) {
 
 function MarketHeatmapContent({ onOpenStock, historyQuery }) {
   const historical = !!historyQuery;
+  const initialPayload = historical ? null : readHeatmapClientCache();
   const [progress, setProgress] = useState(null);
   const [detailError, setDetailError] = useState("");
-  const [payload, setPayload] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [payload, setPayload] = useState(initialPayload);
+  const [loading, setLoading] = useState(() => !initialPayload);
   const [error, setError] = useState("");
   const [view, setView] = useState("industry");
   const [metric, setMetric] = useState("amount"); // 默认按成交额铺面积：当天资金去了哪儿更直观
@@ -6922,11 +7021,16 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
           return;
         }
         if (body.error) throw new Error(body.error);
+        if (!historical) writeHeatmapClientCache(body);
         setPayload(body);
         setLoading(false);
       })
       .catch((e) => {
-        if (!cancelled) { setError(e?.message || "加载失败"); setLoading(false); }
+        if (!cancelled) {
+          // 已有快照时继续展示；网络刷新失败不应把可用页面替换成整屏错误。
+          if (!initialPayload) setError(e?.message || "加载失败");
+          setLoading(false);
+        }
       })
       .finally(() => {
         if (!cancelled && !historical) setLoading(false);
@@ -7404,6 +7508,38 @@ function MarketTrendPageLayout({ onOpenStock }) {
   );
 }
 
+class FactorResearchErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error) {
+    console.error("Factor research render error", error);
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-red-700">
+        <div className="font-semibold">因子研究页面加载异常</div>
+        <div className="mt-2 text-sm">因子数据格式异常或页面状态已过期，请刷新后重试。</div>
+        <button
+          type="button"
+          onClick={() => this.setState({ error: null })}
+          className="mt-4 rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+        >
+          重新加载因子页
+        </button>
+      </div>
+    );
+  }
+}
+
 function FactorResearchPageLayout() {
   const [factorCategory, setFactorCategory] = useState("mature");
 
@@ -7466,7 +7602,8 @@ async function fetchAdminFactors(signal) {
   const res = await apiFetch(`/api/admin/factors`, { cache: "no-store", signal });
   const payload = await res.json().catch(() => null);
   if (!res.ok || !payload?.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
-  return payload.data; // [{ name, label, formula, source, principle, whyEffective, evaluation, decision, status, enabled }]
+  if (!Array.isArray(payload.data)) throw new Error("因子管理接口返回格式异常");
+  return payload.data.filter((item) => item && typeof item === "object");
 }
 
 async function patchAdminFactor(name, patch) {
@@ -7546,13 +7683,14 @@ function FactorAdminPanel() {
 
   useEffect(() => {
     const ctrl = new AbortController();
+    let active = true;
     setLoading(true);
     setLoadError(null);
     fetchAdminFactors(ctrl.signal)
-      .then((data) => setRows(data))
-      .catch((e) => { if (e.name !== "AbortError") setLoadError(e?.message || "加载失败"); })
-      .finally(() => setLoading(false));
-    return () => ctrl.abort();
+      .then((data) => { if (active) setRows(data); })
+      .catch((e) => { if (active && e.name !== "AbortError") setLoadError(e?.message || "加载失败"); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; ctrl.abort(); };
   }, []);
 
   // Optimistic immediate-save: apply the patch locally, PATCH, roll back on error.
@@ -7872,26 +8010,28 @@ function FactorResearchPanel({ status = "production" }) {
     if (activeTab !== "trailing") return;
     if (trailingData) return;
     const ctrl = new AbortController();
+    let active = true;
     setLoading(true);
     setLoadError(null);
     fetchFactorReturns("trailing", null, ctrl.signal, status)
-      .then((data) => setTrailingData(data))
-      .catch((e) => { if (e.name !== "AbortError") setLoadError(e?.message || "加载失败"); })
-      .finally(() => setLoading(false));
-    return () => ctrl.abort();
+      .then((data) => { if (active) setTrailingData(data); })
+      .catch((e) => { if (active && e.name !== "AbortError") setLoadError(e?.message || "加载失败"); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; ctrl.abort(); };
   }, [activeTab, status, trailingData]);
 
   useEffect(() => {
     if (activeTab !== "custom") return;
     if (customCache[startDate]) return;
     const ctrl = new AbortController();
+    let active = true;
     setLoading(true);
     setLoadError(null);
     fetchFactorReturns("custom", startDate, ctrl.signal, status)
-      .then((data) => setCustomCache((prev) => ({ ...prev, [startDate]: data })))
-      .catch((e) => { if (e.name !== "AbortError") setLoadError(e?.message || "加载失败"); })
-      .finally(() => setLoading(false));
-    return () => ctrl.abort();
+      .then((data) => { if (active) setCustomCache((prev) => ({ ...prev, [startDate]: data })); })
+      .catch((e) => { if (active && e.name !== "AbortError") setLoadError(e?.message || "加载失败"); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; ctrl.abort(); };
   }, [activeTab, startDate, status]);
 
   const currentData = activeTab === "trailing" ? trailingData : customCache[startDate];
@@ -7923,7 +8063,7 @@ function FactorResearchPanel({ status = "production" }) {
       activeTab === "trailing"
         ? p.label
         : `${formatDateLabel(startDate)} 起 · ${p.forwardLabel}`,
-    data: currentData?.[p.key] ?? [],
+    data: Array.isArray(currentData?.[p.key]) ? currentData[p.key] : [],
   }));
 
   return (
@@ -8038,13 +8178,16 @@ function WatchlistPanel({
   onClearPreloadCache = null,
 }) {
   const isAshare = market === "ashare";
+  const isHk = market === "hk";
   const isUs = market === "us";
-  const title = isAshare ? "A股自选" : "美股自选";
+  const title = isAshare ? "A股自选" : isHk ? "港股自选" : "美股自选";
   const helper = isAshare
     ? "支持逗号、空格、换行分隔；一行一个 A 股代码也可以。"
-    : "支持逗号、空格、换行分隔；一行一个美股代码也可以。";
-  const placeholder = isAshare ? "例如 600519,000001\n000001\n300750" : "例如 MSFT,AAPL\nNVDA\nTSLA";
-  const isRecommendationMode = style === "rows";
+    : isHk
+      ? "支持 1 至 5 位港股代码，会自动补足前导零。"
+      : "支持逗号、空格、换行分隔；一行一个美股代码也可以。";
+  const placeholder = isAshare ? "例如 600519,000001\n000001\n300750" : isHk ? "例如 00700,09988\n3690\n00005" : "例如 MSFT,AAPL\nNVDA\nTSLA";
+  const isRecommendationMode = !isHk && style === "rows";
   const panelTitle = isRecommendationMode ? `${isAshare ? "A股" : "美股"}推荐列表` : title;
   const recommendationMaxDate = formatRecommendationDateInput(getDefaultRecommendationDate());
 
@@ -8098,7 +8241,7 @@ function WatchlistPanel({
             <div className="mt-1 text-xs leading-5 text-slate-500">{isRecommendationMode ? `共 ${items.length} 个标的` : helper}</div>
           </div>
           <div className="grid w-[132px] shrink-0 grid-cols-2 rounded-full border border-slate-200 bg-white p-1">
-            {WATCHLIST_STYLE_OPTIONS.map((option) => {
+            {WATCHLIST_STYLE_OPTIONS.filter((option) => !isHk || option.value === "cards").map((option) => {
               const active = style === option.value;
               return (
                 <button
@@ -8328,7 +8471,7 @@ function FavoritesToolbar({
   onDeleteGroup,
   onMoveItem,
 }) {
-  const title = market === "us" ? "我的美股收藏夹" : "我的股票收藏夹";
+  const title = market === "us" ? "我的美股收藏夹" : market === "hk" ? "我的港股收藏夹" : "我的股票收藏夹";
   const groupList = groups && groups.length ? groups : ["默认"];
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
@@ -8549,26 +8692,32 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [market, setMarket] = useState("ashare");
   // 初始为空：挂载后默认选中自选/收藏夹里的第一只，不再写死茅台/MSFT。
-  const [marketCodes, setMarketCodes] = useState({ ashare: "", us: "" });
+  const [marketCodes, setMarketCodes] = useState({ ashare: "", hk: "", us: "" });
   const [ashareSuggestions, setAshareSuggestions] = useState([]);
   const [ashareSuggestLoading, setAshareSuggestLoading] = useState(false);
   const [ashareSuggestOpen, setAshareSuggestOpen] = useState(false);
   const [ashareSuggestFocused, setAshareSuggestFocused] = useState(false);
   const [ashareSuggestIndex, setAshareSuggestIndex] = useState(0);
+  const [hkSuggestions, setHkSuggestions] = useState([]);
+  const [hkSuggestLoading, setHkSuggestLoading] = useState(false);
+  const [hkSuggestOpen, setHkSuggestOpen] = useState(false);
+  const [hkSuggestFocused, setHkSuggestFocused] = useState(false);
+  const [hkSuggestIndex, setHkSuggestIndex] = useState(0);
   // 初始为空：挂载后 loadDefaultWatchlist 会用收藏夹最新 10 只（或随机 5 只）填充。
   const [watchlistInputMap, setWatchlistInputMap] = useState({
     ashare: "",
+    hk: "",
     us: "",
   });
-  const [watchlistItemsMap, setWatchlistItemsMap] = useState({ ashare: [], us: [] });
+  const [watchlistItemsMap, setWatchlistItemsMap] = useState({ ashare: [], hk: [], us: [] });
   const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [watchlistError, setWatchlistError] = useState("");
-  const [favoriteItemsMap, setFavoriteItemsMap] = useState({ ashare: [], us: [] });
-  const [favoriteLoadingMap, setFavoriteLoadingMap] = useState({ ashare: false, us: false });
-  const [favoriteErrorMap, setFavoriteErrorMap] = useState({ ashare: "", us: "" });
-  const [favoritePendingMap, setFavoritePendingMap] = useState({ ashare: [], us: [] });
-  const [favoriteGroupsMap, setFavoriteGroupsMap] = useState({ ashare: ["默认"], us: ["默认"] });
-  const [activeFavoriteGroupMap, setActiveFavoriteGroupMap] = useState({ ashare: "默认", us: "默认" });
+  const [favoriteItemsMap, setFavoriteItemsMap] = useState({ ashare: [], hk: [], us: [] });
+  const [favoriteLoadingMap, setFavoriteLoadingMap] = useState({ ashare: false, hk: false, us: false });
+  const [favoriteErrorMap, setFavoriteErrorMap] = useState({ ashare: "", hk: "", us: "" });
+  const [favoritePendingMap, setFavoritePendingMap] = useState({ ashare: [], hk: [], us: [] });
+  const [favoriteGroupsMap, setFavoriteGroupsMap] = useState({ ashare: ["默认"], hk: ["默认"], us: ["默认"] });
+  const [activeFavoriteGroupMap, setActiveFavoriteGroupMap] = useState({ ashare: "默认", hk: "默认", us: "默认" });
   const [favoritesPanelOpen, setFavoritesPanelOpen] = useState(false);
   const [recommendationItemsMap, setRecommendationItemsMap] = useState({ ashare: [], us: [] });
   const [recommendationLoading, setRecommendationLoading] = useState(false);
@@ -8647,31 +8796,34 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
   }, [rawRows, fullRowsWithTD.length, displayStartIndex, unfilledOnly]);
   const latest = rows.length > 0 ? rows[rows.length - 1] : null;
   const latestColor = latest && latest.close >= latest.open ? "text-red-600" : "text-green-700";
+  const displayedPrice = market === "hk" && Number.isFinite(meta.latestPrice) ? meta.latestPrice : latest?.close;
+  const displayedPct = market === "hk" && Number.isFinite(meta.quotePct) ? meta.quotePct : latest?.pct;
   const prediction = useMemo(() => buildTrendPrediction(rawRows), [rawRows]);
   const rsiInfo = useMemo(() => calcRSIState(rawRows), [rawRows]);
   const vwapInfo = useMemo(() => calcVWAPState(rawRows), [rawRows]);
 
   // 这些 tab 是独立页面，没有个股的代码搜索/周期/复权等控件，也不触发自动取数。
   const isStandaloneMarket = market === "agent" || market === "factor-research" || market === "market-trend";
-  const currentCode = market === "us" ? marketCodes.us : marketCodes.ashare;
+  const currentCode = marketCodes[market] || "";
 
-  const watchlistInput = market === "us" ? watchlistInputMap.us : watchlistInputMap.ashare;
-  const favoriteItems = market === "us" ? favoriteItemsMap.us : favoriteItemsMap.ashare;
-  const favoriteLoading = market === "us" ? favoriteLoadingMap.us : favoriteLoadingMap.ashare;
-  const favoriteError = market === "us" ? favoriteErrorMap.us : favoriteErrorMap.ashare;
-  const favoritePendingCodes = market === "us" ? favoritePendingMap.us : favoritePendingMap.ashare;
-  const favoriteGroups = market === "us" ? favoriteGroupsMap.us : favoriteGroupsMap.ashare;
-  const activeFavoriteGroup = market === "us" ? activeFavoriteGroupMap.us : activeFavoriteGroupMap.ashare;
+  const watchlistInput = watchlistInputMap[market] || "";
+  const favoriteItems = favoriteItemsMap[market] || EMPTY_LIST;
+  const favoriteLoading = favoriteLoadingMap[market] || false;
+  const favoriteError = favoriteErrorMap[market] || "";
+  const favoritePendingCodes = favoritePendingMap[market] || EMPTY_LIST;
+  const favoriteGroups = favoriteGroupsMap[market] || ["默认"];
+  const activeFavoriteGroup = activeFavoriteGroupMap[market] || "默认";
   const favoriteCodeSet = useMemo(() => new Set(favoriteItems.map((item) => item.code)), [favoriteItems]);
   const favoritePendingCodeSet = useMemo(() => new Set(favoritePendingCodes), [favoritePendingCodes]);
   const activeMetaCode = normalizeCodeForMarket(meta.code || currentCode, market);
   const activeMetaFavoritePending = favoritePendingCodeSet.has(activeMetaCode);
   const activeMetaFavorited = favoriteCodeSet.has(activeMetaCode);
-  const manualWatchlistItems = market === "us" ? watchlistItemsMap.us : watchlistItemsMap.ashare;
-  const recommendationItems = market === "us" ? recommendationItemsMap.us : recommendationItemsMap.ashare;
-  const watchlistItems = watchlistStyle === "rows" ? recommendationItems : manualWatchlistItems;
-  const watchlistLoadingState = watchlistStyle === "rows" ? recommendationLoading : watchlistLoading;
-  const watchlistErrorState = watchlistStyle === "rows" ? recommendationError : watchlistError;
+  const manualWatchlistItems = watchlistItemsMap[market] || EMPTY_LIST;
+  const recommendationItems = recommendationItemsMap[market] || EMPTY_LIST;
+  const effectiveWatchlistStyle = market === "hk" ? "cards" : watchlistStyle;
+  const watchlistItems = effectiveWatchlistStyle === "rows" ? recommendationItems : manualWatchlistItems;
+  const watchlistLoadingState = effectiveWatchlistStyle === "rows" ? recommendationLoading : watchlistLoading;
+  const watchlistErrorState = effectiveWatchlistStyle === "rows" ? recommendationError : watchlistError;
   const recommendationFactor = market === "us" ? recommendationFactorMap.us : recommendationFactorMap.ashare;
   const recommendationTd = market === "us" ? recommendationTdMap.us : recommendationTdMap.ashare;
   const recommendationDate = market === "us" ? recommendationDateMap.us : recommendationDateMap.ashare;
@@ -8692,9 +8844,17 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
     return codes;
   }, [market, watchlistItems]);
   // 用户是否手动选过收藏夹（按市场）。未手动选过时，默认选中最新建的收藏夹。
-  const favoriteGroupTouchedRef = useRef({ ashare: false, us: false });
+  const favoriteGroupTouchedRef = useRef({ ashare: false, hk: false, us: false });
+  const marketRef = useRef(market);
+  const marketCodesRef = useRef(marketCodes);
+  const loadRunRef = useRef(0);
   const usKlineCacheRef = useRef(new Map());
   const usPreloadRunRef = useRef(0);
+
+  useEffect(() => {
+    marketRef.current = market;
+    marketCodesRef.current = marketCodes;
+  }, [market, marketCodes]);
 
   function setFavoritePending(marketKey, code, active) {
     setFavoritePendingMap((prev) => {
@@ -8771,6 +8931,16 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
     load(code);
   }
 
+  function selectHkSuggestion(item) {
+    const code = normalizeHkCode(item?.code);
+    if (!isValidHkCode(code)) return;
+    setMarketCodes((prev) => ({ ...prev, hk: code }));
+    setHkSuggestions([]);
+    setHkSuggestOpen(false);
+    setHkSuggestIndex(0);
+    load(code);
+  }
+
   useEffect(() => {
     if (!chartFullscreen) return undefined;
     function handleKeydown(event) {
@@ -8821,10 +8991,50 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
     };
   }, [market, currentCode, ashareSuggestFocused]);
 
+  useEffect(() => {
+    if (market !== "hk" || !hkSuggestFocused) {
+      setHkSuggestions([]);
+      setHkSuggestOpen(false);
+      setHkSuggestLoading(false);
+      return undefined;
+    }
+
+    const query = String(currentCode || "").trim();
+    if (!query) {
+      setHkSuggestions([]);
+      setHkSuggestOpen(false);
+      setHkSuggestLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setHkSuggestLoading(true);
+      try {
+        const items = await fetchHkSuggestions(query, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setHkSuggestions(items);
+        setHkSuggestIndex(0);
+        setHkSuggestOpen(items.length > 0 && hkSuggestFocused);
+      } catch {
+        if (!controller.signal.aborted) {
+          setHkSuggestions([]);
+          setHkSuggestOpen(false);
+        }
+      } finally {
+        if (!controller.signal.aborted) setHkSuggestLoading(false);
+      }
+    }, 320);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [market, currentCode, hkSuggestFocused]);
+
   // 默认自选填充：优先展示收藏夹最新 10 只，收藏夹为空则从备选池随机取 5 只。
   async function loadDefaultWatchlist(targetMarket = market) {
-    const requestedMarket = targetMarket === "us" ? "us" : targetMarket === "ashare" ? "ashare" : market;
-    if (requestedMarket === "agent") return;
+    const requestedMarket = normalizeEquityMarket(targetMarket, normalizeEquityMarket(market));
 
     let codes = [];
     try {
@@ -8840,7 +9050,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
     }
 
     if (!codes.length) {
-      const pool = requestedMarket === "us" ? US_FALLBACK_WATCHLIST : ASHARE_FALLBACK_WATCHLIST;
+      const pool = requestedMarket === "us" ? US_FALLBACK_WATCHLIST : requestedMarket === "hk" ? HK_FALLBACK_WATCHLIST : ASHARE_FALLBACK_WATCHLIST;
       codes = pickRandomCodes(pool, 5);
     }
 
@@ -8848,25 +9058,25 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
     setWatchlistInputMap((prev) => ({ ...prev, [requestedMarket]: codes.join(",") }));
 
     // 该市场还没有选中标的时，默认选中并加载第一只（首屏不再写死茅台）。
-    const alreadySelected = requestedMarket === "us" ? marketCodes.us : marketCodes.ashare;
+    const alreadySelected = marketCodesRef.current[requestedMarket];
     if (!alreadySelected && codes.length) {
+      marketCodesRef.current = { ...marketCodesRef.current, [requestedMarket]: codes[0] };
       setMarketCodes((prev) => ({ ...prev, [requestedMarket]: codes[0] }));
-      if (requestedMarket === market) load(codes[0]);
+      if (requestedMarket === marketRef.current) load(codes[0]);
     }
 
     await loadWatchlist(requestedMarket, codes);
   }
 
   async function loadWatchlist(targetMarket = market, codesOverride = null) {
-    const requestedMarket = targetMarket === "us" ? "us" : targetMarket === "ashare" ? "ashare" : market;
-    if (requestedMarket === "agent") return;
+    const requestedMarket = normalizeEquityMarket(targetMarket, normalizeEquityMarket(market));
     const rawInput = codesOverride != null
       ? (Array.isArray(codesOverride) ? codesOverride.join(",") : codesOverride)
-      : (requestedMarket === "us" ? watchlistInputMap.us : watchlistInputMap.ashare);
+      : (watchlistInputMap[requestedMarket] || "");
     const codes = normalizeWatchlistCodes(rawInput, requestedMarket);
 
     if (!codes.length) {
-      setWatchlistError(requestedMarket === "ashare" ? "请先输入至少一个 6 位 A 股代码。" : "请先输入至少一个有效的美股代码。");
+      setWatchlistError(requestedMarket === "ashare" ? "请先输入至少一个 6 位 A 股代码。" : requestedMarket === "hk" ? "请先输入至少一个有效的港股代码。" : "请先输入至少一个有效的美股代码。");
       setWatchlistItemsMap((prev) => ({ ...prev, [requestedMarket]: [] }));
       return;
     }
@@ -8882,7 +9092,9 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
           }
           const detail = requestedMarket === "ashare"
             ? await fetchAshareKline({ code, period, adjust, limit: 60 })
-            : await fetchUsKlineCached({ symbol: code, period, adjust, limit: 60 });
+            : requestedMarket === "hk"
+              ? await fetchHkKline({ code, period, adjust, limit: 60 })
+              : await fetchUsKlineCached({ symbol: code, period, adjust, limit: 60 });
           return {
             code: detail.code || code,
             name: detail.name || code,
@@ -8908,6 +9120,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
   }
 
   async function loadRecommendations(targetMarket = market) {
+    if (targetMarket === "hk") return;
     const requestedMarket = targetMarket === "us" ? "us" : "ashare";
     const factor = requestedMarket === "us" ? recommendationFactorMap.us : recommendationFactorMap.ashare;
     const date = requestedMarket === "us" ? recommendationDateMap.us : recommendationDateMap.ashare;
@@ -8929,7 +9142,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
   }
 
   async function loadFavorites(targetMarket = market) {
-    const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    const requestedMarket = normalizeEquityMarket(targetMarket, normalizeEquityMarket(market));
     setFavoriteLoadingMap((prev) => ({ ...prev, [requestedMarket]: true }));
     setFavoriteErrorMap((prev) => ({ ...prev, [requestedMarket]: "" }));
 
@@ -8955,7 +9168,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
   }
 
   async function toggleFavorite(item, targetMarket = market) {
-    const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    const requestedMarket = normalizeEquityMarket(targetMarket, normalizeEquityMarket(market));
     const code = normalizeCodeForMarket(item?.code, requestedMarket);
     if (!code) return;
 
@@ -8983,7 +9196,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
 
   // 新建收藏夹，成功后切到该夹（成为 active，后续收藏落入此夹）。
   async function handleCreateFavoriteGroup(rawName, targetMarket = market) {
-    const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    const requestedMarket = normalizeEquityMarket(targetMarket, normalizeEquityMarket(market));
     const name = String(rawName || "").trim().slice(0, 30);
     if (!name || name === "默认") return;
     try {
@@ -8999,7 +9212,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
 
   // 删除收藏夹（连票一起删）；若删的是当前 active 夹，回落默认夹。
   async function handleDeleteFavoriteGroup(name, targetMarket = market) {
-    const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    const requestedMarket = normalizeEquityMarket(targetMarket, normalizeEquityMarket(market));
     if (!name || name === "默认") return;
     try {
       const payload = await deleteFavoriteGroup({ market: requestedMarket, name });
@@ -9018,7 +9231,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
 
   // 把某只票移动到另一个收藏夹。
   async function handleMoveFavorite(item, group, targetMarket = market) {
-    const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    const requestedMarket = normalizeEquityMarket(targetMarket, normalizeEquityMarket(market));
     const code = normalizeCodeForMarket(item?.code, requestedMarket);
     if (!code || !group) return;
     setFavoritePending(requestedMarket, code, true);
@@ -9035,13 +9248,14 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
   }
 
   function handleSelectFavoriteGroup(name, targetMarket = market) {
-    const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    const requestedMarket = normalizeEquityMarket(targetMarket, normalizeEquityMarket(market));
     favoriteGroupTouchedRef.current[requestedMarket] = true;
     setActiveFavoriteGroupMap((prev) => ({ ...prev, [requestedMarket]: name || "默认" }));
   }
 
   async function load(overrideCode) {
     if (isStandaloneMarket) return;
+    const runId = ++loadRunRef.current;
     const rawTargetCode = typeof overrideCode === "string" ? overrideCode : currentCode;
     let targetCode = normalizeCodeForMarket(rawTargetCode, market);
     setLoading(true);
@@ -9077,7 +9291,31 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
             limit: Math.max(5000, Number(displayCount) + 120),
           });
         })()
-        : await (() => {
+        : market === "hk"
+          ? await (async () => {
+            let normalized = normalizeHkCode(rawTargetCode);
+            if (!isValidHkCode(normalized)) {
+              const matches = await fetchHkSuggestions(rawTargetCode);
+              normalized = normalizeHkCode(matches[0]?.code);
+              if (isValidHkCode(normalized)) {
+                setMarketCodes((prev) => ({ ...prev, hk: normalized }));
+                setHkSuggestions([]);
+                setHkSuggestOpen(false);
+                setHkSuggestIndex(0);
+                targetCode = normalized;
+              }
+            }
+            if (!isValidHkCode(normalized)) {
+              throw new Error("请输入港股代码，或输入股票简称 / 拼音后从联想结果中选择。");
+            }
+            return fetchHkKline({
+              code: normalized,
+              period,
+              adjust,
+              limit: Math.min(1000, Math.max(600, Number(displayCount) + 120)),
+            });
+          })()
+          : await (() => {
           const normalized = targetCode;
           if (!isValidUsSymbol(normalized)) {
             throw new Error("请输入有效的美股代码，例如 AAPL、MSFT、NVDA、BRK.B。");
@@ -9089,6 +9327,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
             limit: Math.max(5000, Number(displayCount) + 120),
           });
         })();
+      if (runId !== loadRunRef.current) return;
       setRawRows(result.klines);
       setMeta({
         code: result.code,
@@ -9100,6 +9339,12 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
         volumeRatio: Number.isFinite(result.volumeRatio) ? result.volumeRatio : null,
         outerVol: Number.isFinite(result.outerVol) ? result.outerVol : null,
         innerVol: Number.isFinite(result.innerVol) ? result.innerVol : null,
+        quoteTime: result.quoteTime || "",
+        currency: result.currency || "",
+        boardLot: Number.isFinite(result.boardLot) ? result.boardLot : null,
+        latestPrice: Number.isFinite(result.latestPrice) ? result.latestPrice : null,
+        quotePct: Number.isFinite(result.pct) ? result.pct : null,
+        sourceInfo: result.sourceInfo || "",
       });
 
       if (market === "ashare") {
@@ -9144,6 +9389,8 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
             }),
           ]);
 
+          if (runId !== loadRunRef.current) return;
+
           if (financeResult.status === "fulfilled") {
             setFinancialInfo(financeResult.value);
           } else {
@@ -9173,9 +9420,11 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
             });
           }
         } finally {
-          setFinancialLoading(false);
-          setFundFlowLoading(false);
-          setProfileLoading(false);
+          if (runId === loadRunRef.current) {
+            setFinancialLoading(false);
+            setFundFlowLoading(false);
+            setProfileLoading(false);
+          }
         }
       } else if (market === "us") {
         setFinancialLoading(false);
@@ -9190,11 +9439,14 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
           });
           const payload = await res.json().catch(() => null);
           if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+          if (runId !== loadRunRef.current) return;
           setProfileInfo(payload);
         } catch (profileErr) {
-          setProfileError(profileErr instanceof Error ? profileErr.message : "美股公司资料加载失败");
+          if (runId === loadRunRef.current) {
+            setProfileError(profileErr instanceof Error ? profileErr.message : "美股公司资料加载失败");
+          }
         } finally {
-          setProfileLoading(false);
+          if (runId === loadRunRef.current) setProfileLoading(false);
         }
       } else {
         setFinancialLoading(false);
@@ -9203,6 +9455,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
         setSuspensionRisk(null);
       }
     } catch (e) {
+      if (runId !== loadRunRef.current) return;
       setError(getErrorMessage(e, "行情加载失败，请稍后重试。"));
       setRawRows([]);
       setMeta({ code: targetCode, name: "" });
@@ -9211,7 +9464,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
       setFundFlowLoading(false);
       setProfileLoading(false);
     } finally {
-      setLoading(false);
+      if (runId === loadRunRef.current) setLoading(false);
     }
   }
 
@@ -9238,7 +9491,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
   useEffect(() => {
     if (isStandaloneMarket || watchlistItems.length > 0) return undefined;
     const timer = window.setTimeout(() => {
-      if (watchlistStyle === "rows") {
+      if (effectiveWatchlistStyle === "rows") {
         loadRecommendations(market);
       } else {
         loadDefaultWatchlist(market);
@@ -9246,7 +9499,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
     }, 0);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [market, watchlistItems.length, watchlistStyle]);
+  }, [market, watchlistItems.length, effectiveWatchlistStyle]);
 
   useEffect(() => {
     if (market !== "us" || !usPreloadEnabled) {
@@ -9324,6 +9577,8 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                     type="button"
                     className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium transition ${active ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-900"}`}
                     onClick={() => {
+                      marketRef.current = tab.value;
+                      loadRunRef.current += 1;
                       setMarket(tab.value);
                       setError("");
                       setFinancialError("");
@@ -9332,6 +9587,12 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                         setMarketCodes((prev) => ({ ...prev, us: prev.us || "MSFT" }));
                         setRawRows([]);
                         setMeta({ code: marketCodes.us || "MSFT", name: "" });
+                      } else if (tab.value === "hk") {
+                        setRawRows([]);
+                        setMeta({ code: marketCodes.hk || "", name: "" });
+                      } else if (tab.value === "ashare") {
+                        setRawRows([]);
+                        setMeta({ code: marketCodes.ashare || "", name: "" });
                       } else if (tab.value === "agent" || tab.value === "factor-research" || tab.value === "market-trend") {
                         setRawRows([]);
                         setMeta({ code: "", name: "" });
@@ -9351,19 +9612,28 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
               <input
                 value={currentCode}
                 onChange={(e) => {
-                  const value = market === "ashare" ? e.target.value.slice(0, 30) : normalizeCodeForMarket(e.target.value, market);
+                  const value = market === "ashare" || market === "hk" ? e.target.value.slice(0, 30) : normalizeCodeForMarket(e.target.value, market);
                   setMarketCodes((prev) => ({ ...prev, [market]: value }));
                   if (market === "ashare") setAshareSuggestOpen(Boolean(e.target.value.trim()));
+                  if (market === "hk") setHkSuggestOpen(Boolean(e.target.value.trim()));
                 }}
                 onFocus={() => {
                   if (market === "ashare") setAshareSuggestFocused(true);
                   if (market === "ashare" && ashareSuggestions.length) setAshareSuggestOpen(true);
+                  if (market === "hk") setHkSuggestFocused(true);
+                  if (market === "hk" && hkSuggestions.length) setHkSuggestOpen(true);
                 }}
                 onBlur={() => {
                   if (market === "ashare") {
                     window.setTimeout(() => {
                       setAshareSuggestFocused(false);
                       setAshareSuggestOpen(false);
+                    }, 120);
+                  }
+                  if (market === "hk") {
+                    window.setTimeout(() => {
+                      setHkSuggestFocused(false);
+                      setHkSuggestOpen(false);
                     }, 120);
                   }
                 }}
@@ -9390,11 +9660,33 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                       return;
                     }
                   }
+                  if (market === "hk" && hkSuggestOpen && hkSuggestions.length) {
+                    if (e.key === "ArrowDown") {
+                      e.preventDefault();
+                      setHkSuggestIndex((prev) => Math.min(prev + 1, hkSuggestions.length - 1));
+                      return;
+                    }
+                    if (e.key === "ArrowUp") {
+                      e.preventDefault();
+                      setHkSuggestIndex((prev) => Math.max(prev - 1, 0));
+                      return;
+                    }
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      setHkSuggestOpen(false);
+                      return;
+                    }
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      selectHkSuggestion(hkSuggestions[hkSuggestIndex] || hkSuggestions[0]);
+                      return;
+                    }
+                  }
                   if (e.key === "Enter" && !isStandaloneMarket) {
                     load(e.currentTarget.value);
                   }
                 }}
-                placeholder={market === "ashare" ? "代码 / 简称 / 拼音首字母" : market === "us" ? "如 AAPL" : market === "agent" ? "Agent 功能待接入" : "因子研究页暂不支持代码查询"}
+                placeholder={market === "ashare" ? "代码 / 简称 / 拼音首字母" : market === "hk" ? "代码 / 简称 / 拼音" : market === "us" ? "如 AAPL" : market === "agent" ? "Agent 功能待接入" : "因子研究页暂不支持代码查询"}
                 disabled={isStandaloneMarket}
                 className="w-full bg-transparent outline-none disabled:cursor-not-allowed disabled:text-slate-400"
               />
@@ -9426,6 +9718,36 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                     {ashareSuggestLoading && (
                       <div className="border-t border-slate-100 px-3 py-1.5 text-xs text-slate-400">搜索中...</div>
                     )}
+                    </>
+                  )}
+                </div>
+              )}
+              {market === "hk" && (hkSuggestOpen || hkSuggestLoading) && (
+                <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-30 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+                  {hkSuggestLoading && !hkSuggestions.length ? (
+                    <div className="px-3 py-2 text-sm text-slate-500">搜索中...</div>
+                  ) : (
+                    <>
+                    {hkSuggestions.map((item, index) => {
+                      const active = index === hkSuggestIndex;
+                      return (
+                        <button
+                          key={`${item.code}-${index}`}
+                          type="button"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setHkSuggestIndex(index)}
+                          onClick={() => selectHkSuggestion(item)}
+                          className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition ${active ? "bg-slate-900 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}
+                        >
+                          <span className="min-w-0">
+                            <span className="block truncate text-sm font-semibold">{item.name}</span>
+                            <span className={`block text-xs ${active ? "text-slate-200" : "text-slate-400"}`}>港股 · {item.pinyin || "-"}</span>
+                          </span>
+                          <span className="shrink-0 font-mono text-sm">{item.code}</span>
+                        </button>
+                      );
+                    })}
+                    {hkSuggestLoading && <div className="border-t border-slate-100 px-3 py-1.5 text-xs text-slate-400">搜索中...</div>}
                     </>
                   )}
                 </div>
@@ -9556,20 +9878,32 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                       <span>日期</span>
                       <span>{latest.date}{latest.isIntradayEstimate ? " 盘中" : ""}</span>
                     </div>
+                    {market === "hk" && meta.quoteTime ? (
+                      <div className="col-span-2 flex justify-between gap-3">
+                        <span>腾讯快照</span>
+                        <span className="text-right">{meta.quoteTime} · {meta.currency || "HKD"}</span>
+                      </div>
+                    ) : null}
                     <div className="flex justify-between">
-                      <span>收盘</span>
-                      <span className={`font-semibold ${latestColor}`}>{latest.close.toFixed(2)}</span>
+                      <span>{market === "hk" ? "最新" : "收盘"}</span>
+                      <span className={`font-semibold ${latestColor}`}>{displayedPrice.toFixed(2)}</span>
                     </div>
                     <div className="flex justify-between">
                       <span>涨跌幅</span>
-                      <span className={latest.pct >= 0 ? "text-red-600" : "text-green-700"}>
-                        {Number.isFinite(latest.pct) ? latest.pct.toFixed(2) : "-"}%
+                      <span className={displayedPct >= 0 ? "text-red-600" : "text-green-700"}>
+                        {Number.isFinite(displayedPct) ? displayedPct.toFixed(2) : "-"}%
                       </span>
                     </div>
                     <div className="flex justify-between">
                       <span>成交量</span>
                       <span>{formatNumber(latest.volume)}</span>
                     </div>
+                    {market === "hk" && Number.isFinite(meta.boardLot) ? (
+                      <div className="flex justify-between">
+                        <span>每手股数</span>
+                        <span>{meta.boardLot}</span>
+                      </div>
+                    ) : null}
                     <div className="flex justify-between">
                       <span className="inline-flex items-center">
                         换手率
@@ -9579,11 +9913,11 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                       <span>{Number.isFinite(meta.turnoverRate) ? `${meta.turnoverRate.toFixed(2)}%` : "-"}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>总市值</span>
+                      <span>总市值{market === "hk" && meta.currency ? `（${meta.currency}）` : ""}</span>
                       <span>{formatNumber(meta.marketCap)}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span>流通市值</span>
+                      <span>流通市值{market === "hk" && meta.currency ? `（${meta.currency}）` : ""}</span>
                       <span>{formatNumber(meta.floatMarketCap)}</span>
                     </div>
                     <div className="flex justify-between">
@@ -9759,7 +10093,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                   <div className="chart-panel-header mb-3 flex min-w-0 flex-col gap-3">
                     <div className="min-w-0">
                       <div className="flex min-w-0 items-center gap-2">
-                        <div className="truncate text-base font-semibold lg:text-lg">{meta.code ? `${meta.code} ${meta.name}` : market === "us" ? "美股 K线图" : "K线图"}</div>
+                        <div className="truncate text-base font-semibold lg:text-lg">{meta.code ? `${meta.code} ${meta.name}` : market === "us" ? "美股 K线图" : market === "hk" ? "港股 K线图" : "K线图"}</div>
                         {activeMetaCode ? (
                           <button
                             type="button"
@@ -9817,9 +10151,10 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                   )}
                   </CardContent>
                 </Card>
-                {(market === "ashare" || chanOptions.enabled) && <StockAnalysisPanel
+                {(market === "ashare" || market === "hk" || chanOptions.enabled) && <StockAnalysisPanel
                   data={chanData} enabled={chanOptions.enabled} tab={analysisTab} onTabChange={setAnalysisTab}
                   code={meta.code || currentCode} name={meta.name} period={period}
+                  market={market}
                   showFinancial={market === "ashare"}
                   financialReportContent={<FinancialReportPanel
                     financialInfo={financialInfo}
@@ -9828,7 +10163,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                     market={market}
                     embedded
                   />}
-                  showNews={market === "ashare"}
+                  showNews={market === "ashare" || market === "hk"}
                   showFundFlow={market === "ashare"}
                   fundFlowContent={<FundFlowPanel
                     fundFlowInfo={fundFlowInfo}
@@ -9847,7 +10182,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
               activeCode={meta.code || currentCode}
               loading={watchlistLoadingState}
               error={watchlistErrorState}
-              style={watchlistStyle}
+              style={effectiveWatchlistStyle}
               recommendationFactor={recommendationFactor}
               recommendationTd={recommendationTd}
               recommendationDate={recommendationDate}
@@ -9857,7 +10192,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
               favoriteCodeSet={favoriteCodeSet}
               favoritePendingCodeSet={favoritePendingCodeSet}
               onInputChange={(value) => setWatchlistInputMap((prev) => ({ ...prev, [market]: value }))}
-              onRefresh={() => (watchlistStyle === "rows" ? loadRecommendations() : loadWatchlist())}
+              onRefresh={() => (effectiveWatchlistStyle === "rows" ? loadRecommendations() : loadWatchlist())}
               onStyleChange={setWatchlistStyle}
               onRecommendationFactorChange={(value) => {
                 setRecommendationFactorMap((prev) => ({ ...prev, [market]: value }));
@@ -9909,7 +10244,9 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
             }}
           />
         ) : (
-          <FactorResearchPageLayout />
+          <FactorResearchErrorBoundary>
+            <FactorResearchPageLayout />
+          </FactorResearchErrorBoundary>
         )}
         {!isStandaloneMarket && (
           <FavoritesToolbar
@@ -9945,7 +10282,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
               <div className="chart-panel-header flex min-w-0 flex-col gap-3 border-b px-4 py-4 md:px-5">
                 <div>
                   <div className="flex items-center gap-2">
-                    <div className="text-xl font-semibold">{meta.code ? `${meta.code} ${meta.name}` : market === "us" ? "美股 K线图" : "K线图"}</div>
+                    <div className="text-xl font-semibold">{meta.code ? `${meta.code} ${meta.name}` : market === "us" ? "美股 K线图" : market === "hk" ? "港股 K线图" : "K线图"}</div>
                     {activeMetaCode ? (
                       <button
                         type="button"
