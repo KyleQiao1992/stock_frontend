@@ -59,7 +59,7 @@ function ChanEndpoints({ data }) {
     </div>
   </div>;
 }
-export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, code, name, period, showFinancial, financialReportContent, showNews, showFundFlow, fundFlowContent }) {
+export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, code, name, period, market = 'ashare', showFinancial, financialReportContent, showNews, showFundFlow, fundFlowContent }) {
   const tabs = [
     ...(showFinancial ? [['financial','财报']] : []),
     ...(enabled ? [['outlook','缠论研判'],['endpoints','笔端参考']] : []),
@@ -76,7 +76,7 @@ export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, co
           </div>
           <span className="text-xs text-slate-500">{name} {code}</span>
         </div>
-        {active === 'financial' ? financialReportContent : active === 'news' ? <div className="flex h-[520px] min-h-0 overflow-hidden"><StockNewsPanel code={code} /></div> : active === 'fundFlow' ? fundFlowContent : <>
+        {active === 'financial' ? financialReportContent : active === 'news' ? <div className="flex h-[520px] min-h-0 overflow-hidden"><StockNewsPanel code={code} market={market} /></div> : active === 'fundFlow' ? fundFlowContent : <>
           <p className="mb-4 text-xs leading-5 text-slate-500">{({'101':'日K','102':'周K','103':'月K'})[period] || period} · 最近 {data.dates.length} 根计算，与图上结构一致 · 截至 {data.dates.at(-1) || '—'}；图表显示根数不改变计算范围。</p>
           {active === 'outlook' ? <ChanOutlook data={data} /> : <ChanEndpoints data={data} />}
         </>}
