@@ -354,6 +354,11 @@ function industryDetail(name) {
 }
 
 export function createMarketHeatmapHandler() {
+  // 服务启动时后台预热 Redis 快照，避免首位用户等待远端缓存建连和读取。
+  getRedisClient()
+    .then((redis) => Promise.all([readCache(redis), readLastGood(redis)]))
+    .catch(() => {});
+
   return async function marketHeatmapHandler(req, res) {
     if (handleHeatmapHistory(req, res)) return;
     const sendJson = (status, body) => {

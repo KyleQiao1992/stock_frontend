@@ -2,6 +2,7 @@ import { createThsProvider } from './heatmapThs.js';
 import { EM_UT, EM_FETCH_HEADERS, mapWithConcurrency } from './boardTrend.js';
 
 const DAY = 86400000;
+const CURRENT_QUERY_TTL = 5 * 60 * 1000;
 const LIST_HOSTS = ['https://push2delay.eastmoney.com', 'https://push2.eastmoney.com'];
 const HIST_HOSTS = ['https://push2his.eastmoney.com', 'https://79.push2his.eastmoney.com'];
 const today = () => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
@@ -116,7 +117,9 @@ export function createHistoryService(request = getJson, provider = null) {
       if (job.failed.length === Math.min(3, list.length) && list.length) {
         job.error = '历史行情接口当前不可用，请稍后重试；未使用最新行情替代历史数据。';
       } else {
-        await mapWithConcurrency(list.slice(3), 6, one);
+        // 同花顺每个行业是独立的静态年度日线文件，可安全提高并发；
+        // 东方财富兜底接口仍维持较低并发，避免触发实时行情源限流。
+        await mapWithConcurrency(list.slice(3), provider ? 16 : 6, one);
       }
     } catch (e) { job.error = e.message; }
     finally { job.status = 'complete'; job.finishedAt = Date.now(); active = null; }
@@ -125,7 +128,7 @@ export function createHistoryService(request = getJson, provider = null) {
     query(query, retry = false) {
       const key = JSON.stringify(query);
       let job = jobs.get(key);
-      if (job && job.status === 'complete' && ((retry && (job.error || job.failed.length)) || Date.now() - job.finishedAt > (query.end >= today() ? 60000 : 10 * 60000))) { jobs.delete(key); job = null; }
+      if (job && job.status === 'complete' && ((retry && (job.error || job.failed.length)) || Date.now() - job.finishedAt > (query.end >= today() ? CURRENT_QUERY_TTL : 10 * 60000))) { jobs.delete(key); job = null; }
       if (!job) {
         if (active) return { status: 'busy', notice: '另一个历史查询正在加载，请稍后重试。' };
         if (jobs.size >= 20) jobs.delete(jobs.keys().next().value);

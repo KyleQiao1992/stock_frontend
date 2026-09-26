@@ -6849,11 +6849,62 @@ function heatmapFontSize(w, h, max) {
   return Math.max(10, Math.min(max, Math.round(Math.sqrt(w * h) / 6)));
 }
 
+const HEATMAP_DATE_PRESETS = [
+  { value: "3d", label: "近3天", days: 3 },
+  { value: "1w", label: "近一周", days: 7 },
+  { value: "1m", label: "近一月", days: 30 },
+  { value: "3m", label: "近三月", days: 90 },
+  { value: "6m", label: "近半年", days: 180 },
+  { value: "ytd", label: "今年以来", yearToDate: true },
+];
+
+const HEATMAP_CLIENT_CACHE_PREFIX = "market-heatmap:query:v1:";
+const HEATMAP_LATEST_CACHE_MS = 24 * 60 * 60 * 1000;
+const HEATMAP_HISTORY_CACHE_MS = 30 * 60 * 1000;
+const heatmapClientCache = new Map();
+
+function readHeatmapClientCache(query) {
+  const key = query || "latest";
+  const maxAge = query ? HEATMAP_HISTORY_CACHE_MS : HEATMAP_LATEST_CACHE_MS;
+  const memory = heatmapClientCache.get(key);
+  if (memory && Date.now() - memory.at < maxAge) return memory.body;
+  try {
+    const cached = JSON.parse(sessionStorage.getItem(`${HEATMAP_CLIENT_CACHE_PREFIX}${key}`) || "null");
+    if (cached && Date.now() - Number(cached.at) < maxAge && Array.isArray(cached.body?.industries) && cached.body.industries.length) {
+      heatmapClientCache.set(key, cached);
+      return cached.body;
+    }
+  } catch {
+    // 隐私模式或存储空间不足时继续使用网络请求。
+  }
+  return null;
+}
+
+function writeHeatmapClientCache(query, body) {
+  if (!Array.isArray(body?.industries) || !body.industries.length) return;
+  const key = query || "latest";
+  const cached = { body, at: Date.now() };
+  heatmapClientCache.set(key, cached);
+  try {
+    sessionStorage.setItem(`${HEATMAP_CLIENT_CACHE_PREFIX}${key}`, JSON.stringify(cached));
+  } catch {
+    // 内存缓存仍然可用。
+  }
+}
+
+function heatmapPresetStart(today, preset) {
+  if (preset.yearToDate) return `${today.slice(0, 4)}-01-01`;
+  const date = new Date(`${today}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - (preset.days - 1));
+  return date.toISOString().slice(0, 10);
+}
+
 function MarketHeatmapPanel({ onOpenStock }) {
   const [today] = useState(() => new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10));
   const [mode, setMode] = useState("latest");
   const [start, setStart] = useState(today);
   const [end, setEnd] = useState(today);
+  const [activePreset, setActivePreset] = useState("");
   const [selection, setSelection] = useState({ query: "", version: 0 });
   const [validation, setValidation] = useState("");
   function submit(event) {
@@ -6866,14 +6917,41 @@ function MarketHeatmapPanel({ onOpenStock }) {
     const query = mode === "latest" ? "" : new URLSearchParams({ start, end: finish }).toString();
     setSelection((prev) => ({ query, version: prev.version + 1 }));
   }
+  function applyPreset(preset) {
+    const presetStart = heatmapPresetStart(today, preset);
+    setMode("range");
+    setStart(presetStart);
+    setEnd(today);
+    setActivePreset(preset.value);
+    setValidation("");
+    const query = new URLSearchParams({ start: presetStart, end: today }).toString();
+    setSelection((prev) => ({ query, version: prev.version + 1 }));
+  }
   return <div className="space-y-3">
     <form onSubmit={submit} className="flex flex-wrap items-center gap-2 text-sm">
-      <select aria-label="热力图时间模式" value={mode} onChange={(e) => setMode(e.target.value)} className="rounded-xl border bg-white px-3 py-2">
+      <select aria-label="热力图时间模式" value={mode} onChange={(e) => { setMode(e.target.value); setActivePreset(""); }} className="rounded-xl border bg-white px-3 py-2">
         <option value="latest">最新行情</option><option value="day">指定日期</option><option value="range">日期区间</option>
       </select>
-      {mode !== "latest" && <input aria-label="开始日期" type="date" value={start} max={today} required onChange={(e) => setStart(e.target.value)} className="rounded-xl border bg-white px-3 py-2" />}
-      {mode === "range" && <><span>至</span><input aria-label="结束日期" type="date" value={end} max={today} min={start} required onChange={(e) => setEnd(e.target.value)} className="rounded-xl border bg-white px-3 py-2" /></>}
+      {mode !== "latest" && <input aria-label="开始日期" type="date" value={start} max={today} required onChange={(e) => { setStart(e.target.value); setActivePreset(""); }} className="rounded-xl border bg-white px-3 py-2" />}
+      {mode === "range" && <><span>至</span><input aria-label="结束日期" type="date" value={end} max={today} min={start} required onChange={(e) => { setEnd(e.target.value); setActivePreset(""); }} className="rounded-xl border bg-white px-3 py-2" /></>}
       <button type="submit" className="rounded-xl bg-slate-900 px-4 py-2 text-white">查询</button>
+      <div className="flex flex-wrap items-center gap-1.5" aria-label="常用日期">
+        {HEATMAP_DATE_PRESETS.map((preset) => (
+          <button
+            key={preset.value}
+            type="button"
+            onClick={() => applyPreset(preset)}
+            aria-pressed={activePreset === preset.value}
+            className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+              activePreset === preset.value
+                ? "border-slate-900 bg-slate-900 text-white shadow-sm"
+                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+            }`}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
       {validation && <span className="text-rose-500">{validation}</span>}
     </form>
     <MarketHeatmapContent key={`${selection.query}:${selection.version}`} historyQuery={selection.query} onOpenStock={onOpenStock} />
@@ -6882,10 +6960,11 @@ function MarketHeatmapPanel({ onOpenStock }) {
 
 function MarketHeatmapContent({ onOpenStock, historyQuery }) {
   const historical = !!historyQuery;
+  const initialPayload = readHeatmapClientCache(historyQuery);
   const [progress, setProgress] = useState(null);
   const [detailError, setDetailError] = useState("");
-  const [payload, setPayload] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [payload, setPayload] = useState(initialPayload);
+  const [loading, setLoading] = useState(() => !initialPayload);
   const [error, setError] = useState("");
   const [view, setView] = useState("industry");
   const [metric, setMetric] = useState("amount"); // 默认按成交额铺面积：当天资金去了哪儿更直观
@@ -6918,11 +6997,15 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
           return;
         }
         if (body.error) throw new Error(body.error);
+        writeHeatmapClientCache(historyQuery, body);
         setPayload(body);
         setLoading(false);
       })
       .catch((e) => {
-        if (!cancelled) { setError(e?.message || "加载失败"); setLoading(false); }
+        if (!cancelled) {
+          if (!initialPayload) setError(e?.message || "加载失败");
+          setLoading(false);
+        }
       })
       .finally(() => {
         if (!cancelled && !historical) setLoading(false);
@@ -8238,7 +8321,17 @@ function WatchlistPanel({
                       ? "border-slate-900 bg-slate-900 text-white shadow-lg shadow-slate-200"
                       : "border-slate-200 bg-white/95 text-slate-900 shadow-sm hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"}`}
                   >
-                    <button type="button" onClick={() => onPick(item.code)} className="block w-full p-4">
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => onPick(item.code)}
+                      onKeyDown={(event) => {
+                        if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                        event.preventDefault();
+                        onPick(item.code);
+                      }}
+                      className="block w-full cursor-pointer p-4"
+                    >
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           {renderFavoriteButton({ ...item, rankLabel })}
@@ -8257,7 +8350,7 @@ function WatchlistPanel({
                           </div>
                         )}
                       </div>
-                    </button>
+                    </div>
                     {!isRecommendationMode ? <div className="pb-4" /> : null}
                   </div>
                 );
@@ -8271,7 +8364,17 @@ function WatchlistPanel({
                       : "border-slate-200 bg-white/95 text-slate-900 shadow-sm hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
                   }`}
                 >
-                  <button type="button" onClick={() => onPick(item.code)} className="block w-full p-4">
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => onPick(item.code)}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return;
+                      event.preventDefault();
+                      onPick(item.code);
+                    }}
+                    className="block w-full cursor-pointer p-4"
+                  >
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         {renderFavoriteButton({ ...item, rankLabel })}
@@ -8290,7 +8393,7 @@ function WatchlistPanel({
                         </div>
                       )}
                     </div>
-                  </button>
+                  </div>
                 </div>
               );
             })

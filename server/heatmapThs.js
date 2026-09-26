@@ -1,5 +1,6 @@
 // Public industry directory and annual daily bars; no database dependency.
 const DIRECTORY = 'https://q.10jqka.com.cn/thshy/detail/code/881272/';
+const CURRENT_YEAR_TTL = 10 * 60 * 1000;
 async function readText(url, encoding = 'utf-8') {
   const response = await fetch(url, { signal: AbortSignal.timeout(8000) });
   if (!response.ok) throw new Error(`同花顺历史接口 HTTP ${response.status}`);
@@ -33,7 +34,9 @@ export function createThsProvider(read = readText) {
     if (hit?.expires > Date.now()) return hit.rows;
     const rows = parseAnnualBars(await read(`https://d.10jqka.com.cn/v4/line/bk_${code}/01/${year}.js`));
     if (years.size >= 600) years.delete(years.keys().next().value);
-    years.set(key, { rows, expires: Date.now() + (year >= new Date().getUTCFullYear() ? 60000 : 6*3600000) });
+    // 这是日线年度文件，不需要按分钟重复抓取 90 个行业；当前年份保留 10 分钟，
+    // 历史年份仍保留 6 小时。查询结果层会更早更新，兼顾收盘后的新数据。
+    years.set(key, { rows, expires: Date.now() + (year >= new Date().getUTCFullYear() ? CURRENT_YEAR_TTL : 6*3600000) });
     return rows;
   }
   return {
