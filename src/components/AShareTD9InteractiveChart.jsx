@@ -73,7 +73,6 @@ const MARKET_TABS = [
   { value: "agent", label: "Agent" },
   { value: "factor-research", label: "因子研究", adminOnly: true },
   { value: "user-admin", label: "账号管理", adminOnly: true },
-  { value: "account", label: "账号设置" },
 ];
 
 // 趋势大盘要展示的四大指数。secid 用于东方财富，tencentSymbol 用于腾讯兜底。
@@ -6125,7 +6124,7 @@ function IndexTrendCard({ index, tab, year = "latest" }) {
 function FundflowChart({ series }) {
   const width = 1000;
   const height = 560;
-  const margin = { top: 20, right: 132, bottom: 28, left: 56 };
+  const margin = { top: 20, right: 220, bottom: 28, left: 56 };
   const plotW = width - margin.left - margin.right;
   const plotH = height - margin.top - margin.bottom;
 
@@ -6165,7 +6164,7 @@ function FundflowChart({ series }) {
 
     // 右侧标签防重叠：按末值从高到低，自上而下贪心下推，至少间隔 15px。
     const labels = drawn
-      .map((s) => ({ name: s.name, final: s.final, color: s.color, y: s.endY }))
+      .map((s) => ({ name: String(s.name ?? ""), final: s.final, color: s.color, y: s.endY }))
       .sort((a, b) => a.y - b.y);
     const minGap = 15;
     for (let i = 1; i < labels.length; i += 1) {
@@ -6202,7 +6201,9 @@ function FundflowChart({ series }) {
   const zeroY = layout.y(0);
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="w-full" style={{ maxHeight: 620 }}>
+    <div>
+    <div className="overflow-x-auto focus:outline-none focus:ring-2 focus:ring-slate-300" role="region" aria-label="资金流图表，可横向滚动" tabIndex={0}>
+    <svg viewBox={`0 0 ${width} ${height}`} className="min-w-[960px] w-full" style={{ maxHeight: 620 }} role="img" aria-label="板块主力资金流曲线">
       {/* Y 轴刻度线 + 标签 */}
       {layout.ticks.map((v) => {
         const yy = layout.y(v);
@@ -6230,11 +6231,15 @@ function FundflowChart({ series }) {
       {/* 右侧名称 + 数值标签 */}
       {layout.labels.map((l, i) => (
         <text key={`lb-${i}`} x={width - margin.right + 6} y={l.y + 3} fontSize="11" fill={l.color}>
-          {l.name} {l.final >= 0 ? "+" : ""}
+          <title>{l.name} {l.final >= 0 ? "+" : ""}{l.final.toFixed(1)}亿</title>
+          {Array.from(l.name).length > 10 ? `${Array.from(l.name).slice(0, 9).join("")}…` : l.name} {l.final >= 0 ? "+" : ""}
           {l.final.toFixed(1)}
         </text>
       ))}
     </svg>
+    </div>
+    <p className="mt-2 text-xs text-slate-500 md:hidden">左右滑动查看完整曲线和板块名称</p>
+    </div>
   );
 }
 
@@ -9049,6 +9054,7 @@ function FavoritesToolbar({
 
 export default function AShareTD9InteractiveChart({ onLogout, user, themePreference = "system", onThemeChange }) {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const profileMenuId = useId();
   const [market, setMarket] = useState("ashare");
   // 初始为空：挂载后默认选中自选/收藏夹里的第一只，不再写死茅台/MSFT。
   const [marketCodes, setMarketCodes] = useState({ ashare: "", hk: "", us: "" });
@@ -9923,9 +9929,9 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   return (
     <div className="min-h-screen bg-canvas p-4 text-slate-900">
       <div className="mx-auto max-w-[1600px] space-y-4">
-        <div className="flex flex-col gap-3 rounded-2xl bg-white p-4 shadow-sm 2xl:flex-row 2xl:items-center 2xl:justify-between">
-          <div>
-            <div className="mb-3 inline-flex max-w-full flex-wrap rounded-2xl border border-slate-200 bg-slate-50 p-1 sm:rounded-full">
+        <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div className="inline-flex min-w-0 max-w-full flex-wrap rounded-2xl border border-slate-200 bg-slate-50 p-1 sm:rounded-full">
               {MARKET_TABS.filter((tab) => !tab.adminOnly || user?.role === "admin").map((tab) => {
                 const active = market === tab.value;
                 return (
@@ -9962,9 +9968,95 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                 );
               })}
             </div>
+          {onLogout && (
+            <div
+              className="relative ml-auto shrink-0"
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget)) setShowProfileMenu(false);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  setShowProfileMenu(false);
+                  event.currentTarget.querySelector("button")?.focus();
+                }
+              }}
+            >
+              <button
+                type="button"
+                aria-label="个人菜单"
+                aria-expanded={showProfileMenu}
+                aria-controls={profileMenuId}
+                onClick={() => setShowProfileMenu((v) => !v)}
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-slate-600 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-slate-300"
+              >
+                <UserRound className="h-4 w-4" />
+              </button>
+              {showProfileMenu && (
+                <div id={profileMenuId} className="absolute right-0 top-11 z-50 w-64 rounded-2xl border border-slate-200 bg-white p-2 shadow-lg">
+                  <div className="border-b border-slate-100 px-3 pb-3 pt-2">
+                    <div className="truncate text-sm font-medium text-slate-900">{user?.username}</div>
+                    <div className="mt-0.5 text-xs text-slate-500">{user?.role === "admin" ? "管理员" : "普通用户"}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowProfileMenu(false);
+                      marketRef.current = "account";
+                      loadRunRef.current += 1;
+                      setMarket("account");
+                      setError("");
+                      setFinancialError("");
+                      setFinancialInfo(null);
+                      setRawRows([]);
+                      setMeta({ code: "", name: "" });
+                    }}
+                    className="flex min-h-10 w-full items-center rounded-lg px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                  >
+                    账号设置
+                  </button>
+                  <div className="my-2 border-t border-slate-100" />
+                  {onThemeChange && (
+                    <>
+                      <div className="px-3 pb-2 pt-1 text-xs font-medium text-slate-500">外观</div>
+                      <div className="px-2 pb-1">
+                        <div className="grid grid-cols-3 gap-1 rounded-xl border border-slate-200 bg-slate-50 p-1">
+                          {THEME_OPTIONS.map((option) => {
+                            const ThemeIcon = THEME_ICONS[option.value];
+                            const active = themePreference === option.value;
+                            return (
+                              <button
+                                key={option.value}
+                                type="button"
+                                title={option.label}
+                                aria-label={option.label}
+                                aria-pressed={active}
+                                onClick={() => onThemeChange(option.value)}
+                                className={`flex min-h-14 flex-col items-center justify-center gap-1 rounded-lg border text-xs font-medium transition focus:outline-none focus:ring-2 focus:ring-slate-300 ${active ? "border-slate-300 bg-white text-slate-900 shadow-sm" : "border-transparent text-slate-500 hover:bg-white hover:text-slate-900"}`}
+                              >
+                                <ThemeIcon className="h-4 w-4" />
+                                <span>{option.value === "system" ? "自动" : option.label}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div className="my-2 border-t border-slate-100" />
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={onLogout}
+                    className="flex min-h-10 w-full items-center rounded-lg px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-300"
+                  >
+                    退出登录
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {!isStandaloneMarket && <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center">
+          {!isStandaloneMarket && <div className="flex min-w-0 flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+          <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center">
             <div className="relative col-span-2 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 md:w-56">
               <Search className="h-4 w-4 text-slate-400" />
               <input
@@ -10137,59 +10229,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
               <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               {loading ? "加载中" : "查询"}
             </Button>
-          </div>}
-          {onLogout && (
-            <div className="relative ml-auto shrink-0">
-              <button
-                type="button"
-                onClick={() => setShowProfileMenu((v) => !v)}
-                onBlur={() => setTimeout(() => setShowProfileMenu(false), 150)}
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-600 hover:bg-slate-200"
-              >
-                <UserRound className="h-4 w-4" />
-              </button>
-              {showProfileMenu && (
-                <div className="absolute right-0 top-10 z-20 w-40 rounded-xl border border-slate-100 bg-white py-1 shadow-md">
-                  {onThemeChange && (
-                    <>
-                      <div className="px-4 pb-1.5 pt-1.5 text-[11px] font-medium text-slate-400">外观</div>
-                      <div className="px-4 pb-2">
-                        <div className="inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
-                          {THEME_OPTIONS.map((option) => {
-                            const ThemeIcon = THEME_ICONS[option.value];
-                            const active = themePreference === option.value;
-                            return (
-                              <button
-                                key={option.value}
-                                type="button"
-                                title={option.label}
-                                aria-label={option.label}
-                                aria-pressed={active}
-                                // preventDefault 保住触发按钮的焦点，否则它的 onBlur 会立刻收起菜单
-                                onMouseDown={(e) => { e.preventDefault(); onThemeChange(option.value); }}
-                                className={`flex h-6 w-6 items-center justify-center rounded-full transition ${active ? "bg-slate-900 text-white shadow-sm" : "text-slate-500 hover:bg-white hover:text-slate-900"}`}
-                              >
-                                <ThemeIcon className="h-3.5 w-3.5" />
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                      <div className="my-1 border-t border-slate-100" />
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    onMouseDown={onLogout}
-                    className="w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
-                  >
-                    退出登录
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
           </div>
+          </div>}
         </div>
 
         {error && (

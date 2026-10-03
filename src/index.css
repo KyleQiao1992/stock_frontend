@@ -4,6 +4,14 @@
    这样"浅色 / 深色 / 跟随系统"三态才能由 JS 统一控制。 */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Tailwind 4 的默认边框使用 currentColor。未指定颜色的输入框和
+   面板应沿用全站的柔和描边，而不是变成浅色下黑线、深色下白线。 */
+@layer base {
+  *, ::before, ::after {
+    border-color: var(--color-slate-200);
+  }
+}
+
 @theme {
   /* 页面底色。浅色下等同 slate-50，深色下比卡片更暗，用来托出卡片层级。 */
   --color-canvas: #f8fafc;
