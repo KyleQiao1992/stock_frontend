@@ -23,7 +23,7 @@ function snapshotError(message, code, stage) {
 
 // Full snapshots keep their established keys. Incomplete provider fallbacks use
 // a separate key so another deployed version cannot mistake them for full data.
-export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFallback = null, validate, now = Date.now, onFull = null, emptyClosed }) {
+export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFallback = null, fallbackVersion = 2, validate, now = Date.now, onFull = null, emptyClosed }) {
   let fresh = null;
   let lastGood = null;
   let fallback = null;
@@ -32,7 +32,7 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
   let lastFailureAt = -Infinity;
   let activeProvider = null;
   const FAILURE_COOLDOWN_MS = 30000;
-  const fallbackKey = `${key.replace(/:v\d+$/, "")}:v2:snapshot`;
+  const fallbackKey = `${key.replace(/:v\d+$/, "")}:v${fallbackVersion}:snapshot`;
 
   function entry(payload, cachedAt = null) {
     const at = Date.parse(payload?.updatedAt);
@@ -234,7 +234,7 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
       }
       if (loadFallback) {
         try {
-          const result = unpack(await loadFallback());
+          const result = unpack(await loadFallback({force}));
           const candidate = entry({...result.payload, partial: true}, now());
           if (!candidate) throw snapshotError("备用行情快照的结构或时间异常", "FALLBACK_SNAPSHOT_INVALID", "snapshot-validation");
           const best = bestAvailable(previous, cachedBackup);

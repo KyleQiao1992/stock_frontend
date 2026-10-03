@@ -43,6 +43,12 @@ function today(at = START) {
     ...buildSnapshotPanels(stocks, {tc: 0, pool: []}, 0, 0, null, new Map(stocks.map((row) => [row.code, row])))};
 }
 
+function classifiedFallback(payload) {
+  return {...payload, mode: "snapshot", partial: true, source: "eastmoney-tencent", snapshotSchemaVersion: 3,
+    universePolicy: "listed-ashare-with-cdr", classification: "东方财富行业", classificationSource: "eastmoney", industryLevel: 2,
+    classificationCoverage: {classified: 3, total: 3, unclassified: 0, conflicts: 0}};
+}
+
 async function request(handler, query = "") {
   const response = {statusCode: 200, headers: {}, setHeader(name, value) { this.headers[name] = value; }, end(body) { this.body = JSON.parse(body); }};
   await handler({url: `/?${query}`, method: "GET"}, response);
@@ -129,19 +135,19 @@ for (const kind of kinds) {
   test(`${kind.name} cached partial fallback is isolated from the complete legacy caches`, async () => {
     const clock = {ms: START};
     const redis = store(clock);
-    const backup = {...kind.payload(), mode: "snapshot", partial: true, source: "sina", classification: "新浪行业", coverage: {classified: 2}};
+    const backup = classifiedFallback(kind.payload());
     if (kind.name === "today-market") Object.assign(backup, {strong: null, heat: null, consecutive: null, premium: null});
     const handler = kind.create({getRedis: async () => redis, now: () => clock.ms,
       load: async () => { throw new Error("network outage"); }, loadFallback: async () => backup});
     const response = await request(handler, "retry=1");
     assert.equal(response.statusCode, 200);
     assert.equal(response.body.partial, true);
-    assert.equal(response.body.source, "sina");
-    assert.equal(response.body.classification, "新浪行业");
-    assert.deepEqual(response.body.coverage, backup.coverage);
+    assert.equal(response.body.source, "eastmoney-tencent");
+    assert.equal(response.body.classification, "东方财富行业");
+    assert.deepEqual(response.body.classificationCoverage, backup.classificationCoverage);
     assert.equal(await redis.get(kind.key), null);
     assert.equal(await redis.get(`${kind.key}:lastgood`), null);
-    assert.ok(await redis.get(`${kind.key.replace(":v1", "")}:v2:snapshot`));
+    assert.ok(await redis.get(`${kind.key.replace(":v1", "")}:v3:snapshot`));
   });
 
   test(`${kind.name} retry bypasses fresh data and same-query requests reuse pending work`, async () => {
@@ -249,12 +255,12 @@ test("heatmap rejects same-name industry data from a different displayed provide
 });
 
 test("heatmap full fallback industry members are complete even when the provider metadata is partial", async () => {
-  const payload = {...heatmap(), source: "sina", classification: "新浪行业", partial: true, mode: "snapshot"};
+  const payload = classifiedFallback(heatmap());
   const handler = createMarketHeatmapHandler({getRedis: async () => null, now: () => START,
     load: async () => { throw new Error("network outage"); },
     loadFallback: async () => ({payload, snapshot: {stocks: [stock(1), stock(2), stock(3)]}})});
   await request(handler);
-  const response = await request(handler, "industry=测试行业&source=sina");
+  const response = await request(handler, "industry=测试行业&source=eastmoney-tencent");
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.partial, false);
   assert.equal(response.body.providerPartial, true);
@@ -269,7 +275,7 @@ test("today-market malformed partial panel data never reaches the rendering clie
     (body) => { body.hist = [{label: "0", count: "unknown"}]; },
     (body) => { body.capTiers = [{key: "test", label: "test", n: "unknown", avg: null}]; },
   ]) {
-    const body = {...today(), partial: true, mode: "snapshot"};
+    const body = classifiedFallback(today());
     modify(body);
     const handler = createTodayMarketHandler({getRedis: async () => null, now: () => START,
       load: async () => { throw new Error("network outage"); }, loadFallback: async () => body});

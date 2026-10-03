@@ -1,33 +1,62 @@
 import { loadSinaMarketSnapshot } from "./sinaMarketSnapshot.js";
+import { loadEastmoneyIndustryMap } from "./eastmoneyIndustryMap.js";
 import { aggregateHeatmapStocks } from "./marketHeatmap.js";
 import { buildSnapshotPanels } from "./todayMarket.js";
 
 // Share the successful alternate snapshot between the heatmap and its dashboard
 // prefetch. Nothing is fetched at import time and failures are never cached.
-export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSnapshot, now = Date.now } = {}) {
-  const recent = new Map();
-  const inflight = new Map();
+export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSnapshot, loadIndustries = loadEastmoneyIndustryMap, now = Date.now } = {}) {
+  let recent = null;
+  let inflight = null;
   const usable = (entry) => entry && now() >= entry.at && now() - entry.at < 60000;
-  async function snapshot(withIndustries) {
-    if (!withIndustries && usable(recent.get(true))) return recent.get(true).result;
-    if (usable(recent.get(withIndustries))) return recent.get(withIndustries).result;
-    if (!withIndustries && inflight.has(true)) {
-      try { return await inflight.get(true); } catch { /* Industry failure must not prevent quote-only statistics. */ }
-    }
-    if (inflight.has(withIndustries)) return inflight.get(withIndustries);
+  const invalid = (message) => Object.assign(new Error(message), {code: "FALLBACK_SNAPSHOT_INVALID", stage: "snapshot-validation"});
+  async function snapshot({ force = false } = {}) {
+    if (!force && usable(recent)) return recent.result;
+    if (inflight) return inflight;
     const pending = (async () => {
-      const result = await loadSnapshot({ withIndustries });
+      const ownership = await loadIndustries();
+      if (ownership?.classificationSource !== "eastmoney" || ownership.level !== 2 || ownership.classification !== "东方财富行业" || !Array.isArray(ownership.members) || !Array.isArray(ownership.listedCdrs)) {
+        throw invalid("备用行情缺少原行业归属或上市证据");
+      }
+      const membership = new Map();
+      for (const member of ownership.members) {
+        if (!member.symbol || membership.has(member.symbol) || !member.industry?.trim() || ["未分类", "其他", "-"].includes(member.industry.trim())) {
+          throw invalid("备用行情行业归属不完整或存在冲突");
+        }
+        membership.set(member.symbol, member);
+      }
+      // The industry directory also includes pending IPOs. Only the listed
+      // Sina universe and CDRs with confirmed listing dates define this snapshot.
+      const result = await loadSnapshot({ withIndustries: false, supplements: ownership.listedCdrs, quotePreference: "tencent" });
       const data = result.metadata;
       const at = Date.parse(data?.quoteTime);
       // A long market holiday may outlast the seven-day cache retention. A fresh
       // provider fetch can still expose that closing quote with its actual date.
       if (!result.stocks?.length || !Number.isFinite(at) || at > now() || now() - at >= 14 * 86400000) {
-        throw new Error("备用行情没有有效的近期数据");
+        throw invalid("备用行情没有有效的近期数据");
       }
-      recent.set(withIndustries, {result, at: now()});
-      return result;
-    })().finally(() => { inflight.delete(withIndustries); });
-    inflight.set(withIndustries, pending);
+      const seen = new Set();
+      const stocks = result.stocks.map((row) => {
+        const exchange = row.exchange || (row.market === 1 ? "sh" : /^(?:[48]|920)/.test(row.code) ? "bj" : "sz");
+        const symbol = `${exchange}${row.code}`;
+        const member = membership.get(symbol);
+        if (!member || seen.has(symbol)) throw invalid("备用行情存在未归属或重复股票，无法生成行业热力图");
+        seen.add(symbol);
+        return {...row, industry: member.industry, industryCode: member.industryCode};
+      });
+      if (ownership.listedCdrs.some((row) => !seen.has(row.symbol))) throw invalid("备用行情缺少已上市 CDR");
+      const quoteSource = data.quoteSource || (data.source === "sina-tencent" ? "tencent" : data.source);
+      if (!["sina", "tencent"].includes(quoteSource)) throw invalid("备用行情报价来源不明确");
+      const classified = {...result, stocks, metadata: {
+        ...data, source: `eastmoney-${quoteSource}`, quoteSource, snapshotSchemaVersion: 3,
+        universePolicy: "listed-ashare-with-cdr", classification: "东方财富行业", classificationSource: "eastmoney", industryLevel: 2,
+        classificationUpdatedAt: ownership.classificationUpdatedAt, classificationStale: Boolean(ownership.classificationStale),
+        classificationCoverage: {classified: stocks.length, total: stocks.length, unclassified: 0, conflicts: 0},
+      }};
+      recent = {result: classified, at: now()};
+      return classified;
+    })().finally(() => { inflight = null; });
+    inflight = pending;
     return pending;
   }
 
@@ -35,14 +64,14 @@ export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSna
     // Suspended stocks can carry an older quote. Keep their identity/capital,
     // but do not count an old change or turnover as today's measurement.
     return result.stocks.map((row) => ({
-      ...row, industry: row.industry || "未分类",
+      ...row,
       ...(row.quoteDate === result.metadata.dataDate ? {} : {pct: null, amount: null, open: null, close: null}),
     }));
   }
 
   return {
-    async heatmap() {
-      const result = await snapshot(true);
+    async heatmap(options) {
+      const result = await snapshot(options);
       const stocks = currentStocks(result);
       const quoted = stocks.filter((row) => Number.isFinite(row.pct));
       if (!quoted.length) throw new Error("备用行情无当日涨跌幅");
@@ -57,12 +86,12 @@ export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSna
         down: quoted.filter((row) => row.pct < 0).length, flat: quoted.filter((row) => row.pct === 0).length,
         suspended: stocks.length - quoted.length, industries,
         quoteCoverage: {quoted: quoted.length, total: stocks.length, unavailable: stocks.length - quoted.length},
-        notice: `东方财富行情暂不可用，显示${result.metadata.quoteSource === "tencent" ? "腾讯报价（新浪名单与市值）" : "新浪备用行情"}；行业分类不同，未能分类的股票归入未分类。旧日期或缺失报价不计入当日涨跌和成交额。`,
+        notice: "行业归属沿用东方财富；主力资金净额暂不可用，报价时间见上方。",
       };
       return {payload, snapshot: {stocks, at: Date.parse(payload.updatedAt)}};
     },
-    async today() {
-      const result = await snapshot(false);
+    async today(options) {
+      const result = await snapshot(options);
       const stocks = currentStocks(result).filter((row) => Number.isFinite(row.pct)).map((row) => ({...row, mktcap: row.cap}));
       if (!stocks.length) throw new Error("备用行情无当日盘面数据");
       const panels = buildSnapshotPanels(stocks, null, 0, 0, null, new Map(stocks.map((row) => [row.code, row])));
@@ -70,7 +99,7 @@ export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSna
         ...result.metadata, ...panels, live: true, mode: "snapshot", partial: true,
         heat: null, strong: null, consecutive: null, premium: null, history: [],
         quoteCoverage: {quoted: stocks.length, total: result.stocks.length, unavailable: result.stocks.length - stocks.length},
-        notice: `东方财富盘面数据暂不可用，显示${result.metadata.quoteSource === "tencent" ? "腾讯报价（新浪名单与市值）" : "新浪行情"}的涨跌统计和市值分档。涨停、跌停、炸板及连板等依赖池数据的指标暂不可用；旧日期和缺失报价不计入当日统计。`,
+        notice: "备用报价用于涨跌统计和市值分档。涨停、跌停、炸板及连板等依赖池数据的指标暂不可用；停牌、旧日期和缺失报价不计入当日统计。",
       };
     },
   };

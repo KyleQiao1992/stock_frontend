@@ -62,7 +62,7 @@ test("production-shaped Sina HQ 403 switches complete quotes to Tencent with tru
   assert.equal(result.source, "sina-tencent");
   assert.equal(result.quoteSource, "tencent");
   assert.equal(result.universeSource, "sina");
-  assert.equal(result.capitalSource, "sina");
+  assert.equal(result.capitalSource, "sina-tencent");
   assert.equal(result.classification, "新浪行业");
   assert.equal(result.stocks[0].industry, "AlphaIndustry");
   assert.equal(result.stocks[1].industry, null);

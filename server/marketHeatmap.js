@@ -251,13 +251,15 @@ async function computeHeatmap() {
 
 // Full aggregates keep the established cache format; raw members use a private key.
 const SNAPSHOT_KEY = "market-heatmap:v2:stocks:lastgood";
+const FALLBACK_SNAPSHOT_KEY = "market-heatmap:v3:stocks:lastgood";
 const MAX_CACHE_AGE = 7 * 86400000;
 export { aggregateHeatmapStocks as aggregate };
 
 function validHeatmap(payload) {
+  if (["sina", "sina-tencent"].includes(payload?.source)) return false;
   const finiteOrNull = (value) => value == null || Number.isFinite(value);
   const counts = [payload?.up, payload?.down, payload?.flat, payload?.suspended ?? 0];
-  return payload?.live === true && Number.isInteger(payload.totalStocks) && payload.totalStocks > 0
+  const valid = payload?.live === true && Number.isInteger(payload.totalStocks) && payload.totalStocks > 0
     && counts.every((count) => Number.isInteger(count) && count >= 0) && counts.reduce((sum, count) => sum + count, 0) === payload.totalStocks
     && Array.isArray(payload.industries) && payload.industries.length > 0
     && payload.industries.every((row) => typeof row.name === "string" && row.name
@@ -265,6 +267,16 @@ function validHeatmap(payload) {
       && [row.cap, row.floatCap, row.amount, row.mainInflow, row.pct, row.pctEqual].every(finiteOrNull)
       && row.stocks.every((stock) => stock && typeof stock.code === "string" && stock.code && typeof stock.name === "string" && stock.name
         && [stock.cap, stock.floatCap, stock.amount, stock.mainInflow, stock.pct].every(finiteOrNull)));
+  if (!valid) return false;
+  if (!payload.partial && payload.mode !== "snapshot") return true;
+  const coverage = payload.classificationCoverage;
+  return payload.snapshotSchemaVersion === 3 && payload.classificationSource === "eastmoney"
+    && payload.industryLevel === 2 && payload.classification === "东方财富行业"
+    && ["eastmoney-tencent", "eastmoney-sina"].includes(payload.source)
+    && coverage?.total === payload.totalStocks && coverage.classified === payload.totalStocks
+    && coverage.unclassified === 0 && coverage.conflicts === 0
+    && payload.industries.every((row) => row.name.trim() && !["未分类", "其他", "-"].includes(row.name.trim()))
+    && payload.industries.reduce((sum, row) => sum + row.count, 0) === payload.totalStocks;
 }
 
 function stockDetail(stocks, name) {
@@ -282,20 +294,21 @@ function stockDetail(stocks, name) {
 export function createMarketHeatmapHandler({ load = computeHeatmap, loadFallback = null, getRedis = getRedisClient, now = Date.now, historyHandler = handleHeatmapHistory } = {}) {
   let snapshot = null;
   const sourceOf = (payload) => payload?.source || "eastmoney";
+  const snapshotKeyFor = (payload) => sourceOf(payload) === "eastmoney" ? SNAPSHOT_KEY : FALLBACK_SNAPSHOT_KEY;
   const validSnapshot = (candidate, payload) => candidate && Array.isArray(candidate.stocks) && candidate.stocks.length > 0
     && candidate.stocks.length === payload.totalStocks
     && candidate.stocks.every((stock) => stock && typeof stock.code === "string" && stock.code && typeof stock.name === "string" && stock.name)
     && Number.isFinite(candidate.at) && candidate.at <= now() && now() - candidate.at < MAX_CACHE_AGE
     && candidate.updatedAt === payload.updatedAt && candidate.source === sourceOf(payload);
   const cache = createMarketSnapshotCache({
-    key: "market-heatmap:v1", freshMs: 60000, staleMs: 15 * 60000, load, loadFallback, validate: validHeatmap, now,
+    key: "market-heatmap:v1", freshMs: 60000, staleMs: 15 * 60000, load, loadFallback, fallbackVersion: 3, validate: validHeatmap, now,
     emptyClosed: (at) => ({live: false, marketClosed: true, scope: "ashare", totalStocks: 0, up: 0, down: 0, flat: 0, industries: [], quoteTime: null,
       updatedAt: new Date(at).toISOString(), notice: "当前数据源未提供当日行情，且没有可用的历史快照。"}),
     onFull: async (result, redis) => {
       const candidate = result.snapshot ? {...result.snapshot, at: Date.parse(result.payload.updatedAt), updatedAt: result.payload.updatedAt, source: sourceOf(result.payload)} : null;
       if (!validSnapshot(candidate, result.payload)) return;
       snapshot = candidate;
-      if (redis) { try { await redis.set(SNAPSHOT_KEY, JSON.stringify(candidate), {EX: MAX_CACHE_AGE / 1000}); } catch { /* Aggregate remains available. */ } }
+      if (redis) { try { await redis.set(snapshotKeyFor(result.payload), JSON.stringify(candidate), {EX: MAX_CACHE_AGE / 1000}); } catch { /* Aggregate remains available. */ } }
     },
   });
 
@@ -303,7 +316,7 @@ export function createMarketHeatmapHandler({ load = computeHeatmap, loadFallback
     if (validSnapshot(snapshot, payload)) return snapshot;
     if (!redis) return null;
     try {
-      const raw = await redis.get(SNAPSHOT_KEY);
+      const raw = await redis.get(snapshotKeyFor(payload));
       const candidate = raw ? JSON.parse(raw) : null;
       if (validSnapshot(candidate, payload)) { snapshot = candidate; return candidate; }
     } catch { /* Cropped same-source members remain usable. */ }

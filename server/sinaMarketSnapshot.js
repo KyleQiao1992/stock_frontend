@@ -18,6 +18,11 @@ function numeric(value) {
   return Number.isFinite(n) ? n : null;
 }
 
+function tencentCapital(value) {
+  const capital = numeric(value);
+  return capital !== null && capital > 0 ? numeric(capital * 1e8) : null;
+}
+
 function positiveCount(value) {
   const count = numeric(value);
   if (!Number.isInteger(count) || count <= 0 || count > 20000) throw new Error("新浪全A数量无效");
@@ -61,7 +66,7 @@ export function createSinaMarketSnapshotProvider({ request = fetch, now = Date.n
   let industryCache = null;
   let preferredQuoteSource = "sina";
 
-  return async function loadSnapshot({ withIndustries = false, signal } = {}) {
+  return async function loadSnapshot({ withIndustries = false, signal, supplements = [], quotePreference } = {}) {
     const deadline = now() + budgetMs;
     async function response(url, stage, provider = "sina") {
       if (signal?.aborted) throw signal.reason || new Error("新浪快照查询已取消");
@@ -103,6 +108,16 @@ export function createSinaMarketSnapshotProvider({ request = fetch, now = Date.n
       bySymbol.set(symbol, row);
     }
     if (bySymbol.size !== expected) throw new Error(`新浪全A去重后覆盖不完整（${bySymbol.size}/${expected}）`);
+    if (!Array.isArray(supplements) || supplements.length > 100) throw sourceError("CDR上市名单无效", { code: "SINA_RESPONSE_INVALID", stage: "universe-page" });
+    for (const item of supplements) {
+      const symbol = aSymbol(item?.symbol);
+      if (!/^sh689\d{3}$/.test(symbol || "") || item.code !== symbol.slice(2) || !String(item.name || "").trim()
+        || quoteTimestamp(item.listingDate, "00:00:00") === null
+        || item.listingDate > new Date(now() + 8 * 3600000).toISOString().slice(0, 10)) {
+        throw sourceError("CDR身份或上市日期无效", { code: "SINA_RESPONSE_INVALID", stage: "universe-page" });
+      }
+      if (!bySymbol.has(symbol)) bySymbol.set(symbol, { ...item, supplemented: true });
+    }
 
     // node 的 ticktime 没有日期。报价必须同时提供实际日期、价格与成交额；
     // 新浪 HQ 在某些服务器返回403时，整份报价切到腾讯，不能拼接两源量价。
@@ -144,6 +159,11 @@ export function createSinaMarketSnapshotProvider({ request = fetch, now = Date.n
             open: numeric(values[tencent ? 5 : 1]),
             previousClose: numeric(values[tencent ? 4 : 2]), close: numeric(values[3]),
             amount,
+            // 腾讯即使停牌也会更新报价时间，并保留昨收和零成交额。
+            // 明确的 S 状态不能被计算成当天平盘；新浪 HQ 的状态字段未经确认。
+            suspended: tencent ? values[40] === "S" : null,
+            cap: tencent ? tencentCapital(values[45]) : null,
+            floatCap: tencent ? tencentCapital(values[44]) : null,
           });
         }
         if (returned.size !== batch.length) throw sourceError(`行情日期批次不完整（${returned.size}/${batch.length}）`,
@@ -155,9 +175,17 @@ export function createSinaMarketSnapshotProvider({ request = fetch, now = Date.n
       const latest = Math.max(...[...quotes.values()].map((row) => row.quoteAt || 0));
       if (!latest) throw sourceError("全A没有真实行情日期", { code: `${prefix}_RESPONSE_INVALID`, stage: "quotes" });
       if (now() / 1000 - latest > 14 * 86400) throw sourceError("全A行情日期过旧", { code: `${prefix}_RESPONSE_INVALID`, stage: "quotes" });
+      for (const row of bySymbol.values()) {
+        if (row.supplemented) {
+          const quote = quotes.get(row.symbol);
+          if (!quote?.date || quote.date < row.listingDate || !Number.isFinite(quote.cap) || !Number.isFinite(quote.floatCap)) {
+            throw sourceError("CDR缺少上市后的报价或市值", { code: `${prefix}_RESPONSE_INVALID`, stage: "quotes" });
+          }
+        }
+      }
       return quotes;
     }
-    let quoteSource = preferredQuoteSource;
+    let quoteSource = ["sina", "tencent"].includes(quotePreference) ? quotePreference : preferredQuoteSource;
     let dates;
     try {
       dates = await readQuotes(quoteSource);
@@ -230,6 +258,8 @@ export function createSinaMarketSnapshotProvider({ request = fetch, now = Date.n
       }
       const cap = numeric(row.mktcap);
       const floatCap = numeric(row.nmc);
+      const totalCap = timestamp?.cap ?? (cap === null ? null : numeric(cap * 10000));
+      const circulatingCap = timestamp?.floatCap ?? (floatCap === null ? null : numeric(floatCap * 10000));
       const close = timestamp?.close ?? null;
       const previousClose = timestamp?.previousClose ?? null;
       return {
@@ -240,15 +270,16 @@ export function createSinaMarketSnapshotProvider({ request = fetch, now = Date.n
         // 量价与日期都来自同一条报价，不能把 node 旧涨幅拼到新报价时间上。
         close,
         open: timestamp?.open ?? null,
-        pct: close > 0 && previousClose > 0 ? (close / previousClose - 1) * 100 : null,
+        pct: timestamp?.suspended !== true && close > 0 && previousClose > 0 ? (close / previousClose - 1) * 100 : null,
         amount: timestamp?.amount ?? null, // 已按报价源统一为元。
-        cap: cap === null ? null : numeric(cap * 10000), // node mktcap/nmc: 万元 -> 元。
-        floatCap: floatCap === null ? null : numeric(floatCap * 10000),
+        cap: totalCap, // 腾讯市值亿元，新浪node万元，均已转元。
+        floatCap: circulatingCap,
         mainInflow: null, // 当前接口不提供主力净额，不能补0。
         industry,
         quoteAt: timestamp?.quoteAt ?? null,
         quoteDate: timestamp?.date ?? null,
         quoteSource,
+        suspended: timestamp?.suspended ?? null,
       };
     });
     const quoteDates = Object.keys(quoteDateCounts).sort();
@@ -258,7 +289,9 @@ export function createSinaMarketSnapshotProvider({ request = fetch, now = Date.n
     if (now() / 1000 - latestQuoteAt > 14 * 86400) throw new Error("新浪全A行情日期过旧");
     const metadata = {
       source: quoteSource === "tencent" ? "sina-tencent" : "sina",
-      quoteSource, universeSource: "sina", capitalSource: "sina",
+      quoteSource, universeSource: "sina", capitalSource: quoteSource === "tencent"
+        ? stocks.every((row) => Number.isFinite(dates.get(`${row.exchange}${row.code}`)?.cap) && Number.isFinite(dates.get(`${row.exchange}${row.code}`)?.floatCap)) ? "tencent" : "sina-tencent"
+        : "sina",
       classification: withIndustries ? "新浪行业" : null,
       classificationCoverage: { classified, total: stocks.length, unclassified: stocks.length - classified, conflicts },
       date: quoteDates.at(-1),
@@ -266,7 +299,8 @@ export function createSinaMarketSnapshotProvider({ request = fetch, now = Date.n
       quoteTime: new Date(latestQuoteAt * 1000).toISOString(),
       quoteDateRange: { from: quoteDates[0], to: quoteDates.at(-1) },
       quoteDateCounts,
-      coverage: { expected, received: stocks.length, dated },
+      coverage: { expected: bySymbol.size, received: stocks.length, dated },
+      universeCoverage: { sinaListed: expected, cdrSupplemented: bySymbol.size - expected },
       updatedAt: new Date(now()).toISOString(),
     };
     return { stocks, live: true, ...metadata, metadata };

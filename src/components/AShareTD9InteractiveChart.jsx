@@ -2,6 +2,7 @@ import StockAnalysisPanel from "./StockAnalysisPanel";
 import ChanOverlay from "./ChanOverlay";
 import ChanControls from "./ChanControls";
 import { analyzeChan } from "../lib/chan/index.js";
+import { isCurrentMarketSnapshot, marketSnapshotSourceLabel, formatMarketSnapshotTime } from "../lib/marketSnapshotQuality.js";
 import { Component, Fragment, lazy, Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -6793,9 +6794,14 @@ let todayMarketCache = null; // { body, at }
 let todayMarketInflight = null; // 单飞：预取与用户主动打开合并成一次请求
 
 function readTodayMarketCache() {
+  if (todayMarketCache && !isCurrentMarketSnapshot(todayMarketCache.body, "today")) todayMarketCache = null;
   if (todayMarketCache && !todayMarketCache.body?.stale && Date.now() >= todayMarketCache.at && Date.now() - todayMarketCache.at < TODAY_MARKET_TTL_MS) return todayMarketCache.body;
   try {
     const cached = JSON.parse(sessionStorage.getItem(TODAY_MARKET_SESSION_KEY) || "null");
+    if (cached && !isCurrentMarketSnapshot(cached.body, "today")) {
+      sessionStorage.removeItem(TODAY_MARKET_SESSION_KEY);
+      return null;
+    }
     if (cached && !cached.body?.stale && Date.now() >= Number(cached.at) && Date.now() - Number(cached.at) < TODAY_MARKET_TTL_MS && cached.body?.breadth && Array.isArray(cached.body?.hist)) {
       todayMarketCache = cached;
       return cached.body;
@@ -6807,7 +6813,7 @@ function readTodayMarketCache() {
 }
 
 function writeTodayMarketCache(body) {
-  if (body?.stale || !body?.breadth || !Array.isArray(body?.hist)) return;
+  if (body?.stale || !isCurrentMarketSnapshot(body, "today") || !body?.breadth || !Array.isArray(body?.hist)) return;
   const cached = { body, at: Date.now() };
   todayMarketCache = cached;
   try {
@@ -6828,6 +6834,7 @@ function fetchTodayMarket({ force = false, refresh = false } = {}) {
     .then(async (res) => {
       const body = await res.json().catch(() => null);
       if (!res.ok) throw new Error(body?.error || `加载失败（${res.status}）`);
+      if (!isCurrentMarketSnapshot(body, "today")) throw new Error("盘面快照口径不完整，请刷新后重试。");
       return body;
     })
     .then((body) => {
@@ -6930,15 +6937,19 @@ function TodayMarketPanel() {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs text-slate-400">数据日期 {p.date}  ·  行情覆盖 {p.breadth.total} 只  ·  {p.source === "sina-tencent" ? "腾讯行情 / 新浪名单与市值" : p.source === "sina" ? "新浪行情" : "东方财富口径"}（获取 {new Date(p.updatedAt).toLocaleTimeString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" })} 北京时间）</div>
+        <div className="text-xs text-slate-400">
+          数据日期 {p.date} · 行情覆盖 {p.breadth.total} 只 · {marketSnapshotSourceLabel(p)}
+          <div className="mt-1">行情 {formatMarketSnapshotTime(p.quoteTime)} · 获取 {formatMarketSnapshotTime(p.updatedAt)}（北京时间）</div>
+        </div>
         <button type="button" disabled={loading} onClick={() => setReloadKey((k) => k + 1)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-50">
           {loading ? "刷新中…" : "刷新"}
         </button>
       </div>
-      {(p.notice || p.stale || error) && <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">
-        {error ? "刷新失败，继续展示已有快照；数据日期见上方。" : p.notice || "当前展示缓存快照，请留意数据日期。"}
+      {(p.stale || p.classificationStale || error) && <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">
+        {error ? "刷新失败，继续展示已有快照；数据日期见上方。" : p.stale ? p.notice || "当前展示缓存快照，请留意数据日期。" : `行业归属暂未更新，沿用 ${formatMarketSnapshotTime(p.classificationUpdatedAt)} 的已验证分类；报价时间见上方。`}
       </div>}
-      {p.quoteCoverage && <div className="text-xs text-slate-500">当前交易日有效报价 {p.quoteCoverage.quoted} / {p.quoteCoverage.total} 只；{p.quoteCoverage.unavailable} 只旧日期或缺失报价未计入统计。</div>}
+      {p.notice && !p.stale && !p.classificationStale && !error && <div className="text-xs text-slate-500">{p.notice}</div>}
+      {p.quoteCoverage && <div className="text-xs text-slate-500">当前交易日有效报价 {p.quoteCoverage.quoted} / {p.quoteCoverage.total} 只；{p.quoteCoverage.unavailable} 只停牌、旧日期或缺失报价未计入统计。</div>}
 
       <div className="grid gap-3 lg:grid-cols-3">
         {/* ① 市场真实热度 */}
@@ -7149,10 +7160,18 @@ const heatmapClientCache = new Map();
 function readHeatmapClientCache(query) {
   const key = query || "latest";
   const maxAge = query ? HEATMAP_HISTORY_CACHE_MS : HEATMAP_LATEST_CACHE_MS;
-  const memory = heatmapClientCache.get(key);
+  let memory = heatmapClientCache.get(key);
+  if (!query && memory && !isCurrentMarketSnapshot(memory.body, "heatmap")) {
+    heatmapClientCache.delete(key);
+    memory = null;
+  }
   if (memory && !memory.body?.stale && Date.now() >= memory.at && Date.now() - memory.at < maxAge) return memory.body;
   try {
     const cached = JSON.parse(sessionStorage.getItem(`${HEATMAP_CLIENT_CACHE_PREFIX}${key}`) || "null");
+    if (!query && cached && !isCurrentMarketSnapshot(cached.body, "heatmap")) {
+      sessionStorage.removeItem(`${HEATMAP_CLIENT_CACHE_PREFIX}${key}`);
+      return null;
+    }
     if (cached && !cached.body?.stale && Date.now() >= Number(cached.at) && Date.now() - Number(cached.at) < maxAge && Array.isArray(cached.body?.industries) && cached.body.industries.length) {
       heatmapClientCache.set(key, cached);
       return cached.body;
@@ -7164,7 +7183,7 @@ function readHeatmapClientCache(query) {
 }
 
 function writeHeatmapClientCache(query, body) {
-  if (body?.stale || !Array.isArray(body?.industries) || !body.industries.length) return;
+  if (body?.stale || !query && !isCurrentMarketSnapshot(body, "heatmap") || !Array.isArray(body?.industries) || !body.industries.length) return;
   const key = query || "latest";
   const cached = { body, at: Date.now() };
   heatmapClientCache.set(key, cached);
@@ -7284,6 +7303,7 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
           return;
         }
         if (body.error) throw new Error(body.error);
+        if (!historical && !isCurrentMarketSnapshot(body, "heatmap")) throw new Error("行业快照口径不完整，请刷新后重试。");
         writeHeatmapClientCache(historyQuery, body);
         if (payloadRef.current && payloadRef.current.source !== body.source) {
           setFocus("");
@@ -7533,14 +7553,14 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
         </div>
       </div>
 
-      {!historical && (payload?.notice || payload?.stale || error && payload) && <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">
-        {error ? "刷新失败，继续展示已有快照；行情时间见上方。" : payload.notice || "当前展示缓存快照，请留意行情时间。"}
+      {!historical && payload && (payload.stale || payload.classificationStale || error) && <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">
+        {error ? "刷新失败，继续展示已有快照；行情时间见上方。" : payload.stale ? payload.notice || "当前展示缓存快照，请留意行情时间。" : `行业归属暂未更新，沿用 ${formatMarketSnapshotTime(payload.classificationUpdatedAt)} 的已验证分类；报价时间见上方。`}
       </div>}
-      {!historical && (payload?.source === "sina" || payload?.source === "sina-tencent") && <div className="text-xs text-slate-500">
-        备用数据源：{payload.source === "sina-tencent" ? "腾讯报价 / 新浪名单与市值" : "新浪行情"} · {payload.classification || "新浪行业"}，与东方财富行业分类不同。
-        {payload.classificationCoverage && <> 已分类 {payload.classificationCoverage.classified} / {payload.classificationCoverage.total} 只，未分类 {payload.classificationCoverage.unclassified} 只。</>}
+      {!historical && payload && <div className="text-xs text-slate-500">
+        {marketSnapshotSourceLabel(payload)} · 获取 {formatMarketSnapshotTime(payload.updatedAt)}（北京时间）。
         {payload.quoteCoverage && <> 当前交易日有效报价 {payload.quoteCoverage.quoted} / {payload.quoteCoverage.total} 只。</>}
       </div>}
+      {!historical && payload?.notice && !payload.stale && !payload.classificationStale && !error && <div className="text-xs text-slate-500">{payload.notice}</div>}
       {!historical && focus && (detail?.partial || detailError) && <div className="text-xs text-amber-600" role="status">
         {detail?.partial ? `当前仅展示缓存中的 ${detail.returnedCount ?? detail.stocks?.length ?? 0} / ${detail.totalCount ?? focusIndustry?.count ?? "—"} 只成分股。` : "完整成分股加载失败，当前仅展示行业快照中的部分股票。"}
       </div>}

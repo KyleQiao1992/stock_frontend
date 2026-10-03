@@ -399,6 +399,7 @@ async function computeTodayMarket() {
 }
 
 function validTodayMarket(payload) {
+  if (["sina", "sina-tencent"].includes(payload?.source)) return false;
   const nonnegativeInt = (value) => Number.isInteger(value) && value >= 0;
   const countOrUnknown = (value) => value == null || nonnegativeInt(value);
   const ratioOrUnknown = (value) => value == null || (Number.isFinite(value) && value >= 0 && value <= 1);
@@ -428,13 +429,15 @@ function validTodayMarket(payload) {
   if (payload.premium != null && (!nonnegativeInt(payload.premium.count) || !Number.isFinite(payload.premium.avg)
     || !ratioOrUnknown(payload.premium.redRate) || !Array.isArray(payload.premium.dist)
     || !payload.premium.dist.every((row) => row && typeof row.key === "string" && typeof row.label === "string" && nonnegativeInt(row.count)))) return false;
-  if (payload.partial || payload.mode === "snapshot") return true;
+  if (payload.partial || payload.mode === "snapshot") return payload.snapshotSchemaVersion === 3
+    && payload.universePolicy === "listed-ashare-with-cdr"
+    && ["eastmoney-tencent", "eastmoney-sina"].includes(payload.source);
   return Boolean(payload.strong && payload.consecutive && payload.heat && payload.yangYin);
 }
 
 export function createTodayMarketHandler({load = computeTodayMarket, loadFallback = null, getRedis = getRedisClient, now = Date.now} = {}) {
   const cache = createMarketSnapshotCache({
-    key: "today-market:v1", freshMs: 10 * 60000, staleMs: 30 * 60000, load, loadFallback, validate: validTodayMarket, now,
+    key: "today-market:v1", freshMs: 10 * 60000, staleMs: 30 * 60000, load, loadFallback, fallbackVersion: 3, validate: validTodayMarket, now,
     emptyClosed: (at) => ({live: false, marketClosed: true, history: [], updatedAt: new Date(at).toISOString(),
       notice: "当前数据源未提供当日行情，且没有可用的历史快照。"}),
   });
