@@ -3,6 +3,7 @@ import ChanOverlay from "./ChanOverlay";
 import ChanControls from "./ChanControls";
 import { analyzeChan } from "../lib/chan/index.js";
 import { isCurrentMarketSnapshot, marketSnapshotSourceLabel, formatMarketSnapshotTime } from "../lib/marketSnapshotQuality.js";
+import { todayMarketPresentation } from "../lib/todayMarketPresentation.js";
 import { Component, Fragment, lazy, Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Activity,
@@ -713,6 +714,9 @@ async function fetchUsKline({ symbol, period, adjust, limit }) {
       turnoverRate: Number.isFinite(payload.turnoverRate) ? payload.turnoverRate : null,
       volumeRatio: payload.volumeRatioSource === "calculated" ? null : Number.isFinite(payload.volumeRatio) ? payload.volumeRatio : null,
       volumeRatioSource: payload.volumeRatioSource || "unavailable",
+      sessionVwap: Number.isFinite(payload.sessionVwap) ? payload.sessionVwap : null,
+      sessionVwapPremium: Number.isFinite(payload.sessionVwapPremium) ? payload.sessionVwapPremium : null,
+      sessionVwapSource: payload.sessionVwapSource || "unavailable",
       innerVol: Number.isFinite(payload.innerVol) ? payload.innerVol : null,
       outerVol: Number.isFinite(payload.outerVol) ? payload.outerVol : null,
       tradeSideVolumeSource: payload.tradeSideVolumeSource || "unavailable",
@@ -6646,9 +6650,9 @@ function TMCapTiers({ tiers }) {
   );
 }
 
-// 昨日涨停股今日表现分布色条。
+// 前一交易日涨停股在盘面交易日的表现分布色条。
 function TMPremiumBar({ premium }) {
-  if (!premium) return <div className="py-6 text-center text-sm text-slate-400">暂无昨日涨停数据</div>;
+  if (!premium) return null;
   const colors = { ge7: "#dc2626", "3_7": "#f97316", "0_3": "#fca5a5", neg3_0: "#86efac", le_neg3: "#16a34a" };
   const tot = premium.dist.reduce((a, b) => a + b.count, 0) || 1;
   return (
@@ -6941,6 +6945,7 @@ function TodayMarketPanel() {
   }
 
   const p = payload;
+  const presentation = todayMarketPresentation(p);
   const ratioStr = `${p.breadth.up}:${p.breadth.down}`;
   const history = Array.isArray(p.history) ? p.history : [];
   const lbSeries = [{ name: "连板数", color: TM_AMBER, points: history.map((d) => ({ t: d.date, v: d.lbCount })) }];
@@ -6951,24 +6956,27 @@ function TodayMarketPanel() {
   ];
   const latestSuccess = [...history].reverse().find((d) => Number.isFinite(d.nextDaySuccess));
   const lastZbRate = history.at(-1)?.zbRate;
-  const unavailable = <div className="flex h-32 items-center justify-center text-xs text-slate-400">涨停、跌停或炸板池暂不可用，无法计算该指标。</div>;
+  const unavailable = <div className="flex h-32 items-center justify-center text-center text-xs text-slate-400">{presentation.unavailableMessage}</div>;
+  const historyUnavailable = <div className="flex h-32 items-center justify-center text-center text-xs text-slate-400">{presentation.historyUnavailableMessage}</div>;
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-xs text-slate-400">
-          数据日期 {p.date} · 行情覆盖 {p.breadth.total} 只 · {marketSnapshotSourceLabel(p)}
+          盘面交易日 {presentation.date} · 行情覆盖 {p.breadth.total} 只 · {marketSnapshotSourceLabel(p)}
+          {presentation.previousDate && <div className="mt-1">前一交易日 {presentation.previousDate}</div>}
           <div className="mt-1">行情 {formatMarketSnapshotTime(p.quoteTime)} · 获取 {formatMarketSnapshotTime(p.updatedAt)}（北京时间）</div>
         </div>
         <button type="button" disabled={loading} onClick={() => setReloadKey((k) => k + 1)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-50">
           {loading ? "刷新中…" : "刷新"}
         </button>
       </div>
+      {presentation.sessionNotice && <div role="status" className="text-xs text-slate-500">{presentation.sessionNotice}</div>}
       {(p.stale || p.classificationStale || error) && <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">
         {error ? "刷新失败，继续展示已有快照；数据日期见上方。" : p.stale ? p.notice || "当前展示缓存快照，请留意数据日期。" : `行业归属暂未更新，沿用 ${formatMarketSnapshotTime(p.classificationUpdatedAt)} 的已验证分类；报价时间见上方。`}
       </div>}
       {p.notice && !p.stale && !p.classificationStale && !error && <div className="text-xs text-slate-500">{p.notice}</div>}
-      {p.quoteCoverage && <div className="text-xs text-slate-500">当前交易日有效报价 {p.quoteCoverage.quoted} / {p.quoteCoverage.total} 只；{p.quoteCoverage.unavailable} 只停牌、旧日期或缺失报价未计入统计。</div>}
+      {p.quoteCoverage && <div className="text-xs text-slate-500">{presentation.date} 有效报价 {p.quoteCoverage.quoted} / {p.quoteCoverage.total} 只；{p.quoteCoverage.unavailable} 只停牌、旧日期或缺失报价未计入统计。</div>}
 
       <div className="grid gap-3 lg:grid-cols-3">
         {/* ① 市场真实热度 */}
@@ -7015,10 +7023,10 @@ function TodayMarketPanel() {
           </div>
         </TMCard>
 
-        {/* ⑤ 昨日涨停股平均涨幅 */}
-        <TMCard title="昨日涨停股今日表现" extra="接力溢价">
+        {/* ⑤ 前一交易日涨停股在盘面交易日的平均涨幅 */}
+        <TMCard title="前一交易日涨停股表现" extra={presentation.premiumExtra}>
           <div className="pt-1">
-            {p.partial && !p.premium ? unavailable : <TMPremiumBar premium={p.premium} />}
+            {p.premium ? <TMPremiumBar premium={p.premium} /> : <div className="flex h-32 items-center justify-center text-center text-xs text-slate-400">{presentation.premiumUnavailableMessage}</div>}
           </div>
         </TMCard>
 
@@ -7031,17 +7039,20 @@ function TodayMarketPanel() {
 
         {/* ⑦ 连板数 */}
         <TMCard title="连板数" extra={p.consecutive ? `连板 ${p.consecutive.lbCount} · 非一字 ${p.consecutive.nonOneWordLb} · 最高 ${p.consecutive.maxLb} 板` : "—"}>
-          {history.length ? <TMMultiLine series={lbSeries} /> : unavailable}
+          {history.length ? <TMMultiLine series={lbSeries} /> : p.consecutive ? <div className="flex h-32 flex-col items-center justify-center gap-2 text-center text-xs text-slate-400">
+            <span>{presentation.date} 连板 {p.consecutive.lbCount} 只 · 最高 {p.consecutive.maxLb} 板</span>
+            <span>{presentation.historyUnavailableMessage}</span>
+          </div> : unavailable}
         </TMCard>
 
         {/* ⑧ 打板次日成功率 */}
         <TMCard title="打板次日成功率" extra={`成功率 ${latestSuccess ? (latestSuccess.nextDaySuccess * 100).toFixed(1) + "%" : "—"} · 炸板率 ${Number.isFinite(lastZbRate) ? (lastZbRate * 100).toFixed(1) + "%" : "—"}`}>
-          {history.length ? <TMDailyCombo history={history} /> : unavailable}
+          {history.length ? <TMDailyCombo history={history} /> : historyUnavailable}
         </TMCard>
 
         {/* ⑨ 情绪周期监控 */}
         <TMCard title="情绪周期监控" extra="涨停/跌停/连板">
-          {history.length ? <TMMultiLine series={cycleSeries} /> : unavailable}
+          {history.length ? <TMMultiLine series={cycleSeries} /> : historyUnavailable}
         </TMCard>
       </div>
     </div>
@@ -9153,19 +9164,11 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
   const displayedPct = market === "hk" && Number.isFinite(meta.quotePct) ? meta.quotePct : latest?.pct;
   const prediction = useMemo(() => buildTrendPrediction(rawRows), [rawRows]);
   const rsiInfo = useMemo(() => calcRSIState(rawRows), [rawRows]);
-  const vwapInfo = useMemo(() => {
-    if (market !== "ashare") {
-      const recent = rawRows.slice(-20);
-      // Without complete turnover data, typical-price weighting is an
-      // approximation. Do not show that as VWAP in HK/US indicator cards.
-      if (recent.length < 20 || recent.some(row => {
-        if (!(row.amount > 0 && row.volume > 0)) return true;
-        const price = row.amount / row.volume;
-        return !Number.isFinite(price) || price < row.low || price > row.high;
-      })) return { ready: false, state: "neutral" };
-    }
-    return calcVWAPState(rawRows);
-  }, [rawRows, market]);
+  const vwapInfo = useMemo(() => market === "ashare" ? calcVWAPState(rawRows) : {
+    ready: meta.sessionVwapSource === "tencent" && Number.isFinite(meta.sessionVwap) && meta.sessionVwap > 0,
+    value: meta.sessionVwap,
+    premium: meta.sessionVwapPremium,
+  }, [rawRows, market, meta.sessionVwap, meta.sessionVwapPremium, meta.sessionVwapSource]);
 
   // 这些 tab 是独立页面，没有个股的代码搜索/周期/复权等控件，也不触发自动取数。
   const isStandaloneMarket = market === "agent" || market === "factor-research" || market === "market-trend";
@@ -9699,6 +9702,9 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
         turnoverRate: Number.isFinite(result.turnoverRate) ? result.turnoverRate : null,
         volumeRatio: result.volumeRatioSource === "calculated" ? null : Number.isFinite(result.volumeRatio) ? result.volumeRatio : null,
         volumeRatioSource: result.volumeRatioSource || "",
+        sessionVwap: Number.isFinite(result.sessionVwap) ? result.sessionVwap : null,
+        sessionVwapPremium: Number.isFinite(result.sessionVwapPremium) ? result.sessionVwapPremium : null,
+        sessionVwapSource: result.sessionVwapSource || "unavailable",
         tradeSideVolumeSource: result.tradeSideVolumeSource || "",
         indicatorsQuoteTime: result.indicatorsQuoteTime || "",
         outerVol: Number.isFinite(result.outerVol) ? result.outerVol : null,
@@ -10307,9 +10313,9 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                       </span>
                       <span className="text-red-600">{Number.isFinite(meta.outerVol) ? formatNumber(meta.outerVol) : market === "ashare" ? "-" : <span className="text-xs text-slate-400">源未提供</span>}</span>
                     </div>
-                    {market !== "ashare" && meta.volumeRatioSource === "tencent" ? (
+                    {market !== "ashare" && (meta.volumeRatioSource === "tencent" || meta.sessionVwapSource === "tencent") ? (
                       <div className="quote-metric-wide text-xs text-slate-400">
-                        量比：腾讯 · {meta.indicatorsQuoteTime || meta.quoteTime}
+                        腾讯快照 · {meta.indicatorsQuoteTime || meta.quoteTime}
                         {market === "hk" ? " 香港时间" : " 美东时间"}
                       </div>
                     ) : null}
@@ -10335,8 +10341,9 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                     </div>
                     <div className="quote-metric quote-metric-wide flex justify-between">
                       <span className="inline-flex items-center">
-                        VWAP20
-                        <InfoTip text={"VWAP = Σ(单日均价 × 当日成交量) ÷ Σ成交量，即近 20 个交易日成交量加权平均价，近似这段时间买入者的平均成本。\n\n股价 > VWAP  多数持仓浮盈，回踩 VWAP 常成支撑\n股价 < VWAP  多数持仓套牢，反弹到 VWAP 常遇解套抛压\n偏离 ±10% 以上  乖离偏大，有向均价回归的需求\n\n右侧百分比为收盘价相对 VWAP 的溢价（+）或折价（−）。日线数据没有分笔明细，单日均价优先用 成交额 ÷ 成交量；数据源未提供成交额时用 (最高+最低+收盘)/3 近似，与券商分笔口径会有小幅差异。"} />
+                        {market === "ashare" ? "VWAP20" : "VWAP"}
+                        {market !== "ashare" ? <span className="ml-1 text-xs text-slate-400">当日</span> : null}
+                        <InfoTip text={market !== "ashare" ? "当日 VWAP = 腾讯快照当日累计成交额 ÷ 累计成交股数，使用原始价格口径，不使用典型价近似。数据日期和时间见腾讯快照；非交易日显示最近交易日。切换日/周/月K不改变这个当日指标。\n\n右侧百分比是同一快照最新价相对当日 VWAP 的偏离。交易范围遵循腾讯行情源，不能保证与其他平台是否纳入竞价、盘前盘后等成交的口径一致。成交额或成交量缺失时不显示数值。" : "VWAP = Σ(单日均价 × 当日成交量) ÷ Σ成交量，即当前周期最近 20 根 K 线的成交量加权平均价（日K对应20个交易日，周K对应20周，月K对应20个月）；不足20根时用已有样本。这里是滚动指标，和美股常见的当日 VWAP 口径不同。\n\n股价 > VWAP  多数持仓浮盈，回踩 VWAP 常成支撑\n股价 < VWAP  多数持仓套牢，反弹到 VWAP 常遇解套抛压\n偏离 ±10% 以上  乖离偏大，有向均价回归的需求\n\n右侧百分比为收盘价相对 VWAP 的溢价（+）或折价（−）。日线数据没有分笔明细，单日均价优先用 成交额 ÷ 成交量；数据源未提供成交额时用 (最高+最低+收盘)/3 近似，近似结果与真实成交均价可能有差异，不能当作精确成本。"} />
                       </span>
                       <span className="inline-flex items-baseline gap-1">
                         <span>{vwapInfo.ready ? latestValid(vwapInfo.value) : market === "ashare" ? "-" : "数据不足"}</span>

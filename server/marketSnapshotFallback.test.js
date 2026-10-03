@@ -29,7 +29,7 @@ const loadCapitals = async ({date, stocks}) => ({capitalSource: "eastmoney", cap
   capitalUpdatedAt: new Date(NOW).toISOString(), coverage: {expected: stocks.length, received: stocks.length},
   capitals: stocks.map((row) => ({symbol: row.symbol || `${row.exchange || (row.market === 1 ? "sh" : "sz")}${row.code}`,
     cap: row.cap, floatCap: row.floatCap, close: row.close, quoteDate: date}))});
-function testFallbacks(options) { return createMarketSnapshotFallbacks({loadCapitals, ...options}); }
+function testFallbacks(options) { return createMarketSnapshotFallbacks({loadCapitals, loadSessionData: async () => null, ...options}); }
 
 test("alternate snapshots share one successful full fetch and retain only current-day measurements", async () => {
   let calls = 0;
@@ -268,4 +268,42 @@ test("snapshot metadata cannot redirect actual quotations to a different valuati
     loadCapitals: async (options) => {capitalCalls += 1;return loadCapitals(options);}});
   await assert.rejects(fallbacks.heatmap(), (e) => e.code === "FALLBACK_SNAPSHOT_INVALID");
   assert.equal(capitalCalls, 0);
+});
+
+test('alternate dashboard also loads verified pools for the quote session, without moving its date to fetch time', async () => {
+  const {createTodayMarketSessionLoader} = await import('./todayMarket.js');
+  const calls = [];
+  const loadSessionData = createTodayMarketSessionLoader({now: () => NOW,
+    loadDays: async ({date}) => ({date, previousDate: '2026-09-29', days: ['20260929', '20260930']}),
+    loadPool: async (kind, date) => {
+      calls.push({kind, date});
+      return kind === 'zt' ? {tc: 1, pool: [{c: '600001', m: 1, lbc: 2}]} : {tc: 0, pool: []};
+    }});
+  const fallback = testFallbacks({now: () => NOW, loadIndustries, loadSnapshot: async () => snapshot(), loadSessionData});
+  const result = await fallback.today();
+  assert.equal(result.date, '2026-09-30');
+  assert.equal(result.previousDate, '2026-09-29');
+  assert.equal(result.poolDate, result.date);
+  assert.equal(result.strong.ztCount, 1);
+  assert.equal(result.heat.value, 70);
+  assert.equal(result.consecutive.lbCount, 1);
+  assert.equal(result.premium.avg, 5);
+  assert.equal(result.history.at(-1).date, result.date);
+  assert.ok(calls.every(({date}) => date <= '20260930'));
+  const handler = createTodayMarketHandler({getRedis: async () => null, now: () => NOW,
+    load: async () => {throw new Error('primary unavailable');}, loadFallback: fallback.today});
+  assert.equal((await request(handler)).statusCode, 200);
+});
+
+test('failed or differently dated pools never change verified alternate quote statistics', async () => {
+  for (const loadSessionData of [async () => {throw new Error('pool network unavailable');},
+    async () => ({poolDate: '2026-10-03', strong: {ztCount: 999}, poolAvailability: {zt: true, dt: true, zb: true}})]) {
+    const fallback = testFallbacks({now: () => NOW, loadIndustries, loadSnapshot: async () => snapshot(), loadSessionData});
+    const result = await fallback.today();
+    assert.equal(result.date, '2026-09-30');
+    assert.equal(result.breadth.total, 2);
+    assert.equal(result.strong, null);
+    assert.equal(result.heat, null);
+    assert.deepEqual(result.history, []);
+  }
 });

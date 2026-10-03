@@ -15,7 +15,8 @@ function validAlternatePanels(body) {
     || !body.hist.every((row) => row && typeof row.label === "string" && count(row.count))
     || !Array.isArray(body.capTiers) || !body.capTiers.every((row) => row && typeof row.key === "string"
       && typeof row.label === "string" && count(row.n) && finiteOrNull(row.avg))
-    || !Array.isArray(body.history) || !body.history.every((row) => row && validDay(row.date)
+    || !Array.isArray(body.history) || !body.history.every((row, i) => row && validDay(row.date)
+      && row.date <= body.date && (!i || body.history[i - 1].date < row.date)
       && [row.ztCount, row.lbCount, row.maxLb].every(count)
       && [row.dtCount, row.zbCount].every((value) => value == null || count(value))
       && [row.zbRate, row.nextDaySuccess].every(ratioOrUnknown))) return false;
@@ -51,6 +52,12 @@ export function isCurrentMarketSnapshot(body, kind) {
     if (!count(body.totalStocks) || body.totalStocks === 0 || !Array.isArray(body.industries) || !body.industries.length) return false;
   } else if (kind === "today") {
     if (!body.breadth || !count(body.breadth.total) || body.breadth.total === 0 || !Array.isArray(body.hist)) return false;
+    if (body.quoteTime != null && body.date != null && !tradingDate(body)
+      || body.poolDate != null && body.poolDate !== body.date
+      || body.previousDate != null && (!validDay(body.previousDate) || body.previousDate >= body.date)) return false;
+    if (body.date != null && body.history != null && (!Array.isArray(body.history)
+      || !body.history.every((row, i) => row && validDay(row.date) && row.date <= body.date
+        && (!i || body.history[i - 1].date < row.date)))) return false;
   } else return false;
   const fallback = FALLBACK_SOURCES.has(body.source);
   if (!fallback && !body.partial && body.mode !== "snapshot") return !body.source || body.source === "eastmoney";

@@ -2,6 +2,7 @@ import { getRedisClient } from "./redisClient.js";
 import { EM_UT, EM_FETCH_HEADERS, mapWithConcurrency } from "./boardTrend.js";
 import { createMarketSnapshotCache } from "./marketSnapshotCache.js";
 import { hasSameDayMarketCapital } from "./eastmoneyMarketCapital.js";
+import { loadMarketTradingSessions } from "./marketTradingSessions.js";
 
 // 涨停/跌停/炸板池接口用的是另一套 ut 令牌（push2ex），和行情 clist 的 EM_UT 不同。
 const ZT_UT = "7eea3edcaed734bea9cbfc24409ed989";
@@ -11,6 +12,9 @@ const ALL_A_FS = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048";
 
 // 多日历史回看的交易日数（情绪周期/连板数/打板次日成功率）。
 const HISTORY_DAYS = 20;
+// The pool API retains fewer sessions than the quote/index APIs. Do not turn
+// older empty responses outside its verified 15-session window into zero counts.
+const POOL_HISTORY_DAYS = 15;
 
 // 市值分档（总市值，单位：元）。从大到小，和截图一致。
 const CAP_TIERS = [
@@ -38,12 +42,10 @@ const PUSH2_HOSTS = [
   "https://82.push2.eastmoney.com",
 ];
 
-function yyyymmdd(d) {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `${y}${m}${day}`;
-}
+const validDate = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)
+  && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value;
+const dashedDate = (value) => typeof value === "string" && /^\d{8}$/.test(value)
+  ? `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}` : null;
 
 // 拉全 A 股快照（clist 分页）。每只返回涨跌幅/开/收/总市值/所属市场。多 host 兜底。
 export async function fetchAllStocksSnapshot({request = fetch, now = Date.now} = {}) {
@@ -96,42 +98,36 @@ export async function fetchAllStocksSnapshot({request = fetch, now = Date.now} =
 }
 
 // 拉某个池（涨停 zt / 跌停 dt / 炸板 zb）某天的列表。date=YYYYMMDD。
-async function fetchPool(kind, date, deadline = Date.now() + 12000) {
-  if (Date.now() >= deadline) return null;
+export async function fetchPool(kind, date, deadline = Date.now() + 12000, {request = fetch, now = Date.now} = {}) {
+  if (!["zt", "dt", "zb"].includes(kind) || !validDate(dashedDate(date)) || now() >= deadline) return null;
   const ep = kind === "zt" ? "getTopicZTPool" : kind === "dt" ? "getTopicDTPool" : "getTopicZBPool";
   const sort = kind === "dt" ? "fund:asc" : "fbt:asc";
   const url =
     `https://push2ex.eastmoney.com/${ep}?ut=${ZT_UT}&dpt=wz.ztzt&Pageindex=0&pagesize=600` +
     `&sort=${sort}&date=${date}`;
   try {
-    const res = await fetch(url, {
+    const res = await request(url, {
       headers: { ...EM_FETCH_HEADERS, Referer: "https://quote.eastmoney.com/" },
-      signal: AbortSignal.timeout(Math.max(1, Math.min(12000, deadline - Date.now()))),
+      signal: AbortSignal.timeout(Math.max(1, Math.min(5000, deadline - now()))),
     });
     if (!res.ok) return null;
     const payload = await res.json();
     const data = payload?.data;
-    if (!data || !Array.isArray(data.pool)) return null;
+    if (payload?.rc !== 0 || !data || !Array.isArray(data.pool)) return null;
     const pool = data.pool;
     const count = Number(data.tc);
-    if (data.tc == null || data.tc === "" || !Number.isInteger(count) || count < 0) return null;
-    return { tc: count, pool };
+    // qdate is the latest available pool session, including for historical
+    // queries. Reject requests beyond it: the endpoint silently clamps them.
+    const latestDate = String(data.qdate || "");
+    if (!validDate(dashedDate(latestDate)) || latestDate < date
+      || dashedDate(latestDate) > new Date(now() + 8 * 3600000).toISOString().slice(0, 10)
+      || data.tc == null || data.tc === "" || !Number.isSafeInteger(count) || count < 0 || count !== pool.length
+      || !pool.every((row) => row && /^\d{6}$/.test(String(row.c)) && [0, 1].includes(Number(row.m))
+        && (kind !== "zt" || Number.isSafeInteger(Number(row.lbc)) && Number(row.lbc) >= 1))) return null;
+    return { tc: count, pool, latestDate };
   } catch {
     return null;
   }
-}
-
-// 生成最近 n 个工作日（YYYYMMDD，升序）。周末/节假日由调用方用涨停池 tc=0 进一步过滤。
-// 不依赖 K 线接口（指数/个股 K 线在部分网络不可达），仅靠各处都通的涨停池判定交易日。
-function recentWeekdays(n) {
-  const days = [];
-  const d = new Date(Date.now() + 8 * 3600000);
-  while (days.length < n) {
-    const dow = d.getUTCDay();
-    if (dow !== 0 && dow !== 6) days.push(yyyymmdd(d));
-    d.setUTCDate(d.getUTCDate() - 1);
-  }
-  return days.reverse(); // 升序
 }
 
 // 拉单只股票最近 N 根日线（用于打板次日成功率：判断涨停后次日是否红盘）。
@@ -272,9 +268,81 @@ async function fetchPoolsForDates(kind, dates, conc, deadline) {
   return map;
 }
 
+// The quote session is the only panel date. Calendar/index evidence determines
+// the previous session; neither weekdays nor a nonempty limit-up pool do that.
+export function createTodayMarketSessionLoader({loadDays = loadMarketTradingSessions, loadPool = fetchPool,
+  loadHistory = buildHistory, now = Date.now, budgetMs = 12000} = {}) {
+  const recent = new Map();
+  const inflight = new Map();
+  async function retrieve(date, force) {
+    const deadline = now() + budgetMs;
+    const target = date.replaceAll("-", "");
+    const [sessions, ...currentPools] = await Promise.all([
+      Promise.resolve().then(() => loadDays({date, limit: POOL_HISTORY_DAYS, force})).catch(() => null),
+      ...["zt", "dt", "zb"].map((kind) => Promise.resolve().then(() => loadPool(kind, target, deadline)).catch(() => null)),
+    ]);
+    const validSessions = sessions?.date === date && Array.isArray(sessions.days) && sessions.days.length > 0
+      && sessions.days.length <= POOL_HISTORY_DAYS && sessions.days.at(-1) === target
+      && sessions.days.every((day, i) => validDate(dashedDate(day)) && day <= target && (!i || sessions.days[i - 1] < day))
+      && (sessions.previousDate == null || validDate(sessions.previousDate) && sessions.previousDate < date
+        && sessions.previousDate === dashedDate(sessions.days.at(-2)));
+    const days = validSessions ? sessions.days : [target];
+    const maps = [new Map(), new Map(), new Map()];
+    currentPools.forEach((pool, i) => { if (pool) maps[i].set(target, pool); });
+    await mapWithConcurrency(days.slice(0, -1), 6, async (day) => {
+      await Promise.all(["zt", "dt", "zb"].map(async (kind, i) => {
+        if (now() >= deadline) return;
+        try { const pool = await loadPool(kind, day, deadline); if (pool) maps[i].set(day, pool); } catch { /* Missing stays unknown. */ }
+      }));
+    });
+    const [ztMap, dtMap, zbMap] = maps;
+    const historyDays = days.filter((day) => ztMap.has(day));
+    // Historical pool curves do not need hundreds of individual K-line calls.
+    // The most recent next-day result is derived below from this session's quotes.
+    const history = await loadHistory(historyDays, ztMap, dtMap, zbMap, now(), {sessions: days, now, loadDailyPct: async () => null});
+    return {date, previousDate: validSessions ? dashedDate(sessions.days.at(-2)) : null, ztMap, dtMap, zbMap, history};
+  }
+  return async function load({date, stocks, force = false} = {}) {
+    if (!validDate(date) || !Array.isArray(stocks)) throw new Error("盘面交易日或报价无效");
+    const cached = recent.get(date);
+    let raw;
+    if (!force && cached && now() >= cached.at && now() - cached.at < 60000) raw = cached.raw;
+    else {
+      let pending = inflight.get(date);
+      if (!pending) {
+        pending = retrieve(date, force).then((result) => {
+          const key = date.replaceAll("-", "");
+          if (result.ztMap.has(key) && result.dtMap.has(key) && result.zbMap.has(key)) {
+            recent.set(date, {raw: result, at: now()});
+            if (recent.size > HISTORY_DAYS) recent.delete(recent.keys().next().value);
+          }
+          return result;
+        }).finally(() => {inflight.delete(date);});
+        inflight.set(date, pending);
+      }
+      raw = await pending;
+    }
+    const target = date.replaceAll("-", "");
+    const zt = raw.ztMap.get(target);
+    const dt = raw.dtMap.get(target);
+    const zb = raw.zbMap.get(target);
+    const previous = raw.previousDate ? raw.ztMap.get(raw.previousDate.replaceAll("-", "")) : null;
+    const panels = buildSnapshotPanels(stocks, zt, dt?.tc ?? 0, zb?.tc ?? 0, previous, new Map(stocks.map((row) => [row.code, row])));
+    const history = raw.history.map((row) => row.date === raw.previousDate ? {...row, nextDaySuccess: panels.premium?.redRate ?? null} : {...row});
+    return {...panels, strong: zt && dt && zb ? panels.strong : null, heat: zt && dt ? panels.heat : null,
+      consecutive: zt ? panels.consecutive : null, premium: previous ? panels.premium : null,
+      history, poolDate: date, previousDate: raw.previousDate,
+      poolAvailability: {zt: Boolean(zt), dt: Boolean(dt), zb: Boolean(zb), previousZt: Boolean(previous), history: history.length > 0},
+      premiumCoverage: {expected: previous?.tc ?? null, quoted: panels.premium?.count ?? 0}};
+  };
+}
+
+export const loadTodayMarketSessionData = createTodayMarketSessionLoader();
+
 // ===== 多日历史：连板数 / 涨停跌停家数 / 最高连板 / 炸板率 / 打板次日成功率 =====
 // 入参已是确定的交易日（升序）+ 预拉好的三池 Map。次日成功率需个股日线，best-effort。
-export async function buildHistory(days, ztMap, dtMap, zbMap, deadline) {
+export async function buildHistory(days, ztMap, dtMap, zbMap, deadline,
+  {sessions = days, loadDailyPct = fetchStockDailyPct, now = Date.now} = {}) {
   const perDay = days.map((date) => {
     const ztPool = ztMap.get(date)?.pool || [];
     let lbCount = 0;
@@ -305,21 +373,23 @@ export async function buildHistory(days, ztMap, dtMap, zbMap, deadline) {
 
   // 个股日线另设较短子预算：能取到时几秒就够；取不到（K 线 host 不可达）时最多浪费这么久，
   // 不拖到总预算，保证其余 8 个面板尽快返回，次日成功率留 null。
-  const klineDeadline = Math.min(deadline, Date.now() + 12000);
+  const klineDeadline = Math.min(deadline, now() + 12000);
   const klineMap = new Map(); // code -> {YYYYMMDD: pct}
   await mapWithConcurrency([...codeSet.keys()], 16, async (code) => {
-    if (Date.now() > klineDeadline) return;
-    const km = await fetchStockDailyPct(codeSet.get(code), code, HISTORY_DAYS + 5, klineDeadline);
+    if (now() > klineDeadline) return;
+    const km = await loadDailyPct(codeSet.get(code), code, HISTORY_DAYS + 5, klineDeadline);
     if (km) klineMap.set(code, km);
   });
 
   // 逐天算次日成功率（最后一天没有“次日”，留 null）。
-  for (let i = 0; i < perDay.length; i += 1) {
-    const nextDate = perDay[i + 1]?.date;
+  const nextSessions = new Map(sessions.map((date, i) => [date, sessions[i + 1]]));
+  for (const day of perDay) {
+    // A missing pool record must not turn a later session into the next one.
+    const nextDate = nextSessions.get(day.date);
     let red = 0;
     let tot = 0;
     if (nextDate) {
-      for (const c of perDay[i].ztCodes) {
+      for (const c of day.ztCodes) {
         const v = klineMap.get(c.code)?.[nextDate];
         if (Number.isFinite(v)) {
           tot += 1;
@@ -327,7 +397,7 @@ export async function buildHistory(days, ztMap, dtMap, zbMap, deadline) {
         }
       }
     }
-    perDay[i].nextDaySuccess = tot > 0 ? red / tot : null;
+    day.nextDaySuccess = tot > 0 ? red / tot : null;
   }
 
   // 精简返回（不带 ztCodes，避免 payload 过大）。
@@ -358,14 +428,14 @@ async function computeTodayMarket() {
   if (!Number.isFinite(quoteTimestamp)) throw new Error("行情快照缺少可信的数据日期");
   const quoteDate = new Date(quoteTimestamp + 8 * 3600000).toISOString().slice(0, 10).replaceAll("-", "");
 
-  // 历史交易日用涨停池判定；最新交易日由真实行情时间确定，允许该日没有涨停。
-  // 注意：push2ex 涨停池历史只保留约 15 个交易日，更早的日期会返回 tc=0，自然被过滤掉，
-  // 所以多日面板实际约 3 周窗口（要更长需自行落库累积，超出当前范围）。
-  const candidates = recentWeekdays(HISTORY_DAYS + 6);
+  // Actual index sessions establish the window, anchored to the quote date.
+  // A zero limit-up count must not skip a real previous trading session.
+  const sessions = await loadMarketTradingSessions({date: dashedDate(quoteDate), limit: POOL_HISTORY_DAYS});
+  const candidates = sessions.days;
   const ztMap = await fetchPoolsForDates("zt", candidates, 8, deadline);
   if (!ztMap.has(quoteDate)) throw new Error("当日涨停池未完整获取，不能计算完整盘面");
   // A real quote date establishes a trading session even when that session has zero limit-ups.
-  const tradingDays = candidates.filter((d) => d <= quoteDate && ((ztMap.get(d)?.tc ?? 0) > 0 || d === quoteDate));
+  const tradingDays = candidates;
   if (!tradingDays.length) throw new Error("未取到任何交易日的涨停池数据");
   const todayDate = tradingDays[tradingDays.length - 1];
   const prevDate = tradingDays[tradingDays.length - 2] || null;
@@ -388,7 +458,7 @@ async function computeTodayMarket() {
     snapByCode,
   );
 
-  const history = await buildHistory(windowDays, ztMap, dtMap, zbMap, deadline);
+  const history = await buildHistory(windowDays.filter((day) => ztMap.has(day)), ztMap, dtMap, zbMap, deadline, {sessions: windowDays});
 
   const date = `${todayDate.slice(0, 4)}-${todayDate.slice(4, 6)}-${todayDate.slice(6, 8)}`;
   console.log(
@@ -396,7 +466,8 @@ async function computeTodayMarket() {
       `dt=${dtMap.get(todayDate)?.tc} zb=${zbMap.get(todayDate)?.tc} histDays=${history.length} totalMs=${Date.now() - t0}`,
   );
 
-  return { live: true, date, quoteTime: snap.quoteTime, ...panels, history, updatedAt: new Date().toISOString() };
+  return { live: true, date, previousDate: sessions.previousDate, poolDate: date,
+    quoteTime: snap.quoteTime, ...panels, history, updatedAt: new Date().toISOString() };
 }
 
 function validTodayMarket(payload) {
@@ -411,6 +482,13 @@ function validTodayMarket(payload) {
   };
   const counts = payload?.breadth;
   if (!validDate(payload?.date)) return false;
+  if (payload.quoteTime != null) {
+    const at = Date.parse(payload.quoteTime);
+    if (!Number.isFinite(at) || new Date(at + 8 * 3600000).toISOString().slice(0, 10) !== payload.date) return false;
+  }
+  if (payload.dataDate != null && payload.dataDate !== payload.date
+    || payload.poolDate != null && payload.poolDate !== payload.date
+    || payload.previousDate != null && (!validDate(payload.previousDate) || payload.previousDate >= payload.date)) return false;
   if (payload?.live !== true || !counts || !Number.isInteger(counts.total) || counts.total <= 0
     || ![counts.up, counts.down, counts.flat].every((count) => Number.isInteger(count) && count >= 0)
     || counts.up + counts.down + counts.flat !== counts.total
@@ -419,7 +497,8 @@ function validTodayMarket(payload) {
     || !Array.isArray(payload.hist) || !payload.hist.every((row) => row && typeof row.label === "string" && Number.isInteger(row.count) && row.count >= 0)
     || !Array.isArray(payload.capTiers) || !payload.capTiers.every((row) => row && typeof row.key === "string" && typeof row.label === "string"
       && Number.isInteger(row.n) && row.n >= 0 && (row.avg == null || Number.isFinite(row.avg)))
-    || !Array.isArray(payload.history) || !payload.history.every((row) => row && validDate(row.date)
+    || !Array.isArray(payload.history) || !payload.history.every((row, i) => row && validDate(row.date)
+      && row.date <= payload.date && (!i || payload.history[i - 1].date < row.date)
       && [row.ztCount, row.lbCount, row.maxLb].every(nonnegativeInt)
       && [row.dtCount, row.zbCount].every(countOrUnknown)
       && [row.zbRate, row.nextDaySuccess].every(ratioOrUnknown))) return false;
@@ -449,6 +528,7 @@ function validTodayMarket(payload) {
 export function createTodayMarketHandler({load = computeTodayMarket, loadFallback = null, getRedis = getRedisClient, now = Date.now} = {}) {
   const cache = createMarketSnapshotCache({
     key: "today-market:v1", freshMs: 10 * 60000, staleMs: 30 * 60000, load, loadFallback, fallbackVersion: 3, validate: validTodayMarket, now,
+    preferCompletePreviousSession: true,
     emptyClosed: (at) => ({live: false, marketClosed: true, history: [], updatedAt: new Date(at).toISOString(),
       notice: "当前数据源未提供当日行情，且没有可用的历史快照。"}),
   });

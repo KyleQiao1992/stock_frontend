@@ -2,11 +2,12 @@ import { loadSinaMarketSnapshot } from "./sinaMarketSnapshot.js";
 import { loadEastmoneyIndustryMap } from "./eastmoneyIndustryMap.js";
 import { loadEastmoneyMarketCapital } from "./eastmoneyMarketCapital.js";
 import { aggregateHeatmapStocks } from "./marketHeatmap.js";
-import { buildSnapshotPanels } from "./todayMarket.js";
+import { buildSnapshotPanels, loadTodayMarketSessionData } from "./todayMarket.js";
 
 // Share the successful alternate snapshot between the heatmap and its dashboard
 // prefetch. Nothing is fetched at import time and failures are never cached.
-export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSnapshot, loadIndustries = loadEastmoneyIndustryMap, loadCapitals = loadEastmoneyMarketCapital, now = Date.now } = {}) {
+export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSnapshot, loadIndustries = loadEastmoneyIndustryMap,
+  loadCapitals = loadEastmoneyMarketCapital, loadSessionData = loadTodayMarketSessionData, now = Date.now } = {}) {
   let recent = null;
   let inflight = null;
   const usable = (entry) => entry && now() >= entry.at && now() - entry.at < 60000;
@@ -122,11 +123,18 @@ export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSna
       const stocks = currentStocks(result).filter((row) => Number.isFinite(row.pct)).map((row) => ({...row, mktcap: row.cap}));
       if (!stocks.length) throw new Error("备用行情无当日盘面数据");
       const panels = buildSnapshotPanels(stocks, null, 0, 0, null, new Map(stocks.map((row) => [row.code, row])));
+      let session = null;
+      try { session = await loadSessionData({date: result.metadata.dataDate, stocks, force: Boolean(options?.force)}); } catch { /* Quote-only data remains available. */ }
+      if (session?.poolDate !== result.metadata.dataDate) session = null;
+      const hasPools = session?.poolAvailability?.zt && session.poolAvailability.dt && session.poolAvailability.zb;
       return {
-        ...result.metadata, ...panels, live: true, mode: "snapshot", partial: true,
+        ...result.metadata, ...panels,
         heat: null, strong: null, consecutive: null, premium: null, history: [],
+        ...(session || {}),
+        live: true, mode: "snapshot", partial: true,
         quoteCoverage: {quoted: stocks.length, total: result.stocks.length, unavailable: result.stocks.length - stocks.length},
-        notice: "备用报价用于涨跌统计和市值分档。涨停、跌停、炸板及连板等依赖池数据的指标暂不可用；停牌、旧日期和缺失报价不计入当日统计。",
+        notice: hasPools ? "盘面按报价交易日统计，涨停、跌停、炸板池使用同日数据；前一交易日按实际交易日序列确定。停牌、旧日期和缺失报价不计入统计。"
+          : "盘面按报价交易日统计。未取得的涨停、跌停或炸板池保持未知；停牌、旧日期和缺失报价不计入统计。",
       };
     },
   };

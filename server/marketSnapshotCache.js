@@ -26,7 +26,7 @@ function snapshotError(message, code, stage) {
 
 // Full snapshots keep their established keys. Incomplete provider fallbacks use
 // a separate key so another deployed version cannot mistake them for full data.
-export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFallback = null, fallbackVersion = 2, validate, now = Date.now, onFull = null, emptyClosed }) {
+export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFallback = null, fallbackVersion = 2, validate, now = Date.now, onFull = null, emptyClosed, preferCompletePreviousSession = false }) {
   let fresh = null;
   let lastGood = null;
   let fallback = null;
@@ -81,9 +81,28 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
     return 0;
   }
 
+  function preferCompletedSession(primary, backup) {
+    if (!preferCompletePreviousSession || !full(primary) || !backup?.payload.partial) return false;
+    const completeBreadth = primary.payload.breadth;
+    const alternateBreadth = backup.payload.breadth;
+    if (completeBreadth && alternateBreadth
+      && ["up", "down", "flat", "total"].some((field) => completeBreadth[field] !== alternateBreadth[field])) return false;
+    const complete = quotePosition(primary);
+    const alternate = quotePosition(backup);
+    if (complete.ms === null || complete.day !== alternate.day
+      || primary.payload.date !== complete.day
+      || primary.payload.dataDate != null && primary.payload.dataDate !== complete.day) return false;
+    const currentDay = new Date(now() + 8 * 3600000).toISOString().slice(0, 10);
+    const quoteHour = new Date(complete.ms + 8 * 3600000).getUTCHours();
+    // A vendor may update its closing quote timestamp after 15:00 without a
+    // new session. Retain the complete close, but never an intraday snapshot.
+    return currentDay > complete.day && quoteHour >= 15;
+  }
+
   function bestAvailable(primary, backup) {
     if (!primary) return backup;
     if (!backup) return primary;
+    if (preferCompletedSession(primary, backup)) return primary;
     const order = compareQuotes(backup, primary);
     if (order !== 0) return order > 0 ? backup : primary;
     if (activeProvider) return activeProvider === "fallback" ? backup : primary;
@@ -208,7 +227,8 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
           fresh = candidate;
           lastGood = candidate;
           const previousBackup = await readFallback(redis);
-          const keepBackup = previousBackup && compareQuotes(previousBackup, candidate) > 0;
+          const keepBackup = previousBackup && compareQuotes(previousBackup, candidate) > 0
+            && !preferCompletedSession(candidate, previousBackup);
           activeProvider = keepBackup ? "fallback" : "primary";
           lastRefreshReason = null;
           lastFailureAt = -Infinity;
@@ -232,6 +252,10 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
       const cachedBackup = await readFallback(redis);
       if (!force && cachedBackup && sameShanghaiDate(cachedBackup) && age(cachedBackup) < freshMs
         && (!previous || compareQuotes(cachedBackup, previous) >= 0)) {
+        if (preferCompletedSession(previous, cachedBackup)) {
+          activeProvider = "primary";
+          return stale(previous, reason);
+        }
         activeProvider = "fallback";
         return cachedBackup.payload;
       }
@@ -245,9 +269,11 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
           const best = bestAvailable(previous, cachedBackup);
           if (best && compareQuotes(candidate, best) < 0) throw snapshotError("备用行情时间早于已有快照", "FALLBACK_QUOTE_OLDER", "quote-comparison");
           fallback = candidate;
-          activeProvider = "fallback";
+          const preferPrevious = preferCompletedSession(previous, candidate);
+          activeProvider = preferPrevious ? "primary" : "fallback";
           if (onFull) { try { await onFull({...result, payload: candidate.payload}, redis); } catch { /* Aggregate fallback remains valid. */ } }
           await persist(redis, candidate, false);
+          if (preferPrevious) return stale(previous, reason);
           return candidate.payload;
         } catch (error) { logFailure("fallback", error); }
       }

@@ -47,3 +47,30 @@ test("wrong market, missing timestamp and truncated payload cannot supply a rati
   fields[30] = "";
   assert.equal(parseTencentQuoteIndicators(fields, "hk").volumeRatio, null);
 });
+
+test("session VWAP uses actual cumulative turnover divided by shares", () => {
+  for (const market of ["hk", "us"]) {
+    const fields = snapshot(market);
+    fields[3] = "101";
+    fields[36] = "1000";
+    fields[37] = "100000";
+    const result = parseTencentQuoteIndicators(fields, market);
+    assert.equal(result.sessionVwap, 100);
+    assert.ok(Math.abs(result.sessionVwapPremium - 1) < 1e-10);
+    assert.equal(result.sessionVwapSource, "tencent");
+  }
+});
+
+test("missing turnover or zero volume cannot produce session VWAP", () => {
+  for (const invalid of ["", "-", "0", "-1", "Infinity", null, undefined]) {
+    for (const index of [36, 37]) {
+      const fields = snapshot("us");
+      fields[36] = "1000";
+      fields[37] = "100000";
+      fields[index] = invalid;
+      const result = parseTencentQuoteIndicators(fields, "us");
+      assert.equal(result.sessionVwap, null);
+      assert.equal(result.sessionVwapSource, "unavailable");
+    }
+  }
+});
