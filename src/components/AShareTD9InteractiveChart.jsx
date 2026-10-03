@@ -2,7 +2,7 @@ import StockAnalysisPanel from "./StockAnalysisPanel";
 import ChanOverlay from "./ChanOverlay";
 import ChanControls from "./ChanControls";
 import { analyzeChan } from "../lib/chan/index.js";
-import { Component, Fragment, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Component, Fragment, lazy, Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertCircle,
@@ -710,6 +710,13 @@ async function fetchUsKline({ symbol, period, adjust, limit }) {
       floatMarketCap: Number.isFinite(payload.floatMarketCap) ? payload.floatMarketCap : null,
       peRatio: Number.isFinite(payload.peRatio) ? payload.peRatio : null,
       turnoverRate: Number.isFinite(payload.turnoverRate) ? payload.turnoverRate : null,
+      volumeRatio: payload.volumeRatioSource === "calculated" ? null : Number.isFinite(payload.volumeRatio) ? payload.volumeRatio : null,
+      volumeRatioSource: payload.volumeRatioSource || "unavailable",
+      innerVol: Number.isFinite(payload.innerVol) ? payload.innerVol : null,
+      outerVol: Number.isFinite(payload.outerVol) ? payload.outerVol : null,
+      tradeSideVolumeSource: payload.tradeSideVolumeSource || "unavailable",
+      indicatorsQuoteTime: payload.indicatorsQuoteTime || "",
+      quoteTime: payload.quoteTime || "",
       klines,
       sourceInfo: payload.sourceInfo || "Nasdaq local proxy",
     };
@@ -3721,11 +3728,13 @@ function Chart({
   chanData,
   chanOptions,
 }) {
+  const priceClipId = useId();
   const [viewportWidth, setViewportWidth] = useState(expanded ? 1600 : 1100);
   // 1440px 左右的三栏布局里，中间栏通常只有 640~680px。旧的 720px 下限会让
   // 图表即使已经自适应容器，仍多出一小段横向滚动；640px 仍足够容纳价格轴与指标。
   const width = Math.max(600, Math.round(viewportWidth - 24));
   const height = Math.round(Math.max(600, Math.min(expanded ? 920 : 760, width * 0.72)));
+  const compactHeader = width < 820;
   const [hoverIndex, setHoverIndex] = useState(null);
   const [selectedIndex, setSelectedIndex] = useState(null);
   const [showMacdSignals, setShowMacdSignals] = useState(true);
@@ -3886,8 +3895,8 @@ function Chart({
 
   const chart = useMemo(() => {
     if (safeRows.length === 0) return null;
-    // top 要放下三行浮层：日期/涨跌/成交量一行、MA 图例一行、OHLC 明细一行。
-    const margin = { top: 58, right: 72, bottom: 36, left: 58 };
+    // 窄图将九转和均线分行，给顶部文字预留独立空间。
+    const margin = { top: compactHeader ? 106 : 66, right: 72, bottom: 36, left: 58 };
     const gap = 18;
     // 三个绘图区必须严格落在 SVG 的可用高度内。旧算法分别设置最小高度，
     // 在响应式窄图（高度约 600px）中总和会超过画布，导致 MACD 底部被裁切。
@@ -4025,7 +4034,7 @@ function Chart({
         .join(" ");
     };
     return { margin, mainH, gap, volH, macdH, plotW, xStep, candleW, x, y, vy, volBase, macdTop, macdBase, macdY, macdAbsMax, yMax, yMin, maxVol, ma5, ma10, ma20, ma60, ma120, bbi, volMa5, volMa10, volMaCrosses, maCrosses, macdSeries, macdCrosses, zeroAxisCrosses, gaps, klinePatterns, makePath };
-  }, [safeRows, fullSafeRows, width, height, visibleGaps]);
+  }, [safeRows, fullSafeRows, width, height, compactHeader, visibleGaps]);
 
   if (!chart || safeRows.length === 0) {
     return <div className="rounded-2xl bg-slate-100 p-12 text-center text-slate-500">暂无可绘制数据</div>;
@@ -4198,9 +4207,13 @@ function Chart({
           }}
         >
           <rect x="0" y="0" width={width} height={height} fill="var(--chart-surface)" />
-          {/* 顶部信息固定分成三行：涨跌/成交量/九转、均线、OHLC。
-              横向自适应时不能再用旧版固定居中坐标，否则窄图会互相覆盖。 */}
-          <text x={width - chart.margin.right - 6} y="55" textAnchor="end" fontSize="13" fill="var(--chart-ink-3)">
+          <defs>
+            <clipPath id={priceClipId}>
+              <rect x={chart.margin.left} y={chart.margin.top} width={chart.plotW} height={chart.mainH} />
+            </clipPath>
+          </defs>
+          {/* 顶部信息在窄图中分行；价格覆盖层不得进入文字区域。 */}
+          <text x={width - chart.margin.right - 6} y={compactHeader ? 98 : 58} textAnchor="end" fontSize="13" fill="var(--chart-ink-3)">
             {hover.date} 开 {hover.open.toFixed(2)} 高 {hover.high.toFixed(2)} 低 {hover.low.toFixed(2)} 收 {hover.close.toFixed(2)}
           </text>
           <text x={chart.margin.left} y="19" fontSize="13" fill={positive ? "var(--chart-up)" : "var(--chart-down)"}>
@@ -4211,8 +4224,8 @@ function Chart({
           </text>
           {currentTD && (
             <g>
-              <rect x={width - chart.margin.right - 150} y="6" width="140" height="18" rx="9" fill={currentTD.direction === "up" ? "rgba(213,0,0,0.08)" : "rgba(0,128,0,0.08)"} stroke={currentTD.direction === "up" ? "var(--chart-up)" : "var(--chart-down)"} />
-              <text x={width - chart.margin.right - 80} y="19" textAnchor="middle" fontSize="12" fontWeight="700" fill={currentTD.direction === "up" ? "var(--chart-up)" : "var(--chart-down)"}>
+              <rect x={width - chart.margin.right - 150} y={compactHeader ? 26 : 6} width="140" height="18" rx="9" fill={currentTD.direction === "up" ? "rgba(213,0,0,0.08)" : "rgba(0,128,0,0.08)"} stroke={currentTD.direction === "up" ? "var(--chart-up)" : "var(--chart-down)"} />
+              <text x={width - chart.margin.right - 80} y={compactHeader ? 39 : 19} textAnchor="middle" fontSize="12" fontWeight="700" fill={currentTD.direction === "up" ? "var(--chart-up)" : "var(--chart-down)"}>
                 当前九转：{currentTD.text}
               </text>
             </g>
@@ -4318,22 +4331,25 @@ function Chart({
             const label = `${name} ${Number.isFinite(val) ? val.toFixed(2) : "-"}`;
             return { m, label, advance: label.length * 7 + 14 };
           });
-          const total = items.reduce((sum, it) => sum + it.advance, 0);
-          const startX = width - chart.margin.right - total + 8;
           return items.map(({ m, label }, idx) => {
+            const rowStart = compactHeader ? Math.floor(idx / 3) * 3 : 0;
+            const rowItems = compactHeader ? items.slice(rowStart, rowStart + 3) : items;
+            const total = rowItems.reduce((sum, it) => sum + it.advance, 0);
+            const startX = width - chart.margin.right - total + 8;
+            const legendY = compactHeader ? 59 + Math.floor(idx / 3) * 20 : 39;
             const on = visibleMAs.has(m.period);
-            const x0 = startX + items.slice(0, idx).reduce((sum, it) => sum + it.advance, 0);
+            const x0 = startX + items.slice(rowStart, idx).reduce((sum, it) => sum + it.advance, 0);
             const canShadow = !!m.shadow;
             const shadowOn = canShadow && on && shadowMAs.has(m.period);
             return (
               <g key={`ma-legend-${m.period}`}>
                 {shadowOn && (
-                  <rect x={x0 - 3} y="30" width={label.length * 7 + 4} height="12" rx="2" fill={m.shadowFill ?? "rgba(96,96,96,0.16)"} />
+                  <rect x={x0 - 3} y={legendY - 9} width={label.length * 7 + 4} height="12" rx="2" fill={m.shadowFill ?? "rgba(96,96,96,0.16)"} />
                 )}
                 {canShadow && <title>点击切换：隐藏 → 显示线 → 显示线+阴影</title>}
                 <text
                   x={x0}
-                  y="39"
+                  y={legendY}
                   fontSize="12"
                   fill={m.color}
                   opacity={on ? 1 : 0.35}
@@ -4353,23 +4369,25 @@ function Chart({
           });
         })()}
 
-        {showGaps &&
-          chart.gaps.map((g, idx) => {
-            const left = chart.x(g.startIndex) + chart.candleW / 2;
-            const right = chart.x(g.endIndex) + chart.candleW / 2;
-            const y1 = chart.y(g.top);
-            const y2 = chart.y(g.bottom);
-            const rectY = Math.min(y1, y2);
-            const rectH = Math.max(2, Math.abs(y2 - y1));
-            const stroke = g.type === "up" ? "var(--chart-up)" : "var(--chart-down)";
-            const fill = g.type === "up" ? "rgba(213, 0, 0, 0.10)" : "rgba(0, 128, 0, 0.10)";
-            return (
-              <g key={`gap-${idx}`}>
-                <rect x={left} y={rectY} width={Math.max(2, right - left)} height={rectH} fill={fill} stroke={stroke} strokeWidth="1" strokeDasharray={g.filled ? "5 3" : "none"} />
-                <text x={left + 4} y={rectY - 3} fontSize="10" fill={stroke}>{g.type === "up" ? "上缺口" : "下缺口"}</text>
+        <g clipPath={`url(#${priceClipId})`} data-chart-layer="gaps">
+          {showGaps &&
+            chart.gaps.map((g, idx) => {
+              const left = chart.x(g.startIndex) + chart.candleW / 2;
+              const right = chart.x(g.endIndex) + chart.candleW / 2;
+              const y1 = chart.y(g.top);
+              const y2 = chart.y(g.bottom);
+              const rectY = Math.min(y1, y2);
+              const rectH = Math.max(2, Math.abs(y2 - y1));
+              const stroke = g.type === "up" ? "var(--chart-up)" : "var(--chart-down)";
+              const fill = g.type === "up" ? "rgba(213, 0, 0, 0.10)" : "rgba(0, 128, 0, 0.10)";
+              return (
+                <g key={`gap-${idx}`}>
+                  <rect x={left} y={rectY} width={Math.max(2, right - left)} height={rectH} fill={fill} stroke={stroke} strokeWidth="1" strokeDasharray={g.filled ? "5 3" : "none"} />
+                  <text x={left + 4} y={rectY - 3} fontSize="10" fill={stroke}>{g.type === "up" ? "上缺口" : "下缺口"}</text>
               </g>
             );
           })}
+        </g>
 
         {safeRows.map((d, i) => {
           const up = d.close >= d.open;
@@ -6799,13 +6817,13 @@ function writeTodayMarketCache(body) {
   }
 }
 
-function fetchTodayMarket({ force = false } = {}) {
-  if (!force) {
+function fetchTodayMarket({ force = false, refresh = false } = {}) {
+  if (!force && !refresh) {
     const hit = readTodayMarketCache();
     if (hit) return Promise.resolve(hit);
-    // 预取还在路上就复用它，避免用户手快切过去时又打一次 20s 的接口。
-    if (todayMarketInflight) return todayMarketInflight;
   }
+  // Polling bypasses the client cache but still shares an in-flight request.
+  if (!force && todayMarketInflight) return todayMarketInflight;
   const req = apiFetch(`/api/today-market${force ? "?retry=1" : ""}`)
     .then(async (res) => {
       const body = await res.json().catch(() => null);
@@ -6838,26 +6856,36 @@ function TodayMarketPanel() {
 
   useEffect(() => {
     let cancelled = false;
+    let timer;
+    let polls = 0;
     const force = reloadKey > 0; // 只有点「刷新」才绕过缓存
     // 缓存命中的情况 useState 的初始值已经处理好了，而这个分支只可能在挂载时走到
     // （点「刷新」走的是 force 路径），所以直接返回，不必再 setState 触发一轮多余渲染。
     if (!force && readTodayMarketCache()) return undefined;
-    (async () => {
+    async function load() {
       await Promise.resolve();
       if (cancelled) return;
       setLoading(true);
       setError("");
       try {
-        const body = await fetchTodayMarket({ force });
-        if (!cancelled) setPayload(body);
+        const body = await fetchTodayMarket({ force: force && polls === 0, refresh: polls > 0 });
+        if (!cancelled) {
+          setPayload(body);
+          if (body.stale && body.refreshing && polls < 10) {
+            polls += 1;
+            timer = setTimeout(load, 5000);
+          }
+        }
       } catch (e) {
         if (!cancelled) setError(e?.message || "加载失败");
       } finally {
         if (!cancelled) setLoading(false);
       }
-    })();
+    }
+    load();
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [reloadKey]);
 
@@ -7237,6 +7265,7 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
     let cancelled = false;
     let timer;
     let firstRequest = true;
+    let latestPolls = 0;
     const controller = new AbortController();
     function load() {
     const retry = firstRequest ? "&retry=1" : "";
@@ -7265,6 +7294,12 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
         setPayload(body);
         setError("");
         setLoading(false);
+        // The first response can be immediate last-good while the server checks
+        // an alternate source. Pick up that result without requiring a click.
+        if (!historical && body.stale && body.refreshing && latestPolls < 10) {
+          latestPolls += 1;
+          timer = setTimeout(load, 5000);
+        }
         if (!historical && !body.stale && body.industries?.length) prefetchTodayMarket();
       })
       .catch((e) => {
@@ -9079,7 +9114,19 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
   const displayedPct = market === "hk" && Number.isFinite(meta.quotePct) ? meta.quotePct : latest?.pct;
   const prediction = useMemo(() => buildTrendPrediction(rawRows), [rawRows]);
   const rsiInfo = useMemo(() => calcRSIState(rawRows), [rawRows]);
-  const vwapInfo = useMemo(() => calcVWAPState(rawRows), [rawRows]);
+  const vwapInfo = useMemo(() => {
+    if (market !== "ashare") {
+      const recent = rawRows.slice(-20);
+      // Without complete turnover data, typical-price weighting is an
+      // approximation. Do not show that as VWAP in HK/US indicator cards.
+      if (recent.length < 20 || recent.some(row => {
+        if (!(row.amount > 0 && row.volume > 0)) return true;
+        const price = row.amount / row.volume;
+        return !Number.isFinite(price) || price < row.low || price > row.high;
+      })) return { ready: false, state: "neutral" };
+    }
+    return calcVWAPState(rawRows);
+  }, [rawRows, market]);
 
   // 这些 tab 是独立页面，没有个股的代码搜索/周期/复权等控件，也不触发自动取数。
   const isStandaloneMarket = market === "agent" || market === "factor-research" || market === "market-trend";
@@ -9611,7 +9658,10 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
         floatMarketCap: result.floatMarketCap || null,
         peRatio: Number.isFinite(result.peRatio) ? result.peRatio : null,
         turnoverRate: Number.isFinite(result.turnoverRate) ? result.turnoverRate : null,
-        volumeRatio: Number.isFinite(result.volumeRatio) ? result.volumeRatio : null,
+        volumeRatio: result.volumeRatioSource === "calculated" ? null : Number.isFinite(result.volumeRatio) ? result.volumeRatio : null,
+        volumeRatioSource: result.volumeRatioSource || "",
+        tradeSideVolumeSource: result.tradeSideVolumeSource || "",
+        indicatorsQuoteTime: result.indicatorsQuoteTime || "",
         outerVol: Number.isFinite(result.outerVol) ? result.outerVol : null,
         innerVol: Number.isFinite(result.innerVol) ? result.innerVol : null,
         quoteTime: result.quoteTime || "",
@@ -10196,25 +10246,33 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                     <div className="flex justify-between">
                       <span className="inline-flex items-center">
                         量比
-                        <InfoTip text={"量比 = 当日每分钟均量 ÷ 过去5日每分钟均量，衡量成交活跃度。\n\n<0.8  缩量\n0.8～1.5  正常\n1.5～2.5  温和放量，配合股价缓升较健康\n2.5～5  明显放量，突破支撑/阻力时有效性更高\n5～10  剧烈放量，低位突破后空间大、高位则警惕见顶\n>10  极端放量，涨势中多预示见顶、可考虑反向\n\n涨停时量比偏小（<1）次日续涨概率高。"} />
+                        <InfoTip text={(market === "ashare" ? "" : "港美股量比直接取腾讯行情字段，不使用本地估算。港股与美股字段位置不同，已通过股票样本交叉核对；接口没有公开字段文档。数据时间见下方腾讯快照时间，缺失时不填零。\n\n") + "量比 = 当日每分钟均量 ÷ 过去5日每分钟均量，衡量成交活跃度。\n\n<0.8  缩量\n0.8～1.5  正常\n1.5～2.5  温和放量，配合股价缓升较健康\n2.5～5  明显放量，突破支撑/阻力时有效性更高\n5～10  剧烈放量，低位突破后空间大、高位则警惕见顶\n>10  极端放量，涨势中多预示见顶、可考虑反向\n\n涨停时量比偏小（<1）次日续涨概率高。"} />
                       </span>
-                      <span>{Number.isFinite(meta.volumeRatio) ? meta.volumeRatio.toFixed(2) : "-"}</span>
+                      <span className="inline-flex items-baseline gap-1">
+                        {Number.isFinite(meta.volumeRatio) ? meta.volumeRatio.toFixed(2) : market === "ashare" ? "-" : "源未提供"}
+                      </span>
                     </div>
                     <div className="flex justify-between">
                       <span className="inline-flex items-center">
                         内盘
                         <span className="ml-1 font-semibold text-green-700">S</span>
-                        <InfoTip text={"内盘 = 以买入价（买一及以下）成交的量，多为主动卖出（S）；外盘 = 以卖出价（卖一及以上）成交的量，多为主动买入（B）。\n\n外盘 > 内盘  买盘较主动，偏多\n内盘 > 外盘  卖盘较主动，偏空\n\n单位：手（1 手 = 100 股），为当日累计，需结合价格、量比综合判断，单看强弱意义有限。"} />
+                        <InfoTip text={market !== "ashare" ? "当前腾讯港美股接口的内外盘字段没有有效数据，暂不展示。不会用占位零或本地估算补齐；港美股成交量以股计。" : "内盘 = 以买入价（买一及以下）成交的量，多为主动卖出（S）；外盘 = 以卖出价（卖一及以上）成交的量，多为主动买入（B）。\n\n外盘 > 内盘  买盘较主动，偏多\n内盘 > 外盘  卖盘较主动，偏空\n\n单位：手（1 手 = 100 股），为当日累计，需结合价格、量比综合判断，单看强弱意义有限。"} />
                       </span>
-                      <span className="text-green-700">{formatNumber(meta.innerVol)}</span>
+                      <span className="text-green-700">{Number.isFinite(meta.innerVol) ? formatNumber(meta.innerVol) : market === "ashare" ? "-" : <span className="text-xs text-slate-400">源未提供</span>}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="inline-flex items-center">
                         外盘
                         <span className="ml-1 font-semibold text-red-600">B</span>
                       </span>
-                      <span className="text-red-600">{formatNumber(meta.outerVol)}</span>
+                      <span className="text-red-600">{Number.isFinite(meta.outerVol) ? formatNumber(meta.outerVol) : market === "ashare" ? "-" : <span className="text-xs text-slate-400">源未提供</span>}</span>
                     </div>
+                    {market !== "ashare" && meta.volumeRatioSource === "tencent" ? (
+                      <div className="col-span-2 text-xs text-slate-400">
+                        量比：腾讯 · {meta.indicatorsQuoteTime || meta.quoteTime}
+                        {market === "hk" ? " 香港时间" : " 美东时间"}
+                      </div>
+                    ) : null}
                     <div className="col-span-2 flex justify-between">
                       <span className="inline-flex items-center">
                         RSI14
@@ -10241,7 +10299,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                         <InfoTip text={"VWAP = Σ(单日均价 × 当日成交量) ÷ Σ成交量，即近 20 个交易日成交量加权平均价，近似这段时间买入者的平均成本。\n\n股价 > VWAP  多数持仓浮盈，回踩 VWAP 常成支撑\n股价 < VWAP  多数持仓套牢，反弹到 VWAP 常遇解套抛压\n偏离 ±10% 以上  乖离偏大，有向均价回归的需求\n\n右侧百分比为收盘价相对 VWAP 的溢价（+）或折价（−）。日线数据没有分笔明细，单日均价优先用 成交额 ÷ 成交量；数据源未提供成交额时用 (最高+最低+收盘)/3 近似，与券商分笔口径会有小幅差异。"} />
                       </span>
                       <span className="inline-flex items-baseline gap-1">
-                        <span>{vwapInfo.ready ? latestValid(vwapInfo.value) : "-"}</span>
+                        <span>{vwapInfo.ready ? latestValid(vwapInfo.value) : market === "ashare" ? "-" : "数据不足"}</span>
                         {vwapInfo.ready && Number.isFinite(vwapInfo.premium) ? (
                           <span className={`text-xs ${vwapInfo.premium >= 0 ? "text-red-600" : "text-green-700"}`}>
                             {vwapInfo.premium >= 0 ? "+" : ""}

@@ -66,7 +66,7 @@ for (const kind of kinds) {
     const pending = new Promise((resolve) => { release = resolve; });
     const handler = kind.create({getRedis: async () => redis, now: () => clock.ms,
       load: async () => { calls += 1; await pending; throw new Error("network outage"); },
-      loadFallback: async () => { fallbackCalls += 1; return kind.payload(clock.ms); }});
+      loadFallback: async () => { fallbackCalls += 1; throw new Error("alternate unavailable"); }});
     const response = await request(handler);
     assert.equal(response.statusCode, 200);
     assert.equal(response.body.stale, true);
@@ -79,7 +79,7 @@ for (const kind of kinds) {
     assert.equal(retry.statusCode, 200);
     assert.equal(retry.body.staleReason, "upstream-error");
     assert.equal(retry.body.marketClosed, undefined);
-    assert.equal(fallbackCalls, 0);
+    assert.equal(fallbackCalls, 1);
     assert.equal(redis.writes.length, 1);
   });
 

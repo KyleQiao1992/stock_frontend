@@ -1,3 +1,5 @@
+import { parseTencentQuoteIndicators } from "./tencentQuoteIndicators.js";
+
 function parseNasdaqNumber(value) {
   const cleaned = String(value || "")
     .replaceAll("$", "")
@@ -326,7 +328,7 @@ async function loadUsKlineFromNasdaq({ normalized, period, boundedLimit }) {
   };
 }
 
-// Tencent's qt.gtimg.cn quote line uses the SAME field layout for US stocks as A-shares:
+// Tencent US valuation fields share these positions with A-shares; other fields differ.
 // [38]=turnover rate %, [39]=PE (TTM), [44]=float market cap (亿), [45]=total market cap (亿).
 // Market-cap fields are in 亿 (1e8) USD; multiply to get absolute dollars.
 // NOTE: this endpoint resolves the bare `usSYMBOL` form (no .OQ/.N suffix) and returns GBK text.
@@ -353,6 +355,8 @@ async function loadUsQuoteMeta(normalized) {
   const floatCapYi = Number(fields[44]);
   const totalCapYi = Number(fields[45]);
   return {
+    ...parseTencentQuoteIndicators(fields, "us"),
+    quoteTime: fields[30] || "",
     marketCap: Number.isFinite(totalCapYi) ? totalCapYi * 1e8 : null,
     floatMarketCap: Number.isFinite(floatCapYi) ? floatCapYi * 1e8 : null,
     peRatio: Number.isFinite(peRatio) ? peRatio : null,
@@ -397,6 +401,13 @@ async function loadUsKline({ symbol, period = "101", limit = 600, adjust = "1" }
 
   return {
     ...base,
+    volumeRatio: meta?.volumeRatio ?? null,
+    volumeRatioSource: meta?.volumeRatioSource || "unavailable",
+    innerVol: null,
+    outerVol: null,
+    tradeSideVolumeSource: "unavailable",
+    indicatorsQuoteTime: meta?.indicatorsQuoteTime || "",
+    quoteTime: meta?.quoteTime || "",
     marketCap: meta?.marketCap ?? null,
     floatMarketCap: meta?.floatMarketCap ?? null,
     peRatio: meta?.peRatio ?? null,

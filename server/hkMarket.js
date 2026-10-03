@@ -1,3 +1,5 @@
+import { parseTencentQuoteIndicators } from "./tencentQuoteIndicators.js";
+
 const TENCENT_HEADERS = {
   Accept: "application/json,text/plain,*/*",
   "User-Agent":
@@ -63,6 +65,7 @@ export function parseTencentHkQuote(qt, fallbackCode = "") {
   const totalMarketCapYi = finite(qt[45]);
   const floatMarketCapYi = finite(qt[44]);
   return {
+    ...parseTencentQuoteIndicators(qt, "hk"),
     code: normalizeHkCode(qt[2]) || fallbackCode,
     name: String(qt[1] || fallbackCode),
     latestPrice: finite(qt[3]),

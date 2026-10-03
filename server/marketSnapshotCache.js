@@ -10,6 +10,7 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
   let inflight = null;
   let lastRefreshReason = null;
   let lastFailureAt = -Infinity;
+  let activeProvider = null;
   const FAILURE_COOLDOWN_MS = 30000;
   const fallbackKey = `${key.replace(/:v\d+$/, "")}:v2:snapshot`;
 
@@ -38,6 +39,40 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
   const age = (candidate) => now() - candidate.cachedAt;
   const sameShanghaiDate = (candidate) => new Date(candidate.at + 8 * 3600000).toISOString().slice(0, 10)
     === new Date(now() + 8 * 3600000).toISOString().slice(0, 10);
+
+  function quotePosition(candidate) {
+    const payload = candidate?.payload;
+    const ms = Date.parse(payload?.quoteTime);
+    return {
+      day: Number.isFinite(ms) ? new Date(ms + 8 * 3600000).toISOString().slice(0, 10) : payload?.dataDate || payload?.date || "",
+      ms: Number.isFinite(ms) ? ms : null,
+    };
+  }
+
+  function compareQuotes(left, right) {
+    const a = quotePosition(left);
+    const b = quotePosition(right);
+    if (a.day !== b.day) return a.day > b.day ? 1 : -1;
+    // A date-only dashboard cannot be ranked more precisely than its session.
+    if (a.ms !== null && b.ms !== null) return Math.sign(a.ms - b.ms);
+    return 0;
+  }
+
+  function bestAvailable(primary, backup) {
+    if (!primary) return backup;
+    if (!backup) return primary;
+    const order = compareQuotes(backup, primary);
+    if (order !== 0) return order > 0 ? backup : primary;
+    if (activeProvider) return activeProvider === "fallback" ? backup : primary;
+    // After restart, a recently fetched alternate may have superseded last-good;
+    // a fresh complete primary still wins ties and preserves its classification.
+    return sameShanghaiDate(backup) && age(backup) < freshMs
+      && (!sameShanghaiDate(primary) || age(primary) >= freshMs) ? backup : primary;
+  }
+
+  async function available(redis) {
+    return bestAvailable(await readLastGood(redis), await readFallback(redis));
+  }
 
   async function read(redis, cacheKey) {
     if (!redis) return null;
@@ -127,7 +162,7 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
     if (inflight) return inflight;
     inflight = (async () => {
       if (!force && now() - lastFailureAt < FAILURE_COOLDOWN_MS) {
-        const previous = await readLastGood(redis) || await readFallback(redis);
+        const previous = await available(redis);
         if (previous) return stale(previous, lastRefreshReason || "upstream-error");
         if (lastRefreshReason === "market-closed") return emptyClosed(now());
         throw new Error("行情数据源暂不可用，请稍后重试。");
@@ -141,10 +176,17 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
           if (!candidate || !full(candidate)) throw new Error("主行情快照的结构或时间异常");
           fresh = candidate;
           lastGood = candidate;
+          const previousBackup = await readFallback(redis);
+          const keepBackup = previousBackup && compareQuotes(previousBackup, candidate) > 0;
+          activeProvider = keepBackup ? "fallback" : "primary";
           lastRefreshReason = null;
           lastFailureAt = -Infinity;
-          if (onFull) { try { await onFull(result, redis); } catch { /* Full quote data remains valid. */ } }
+          if (onFull && !keepBackup) { try { await onFull(result, redis); } catch { /* Full quote data remains valid. */ } }
           await persist(redis, candidate, true);
+          if (keepBackup) {
+            previousBackup.payload = {...previousBackup.payload, notice: "主数据源已恢复，但备用快照的行情时间较新，当前继续展示备用行情。"};
+            return previousBackup.payload;
+          }
           return candidate.payload;
         }
       } catch (error) {
@@ -152,59 +194,51 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
         // Raw upstream diagnostics must not appear in public responses.
       }
       lastRefreshReason = reason;
-      lastFailureAt = now();
       const previous = await readLastGood(redis);
-      if (previous) return stale(previous, reason);
+      // A network failure must still probe the alternate even when last-good
+      // exists. An explicit non-live response can retain the same-source close.
+      if (reason === "market-closed" && previous) return stale(await available(redis), reason);
+      const cachedBackup = await readFallback(redis);
+      if (!force && cachedBackup && sameShanghaiDate(cachedBackup) && age(cachedBackup) < freshMs
+        && (!previous || compareQuotes(cachedBackup, previous) >= 0)) {
+        activeProvider = "fallback";
+        return cachedBackup.payload;
+      }
       if (loadFallback) {
         try {
           const result = unpack(await loadFallback());
           const candidate = entry({...result.payload, partial: true}, now());
           if (!candidate) throw new Error("备用行情快照的结构或时间异常");
+          const best = bestAvailable(previous, cachedBackup);
+          if (best && compareQuotes(candidate, best) < 0) throw new Error("备用行情时间早于已有快照");
           fallback = candidate;
+          activeProvider = "fallback";
           if (onFull) { try { await onFull({...result, payload: candidate.payload}, redis); } catch { /* Aggregate fallback remains valid. */ } }
           await persist(redis, candidate, false);
           return candidate.payload;
         } catch (error) { logFailure("fallback", error); }
       }
-      const previousFallback = await readFallback(redis);
-      if (previousFallback) return stale(previousFallback, reason);
+      const best = await available(redis);
+      if (best) return stale(best, reason);
       if (reason === "market-closed") return emptyClosed(now());
       throw new Error("行情数据源暂不可用，且没有可用的历史快照，请稍后重试。");
-    })().finally(() => { inflight = null; });
+    })().finally(() => {
+      if (lastRefreshReason) lastFailureAt = now();
+      inflight = null;
+    });
     return inflight;
   }
 
   return {
     async get(redis, {retry = false} = {}) {
       const candidate = await readFresh(redis);
-      if (!retry && candidate && sameShanghaiDate(candidate)) {
-        if (age(candidate) < freshMs) return candidate.payload;
-        if (age(candidate) < staleMs) {
-          refresh(redis).catch(() => {});
-          return stale(candidate, "revalidating");
-        }
-      }
       if (!retry) {
-        const priorFull = await readLastGood(redis);
-        if (priorFull) {
+        const prior = await available(redis);
+        if (prior) {
+          if (sameShanghaiDate(prior) && age(prior) < freshMs) return prior.payload;
           const reason = lastRefreshReason || "cache-expired";
-          refresh(redis).catch(() => {});
-          return stale(priorFull, reason);
-        }
-      }
-      if (!candidate && !retry) {
-        const priorFull = await readLastGood(redis);
-        if (!priorFull) {
-          const priorFallback = await readFallback(redis);
-          if (priorFallback && sameShanghaiDate(priorFallback) && age(priorFallback) < freshMs) return priorFallback.payload;
-        }
-      }
-      if (!retry) {
-        const previous = await readFallback(redis);
-        if (previous) {
-          const reason = lastRefreshReason || "cache-expired";
-          refresh(redis).catch(() => {});
-          return stale(previous, reason);
+          if (inflight || now() - lastFailureAt >= FAILURE_COOLDOWN_MS) refresh(redis).catch(() => {});
+          return {...stale(prior, prior === candidate && age(prior) < staleMs && !lastRefreshReason ? "revalidating" : reason), refreshing: Boolean(inflight)};
         }
       }
       return refresh(redis, retry);
