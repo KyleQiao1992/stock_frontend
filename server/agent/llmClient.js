@@ -70,7 +70,11 @@ function toAnthropicMessages(history) {
       }
     }
   }
-  return out.map(({ _toolResults, ...m }) => m);
+  return out.map((message) => {
+    const clean = { ...message };
+    delete clean._toolResults;
+    return clean;
+  });
 }
 
 async function chatAnthropic(cfg, { system, history, tools }) {
@@ -155,7 +159,7 @@ async function chatOpenAi(cfg, { system, history, tools }) {
   const data = await res.json();
   const msg = data.choices?.[0]?.message || {};
   const toolCalls = (msg.tool_calls || []).map((tc) => {
-    let args = {};
+    let args;
     try {
       args = JSON.parse(tc.function?.arguments || "{}");
     } catch {

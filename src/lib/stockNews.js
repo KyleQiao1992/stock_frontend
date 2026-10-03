@@ -3,7 +3,11 @@ export const NEWS_CATEGORIES = [
   { key: 'notice', label: '公告', type: 0 },
   { key: 'report', label: '研报', type: 1 },
 ];
-export function newsSymbol(code) {
+export function newsSymbol(code, market = 'ashare') {
+  if (market === 'hk') {
+    if (!/^\d{5}$/.test(code)) throw new Error('请先选择一只港股');
+    return `hk${code}`;
+  }
   if (!/^\d{6}$/.test(code)) throw new Error('请先选择一只 A 股');
   return `${code.startsWith('6') ? 'sh' : /^[489]/.test(code) ? 'bj' : 'sz'}${code}`;
 }
@@ -24,8 +28,8 @@ export function parseNews(payload) {
 export function createNewsLoader(request = fetch) {
   const cache = new Map();
   const pending = new Map();
-  return async function load(code, category, refresh = false) {
-    const symbol = newsSymbol(code);
+  return async function load(code, category, refresh = false, market = 'ashare') {
+    const symbol = newsSymbol(code, market);
     const cat = NEWS_CATEGORIES.find((c) => c.key === category);
     if (!cat) throw new Error('资讯分类无效');
     const key = `${symbol}:${category}`;

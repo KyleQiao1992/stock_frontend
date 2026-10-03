@@ -9,6 +9,7 @@ const LIST_PATH = path.resolve(__dirname, "./data/ashare-list.json");
 
 // 后台从新浪刷新全量列表的间隔。静态快照保证启动即可用，刷新只为补新股/改名。
 const REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
+const INITIAL_REFRESH_DELAY_MS = 30 * 1000;
 const SINA_PAGE_SIZE = 100;
 const SINA_MAX_PAGES = 80; // 5500 余只，留足余量
 
@@ -112,8 +113,10 @@ let initPromise = null;
 export function initAshareCodeIndex() {
   if (!initPromise) {
     initPromise = loadStaticSnapshot().then(() => {
-      // 启动后异步刷新一次，再定时刷新。
-      refreshFromSina();
+      // 静态快照已经能立即搜索；远端全量刷新延后执行，避免启动阶段几十页请求
+      // 与用户首屏的行情、财务和趋势请求争抢网络资源。
+      const initialRefresh = setTimeout(refreshFromSina, INITIAL_REFRESH_DELAY_MS);
+      initialRefresh.unref?.();
       setInterval(refreshFromSina, REFRESH_INTERVAL_MS).unref?.();
     });
   }

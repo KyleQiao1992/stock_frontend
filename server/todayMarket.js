@@ -1,5 +1,6 @@
 import { getRedisClient } from "./redisClient.js";
 import { EM_UT, EM_FETCH_HEADERS, mapWithConcurrency } from "./boardTrend.js";
+import { createMarketSnapshotCache } from "./marketSnapshotCache.js";
 
 // 涨停/跌停/炸板池接口用的是另一套 ut 令牌（push2ex），和行情 clist 的 EM_UT 不同。
 const ZT_UT = "7eea3edcaed734bea9cbfc24409ed989";
@@ -37,91 +38,65 @@ const PUSH2_HOSTS = [
 ];
 
 function yyyymmdd(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
   return `${y}${m}${day}`;
 }
 
 // 拉全 A 股快照（clist 分页）。每只返回涨跌幅/开/收/总市值/所属市场。多 host 兜底。
-async function fetchAllStocksSnapshot() {
+export async function fetchAllStocksSnapshot({request = fetch, now = Date.now} = {}) {
   const PAGE = 100;
-  function pageUrl(host, pn) {
-    return (
-      `${host}/api/qt/clist/get?pn=${pn}&pz=${PAGE}&po=1&np=1&fltt=2&invt=2&ut=${EM_UT}` +
-      `&fid=f3&fs=${ALL_A_FS}&fields=f12,f13,f14,f2,f3,f17,f20`
-    );
+  const deadline = now() + 15000;
+  const signal = () => AbortSignal.timeout(Math.max(1, Math.min(12000, deadline - now())));
+  const numeric = (value) => value == null || value === "" || value === "-" ? null : Number.isFinite(Number(value)) ? Number(value) : null;
+  const rawRows = (payload) => Array.isArray(payload?.data?.diff) ? payload.data.diff
+    : payload?.data?.diff && typeof payload.data.diff === "object" ? Object.values(payload.data.diff) : [];
+  const pageUrl = (host, pn) => `${host}/api/qt/clist/get?pn=${pn}&pz=${PAGE}&po=1&np=1&fltt=2&invt=2&ut=${EM_UT}`
+    + `&fid=f3&fs=${ALL_A_FS}&fields=f12,f13,f14,f2,f3,f17,f20,f124`;
+  function parse(rows) {
+    return rows.map((row) => ({code: String(row.f12 || ""), market: numeric(row.f13), name: String(row.f14 || "").trim(),
+      close: numeric(row.f2), pct: numeric(row.f3), open: numeric(row.f17), mktcap: numeric(row.f20), quoteAt: numeric(row.f124)}))
+      .filter((stock) => stock.code && stock.name && Number.isFinite(stock.pct));
   }
-  // 未经过滤的原始条目。用来区分两种"拿不到数据"：接口真的没返回，
-  // 还是返回了 5899 条但当日行情字段全是 "-"（非交易时段东财会整体重置）。
-  function rawRows(payload) {
-    const list = payload?.data?.diff;
-    return Array.isArray(list) ? list : list && typeof list === "object" ? Object.values(list) : [];
-  }
-  function parse(payload) {
-    const arr = rawRows(payload);
-    return arr
-      .map((d) => ({
-        code: String(d.f12 || ""),
-        market: Number(d.f13), // 0=深 1=沪
-        name: String(d.f14 || "").trim(),
-        close: Number(d.f2),
-        pct: Number(d.f3),
-        open: Number(d.f17),
-        mktcap: Number(d.f20),
-      }))
-      .filter((s) => s.code && Number.isFinite(s.pct));
-  }
-
-  const errors = [];
+  let lastCause;
   for (const host of PUSH2_HOSTS) {
+    if (now() >= deadline) break;
     try {
-      const first = await fetch(pageUrl(host, 1), { headers: EM_FETCH_HEADERS, signal: AbortSignal.timeout(12000) });
-      if (!first.ok) {
-        errors.push(`${host}: HTTP ${first.status}`);
-        continue;
-      }
-      const firstPayload = await first.json();
-      const total = Number(firstPayload?.data?.total) || 0;
-      let rows = parse(firstPayload);
-      if (!rows.length) {
-        // 条目在、但一条实时行情都没有 ⇒ 非交易时段。这是东财全网统一状态，
-        // 换 host 也一样，直接上报给调用方去回放上一交易日的快照。
-        const raw = rawRows(firstPayload);
-        if (raw.length && !raw.some((d) => Number.isFinite(Number(d.f3)))) {
-          return { stocks: [], live: false };
-        }
-        errors.push(`${host}: empty(total=${total})`);
-        continue;
-      }
+      const response = await request(pageUrl(host, 1), {headers: EM_FETCH_HEADERS, signal: signal()});
+      if (!response.ok) continue;
+      const payload = await response.json();
+      const total = Number(payload?.data?.total);
+      let raw = rawRows(payload);
+      if (!Number.isInteger(total) || total <= 0 || !raw.length) continue;
+      if (!raw.some((row) => Number.isFinite(numeric(row.f3)))) return {stocks: [], live: false};
       const pages = Math.min(80, Math.ceil(total / PAGE));
-      if (pages > 1) {
-        const rest = await mapWithConcurrency(
-          Array.from({ length: pages - 1 }, (_, i) => i + 2),
-          12,
-          async (pn) => {
-            try {
-              const r = await fetch(pageUrl(host, pn), { headers: EM_FETCH_HEADERS, signal: AbortSignal.timeout(12000) });
-              if (!r.ok) return [];
-              return parse(await r.json());
-            } catch {
-              return [];
-            }
-          },
-        );
-        rows = rows.concat(...rest);
-      }
+      const rest = await mapWithConcurrency(Array.from({length: pages - 1}, (_, i) => i + 2), 12, async (pn) => {
+        if (now() >= deadline) return null;
+        try {
+          const result = await request(pageUrl(host, pn), {headers: EM_FETCH_HEADERS, signal: signal()});
+          if (!result.ok) return null;
+          const rows = rawRows(await result.json());
+          return rows.length ? rows : null;
+        } catch (error) { lastCause = error; return null; }
+      });
+      if (rest.some((rows) => !rows)) continue;
+      raw = raw.concat(...rest);
+      const allCodes = new Set(raw.map((row) => String(row.f12 || "")).filter(Boolean));
+      if (allCodes.size < total) continue;
       const seen = new Set();
-      return { stocks: rows.filter((s) => (seen.has(s.code) ? false : seen.add(s.code))), live: true };
-    } catch (e) {
-      errors.push(`${host}: ${e?.message || e}`);
-    }
+      const stocks = parse(raw).filter((stock) => seen.has(stock.code) ? false : seen.add(stock.code));
+      if (!stocks.length) continue;
+      const quoteAt = stocks.reduce((max, stock) => Math.max(max, stock.quoteAt || 0), 0);
+      return {stocks, live: true, quoteTime: quoteAt > 0 ? new Date(quoteAt * 1000).toISOString() : null};
+    } catch (error) { lastCause = error; /* Try another fixed upstream within the shared budget. */ }
   }
-  throw new Error(`全A快照不可用：${errors.slice(-4).join("；")}`);
+  throw new Error("全A行情快照暂不可用或分页不完整", {cause: lastCause});
 }
 
 // 拉某个池（涨停 zt / 跌停 dt / 炸板 zb）某天的列表。date=YYYYMMDD。
-async function fetchPool(kind, date) {
+async function fetchPool(kind, date, deadline = Date.now() + 12000) {
+  if (Date.now() >= deadline) return null;
   const ep = kind === "zt" ? "getTopicZTPool" : kind === "dt" ? "getTopicDTPool" : "getTopicZBPool";
   const sort = kind === "dt" ? "fund:asc" : "fbt:asc";
   const url =
@@ -130,14 +105,16 @@ async function fetchPool(kind, date) {
   try {
     const res = await fetch(url, {
       headers: { ...EM_FETCH_HEADERS, Referer: "https://quote.eastmoney.com/" },
-      signal: AbortSignal.timeout(12000),
+      signal: AbortSignal.timeout(Math.max(1, Math.min(12000, deadline - Date.now()))),
     });
     if (!res.ok) return null;
     const payload = await res.json();
     const data = payload?.data;
-    if (!data) return null;
-    const pool = Array.isArray(data.pool) ? data.pool : [];
-    return { tc: Number(data.tc) || pool.length, pool };
+    if (!data || !Array.isArray(data.pool)) return null;
+    const pool = data.pool;
+    const count = Number(data.tc);
+    if (data.tc == null || data.tc === "" || !Number.isInteger(count) || count < 0) return null;
+    return { tc: count, pool };
   } catch {
     return null;
   }
@@ -147,11 +124,11 @@ async function fetchPool(kind, date) {
 // 不依赖 K 线接口（指数/个股 K 线在部分网络不可达），仅靠各处都通的涨停池判定交易日。
 function recentWeekdays(n) {
   const days = [];
-  const d = new Date();
+  const d = new Date(Date.now() + 8 * 3600000);
   while (days.length < n) {
-    const dow = d.getDay();
+    const dow = d.getUTCDay();
     if (dow !== 0 && dow !== 6) days.push(yyyymmdd(d));
-    d.setDate(d.getDate() - 1);
+    d.setUTCDate(d.getUTCDate() - 1);
   }
   return days.reverse(); // 升序
 }
@@ -191,7 +168,7 @@ function isOneWord(snap) {
 }
 
 // ===== 单日快照面板：涨跌统计 / 市值分档 / 强弱 / 真实热度 / 昨日涨停今日表现 =====
-function buildSnapshotPanels(stocks, ztTodayPool, dtTodayCount, zbTodayCount, prevZtPool, snapByCode) {
+export function buildSnapshotPanels(stocks, ztTodayPool, dtTodayCount, zbTodayCount, prevZtPool, snapByCode) {
   let up = 0;
   let down = 0;
   let flat = 0;
@@ -207,6 +184,7 @@ function buildSnapshotPanels(stocks, ztTodayPool, dtTodayCount, zbTodayCount, pr
 
   for (const s of stocks) {
     const v = s.pct;
+    if (!Number.isFinite(v)) continue;
     if (v > 0) up += 1;
     else if (v < 0) down += 1;
     else flat += 1;
@@ -284,10 +262,10 @@ function buildSnapshotPanels(stocks, ztTodayPool, dtTodayCount, zbTodayCount, pr
 }
 
 // 给一组日期并发拉某种池，返回 Map<date, {tc, pool}>（拉不到的 date 不入表）。
-async function fetchPoolsForDates(kind, dates, conc) {
+async function fetchPoolsForDates(kind, dates, conc, deadline) {
   const map = new Map();
   await mapWithConcurrency(dates, conc, async (date) => {
-    const r = await fetchPool(kind, date);
+    const r = await fetchPool(kind, date, deadline);
     if (r) map.set(date, r);
   });
   return map;
@@ -295,7 +273,7 @@ async function fetchPoolsForDates(kind, dates, conc) {
 
 // ===== 多日历史：连板数 / 涨停跌停家数 / 最高连板 / 炸板率 / 打板次日成功率 =====
 // 入参已是确定的交易日（升序）+ 预拉好的三池 Map。次日成功率需个股日线，best-effort。
-async function buildHistory(days, ztMap, dtMap, zbMap, deadline) {
+export async function buildHistory(days, ztMap, dtMap, zbMap, deadline) {
   const perDay = days.map((date) => {
     const ztPool = ztMap.get(date)?.pool || [];
     let lbCount = 0;
@@ -306,15 +284,15 @@ async function buildHistory(days, ztMap, dtMap, zbMap, deadline) {
       if (lbc >= 2) lbCount += 1;
     }
     const ztCount = ztMap.get(date)?.tc ?? ztPool.length;
-    const zbCount = zbMap.get(date)?.tc ?? 0;
+    const zbCount = zbMap.get(date)?.tc ?? null;
     return {
       date,
       ztCount,
-      dtCount: dtMap.get(date)?.tc ?? 0,
+      dtCount: dtMap.get(date)?.tc ?? null,
       zbCount,
       lbCount,
       maxLb,
-      zbRate: ztCount + zbCount > 0 ? zbCount / (ztCount + zbCount) : null,
+      zbRate: Number.isFinite(zbCount) && ztCount + zbCount > 0 ? zbCount / (ztCount + zbCount) : null,
       ztCodes: ztPool.map((p) => ({ code: String(p.c), market: Number(p.m) })),
     };
   });
@@ -368,21 +346,25 @@ async function computeTodayMarket() {
   const t0 = Date.now();
   const deadline = Date.now() + 45000;
 
-  // 交易日历完全靠涨停池判定（各处网络都通）：先对最近若干工作日拉涨停池，tc>0 才是交易日。
-  // 注意：push2ex 涨停池历史只保留约 15 个交易日，更早的日期会返回 tc=0，自然被过滤掉，
-  // 所以多日面板实际约 3 周窗口（要更长需自行落库累积，超出当前范围）。
-  const candidates = recentWeekdays(HISTORY_DAYS + 6);
-  const [snap, ztMap] = await Promise.all([
-    fetchAllStocksSnapshot(),
-    fetchPoolsForDates("zt", candidates, 8),
-  ]);
+  // 先确认全市场行情可用，再启动历史池批量请求；源故障时不留下无用的后台网络任务。
+  const snap = await fetchAllStocksSnapshot();
   if (!snap.live) {
     console.log("[today-market] 非交易时段：东财当日行情字段为 dash，回落到最近一次有效快照");
     return { live: false };
   }
   const stocks = snap.stocks;
+  const quoteTimestamp = Date.parse(snap.quoteTime);
+  if (!Number.isFinite(quoteTimestamp)) throw new Error("行情快照缺少可信的数据日期");
+  const quoteDate = new Date(quoteTimestamp + 8 * 3600000).toISOString().slice(0, 10).replaceAll("-", "");
 
-  const tradingDays = candidates.filter((d) => (ztMap.get(d)?.tc ?? 0) > 0); // 升序
+  // 历史交易日用涨停池判定；最新交易日由真实行情时间确定，允许该日没有涨停。
+  // 注意：push2ex 涨停池历史只保留约 15 个交易日，更早的日期会返回 tc=0，自然被过滤掉，
+  // 所以多日面板实际约 3 周窗口（要更长需自行落库累积，超出当前范围）。
+  const candidates = recentWeekdays(HISTORY_DAYS + 6);
+  const ztMap = await fetchPoolsForDates("zt", candidates, 8, deadline);
+  if (!ztMap.has(quoteDate)) throw new Error("当日涨停池未完整获取，不能计算完整盘面");
+  // A real quote date establishes a trading session even when that session has zero limit-ups.
+  const tradingDays = candidates.filter((d) => d <= quoteDate && ((ztMap.get(d)?.tc ?? 0) > 0 || d === quoteDate));
   if (!tradingDays.length) throw new Error("未取到任何交易日的涨停池数据");
   const todayDate = tradingDays[tradingDays.length - 1];
   const prevDate = tradingDays[tradingDays.length - 2] || null;
@@ -390,16 +372,17 @@ async function computeTodayMarket() {
 
   // 历史窗口内每天补拉跌停/炸板池（涨停池已在上面拉好）。
   const [dtMap, zbMap] = await Promise.all([
-    fetchPoolsForDates("dt", windowDays, 8),
-    fetchPoolsForDates("zb", windowDays, 8),
+    fetchPoolsForDates("dt", windowDays, 8, deadline),
+    fetchPoolsForDates("zb", windowDays, 8, deadline),
   ]);
 
+  if (!dtMap.has(todayDate) || !zbMap.has(todayDate)) throw new Error("当日跌停或炸板池未完整获取，不能计算完整盘面");
   const snapByCode = new Map(stocks.map((s) => [s.code, s]));
   const panels = buildSnapshotPanels(
     stocks,
     ztMap.get(todayDate),
-    dtMap.get(todayDate)?.tc ?? 0,
-    zbMap.get(todayDate)?.tc ?? 0,
+    dtMap.get(todayDate).tc,
+    zbMap.get(todayDate).tc,
     prevDate ? ztMap.get(prevDate) : null,
     snapByCode,
   );
@@ -412,133 +395,63 @@ async function computeTodayMarket() {
       `dt=${dtMap.get(todayDate)?.tc} zb=${zbMap.get(todayDate)?.tc} histDays=${history.length} totalMs=${Date.now() - t0}`,
   );
 
-  return { live: true, date, ...panels, history, updatedAt: new Date().toISOString() };
+  return { live: true, date, quoteTime: snap.quoteTime, ...panels, history, updatedAt: new Date().toISOString() };
 }
 
-// ===== 盘面快照缓存（stale-while-revalidate）=====
-// 全市场快照重算要 10~45s，纯靠 TTL 缓存的话每次过期都会有人吃满这段慢加载。
-// 这里改成「新鲜期内直接给缓存，过了新鲜期仍先给旧数据、后台静默重算」，
-// 配一层进程内内存兜底（Redis 不可用时也能快）+ 单飞锁（并发只触发一次重算）。
-const CACHE_KEY = "today-market:v1";
-const CACHE_TS_KEY = "today-market:v1:ts"; // 缓存写入时刻（ms），用于判断新鲜/陈旧。
-const FRESH_MS = 10 * 60 * 1000; // 10 分钟内直接返回缓存，不重算。
-const STALE_MS = 30 * 60 * 1000; // 10~30 分钟返回旧数据并后台刷新；超过则当作冷启动同步重算。
-const REDIS_TTL_SEC = Math.round(STALE_MS / 1000);
-
-// 最近一次拿到真实行情的快照，TTL 7 天，足够跨过周末和小长假。
-// 非交易时段展示的就是它：上一交易日的收盘盘面，并标注数据截止时间。
-const LAST_GOOD_KEY = "today-market:v1:lastgood";
-const LAST_GOOD_TTL_SEC = 7 * 24 * 60 * 60;
-
-let memEntry = null; // { body, cachedAt } —— 进程内缓存，Redis 不可用时兜底。
-let memLastGood = null; // 最近一次有效快照的进程内副本。
-let refreshing = null; // 单飞：进行中的重算 Promise，避免并发重复打外部接口。
-
-async function readLastGood(redis) {
-  if (memLastGood) return memLastGood;
-  if (!redis) return null;
-  try {
-    const v = await redis.get(LAST_GOOD_KEY);
-    if (v) memLastGood = v;
-    return v;
-  } catch {
-    return null;
-  }
+function validTodayMarket(payload) {
+  const nonnegativeInt = (value) => Number.isInteger(value) && value >= 0;
+  const countOrUnknown = (value) => value == null || nonnegativeInt(value);
+  const ratioOrUnknown = (value) => value == null || (Number.isFinite(value) && value >= 0 && value <= 1);
+  const validDate = (value) => {
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const at = Date.parse(`${value}T00:00:00Z`);
+    return Number.isFinite(at) && new Date(at).toISOString().slice(0, 10) === value;
+  };
+  const counts = payload?.breadth;
+  if (!validDate(payload?.date)) return false;
+  if (payload?.live !== true || !counts || !Number.isInteger(counts.total) || counts.total <= 0
+    || ![counts.up, counts.down, counts.flat].every((count) => Number.isInteger(count) && count >= 0)
+    || counts.up + counts.down + counts.flat !== counts.total
+    || !payload.yangYin || ![payload.yangYin.yang, payload.yangYin.yin].every((count) => Number.isInteger(count) && count >= 0)
+    || payload.yangYin.yang + payload.yangYin.yin > counts.total
+    || !Array.isArray(payload.hist) || !payload.hist.every((row) => row && typeof row.label === "string" && Number.isInteger(row.count) && row.count >= 0)
+    || !Array.isArray(payload.capTiers) || !payload.capTiers.every((row) => row && typeof row.key === "string" && typeof row.label === "string"
+      && Number.isInteger(row.n) && row.n >= 0 && (row.avg == null || Number.isFinite(row.avg)))
+    || !Array.isArray(payload.history) || !payload.history.every((row) => row && validDate(row.date)
+      && [row.ztCount, row.lbCount, row.maxLb].every(nonnegativeInt)
+      && [row.dtCount, row.zbCount].every(countOrUnknown)
+      && [row.zbRate, row.nextDaySuccess].every(ratioOrUnknown))) return false;
+  if (payload.strong != null && (![payload.strong.ztCount, payload.strong.dtCount, payload.strong.zbCount].every(nonnegativeInt)
+    || ![payload.strong.fbSuccess, payload.strong.zbRate].every(ratioOrUnknown))) return false;
+  if (payload.consecutive != null && ![payload.consecutive.lbCount, payload.consecutive.nonOneWordLb, payload.consecutive.maxLb].every(nonnegativeInt)) return false;
+  if (payload.heat != null && ![payload.heat.value, payload.heat.breadth, payload.heat.ztStrength].every((value) => Number.isFinite(value) && value >= 0 && value <= 100)) return false;
+  if (payload.premium != null && (!nonnegativeInt(payload.premium.count) || !Number.isFinite(payload.premium.avg)
+    || !ratioOrUnknown(payload.premium.redRate) || !Array.isArray(payload.premium.dist)
+    || !payload.premium.dist.every((row) => row && typeof row.key === "string" && typeof row.label === "string" && nonnegativeInt(row.count)))) return false;
+  if (payload.partial || payload.mode === "snapshot") return true;
+  return Boolean(payload.strong && payload.consecutive && payload.heat && payload.yangYin);
 }
 
-// 读缓存：先看进程内，再回落 Redis（顺带把 Redis 命中回填到内存，缩短后续判断）。
-async function readCache(redis) {
-  if (memEntry) return memEntry;
-  if (!redis) return null;
-  try {
-    const [body, ts] = await Promise.all([redis.get(CACHE_KEY), redis.get(CACHE_TS_KEY)]);
-    if (!body) return null;
-    memEntry = { body, cachedAt: Number(ts) || 0 };
-    return memEntry;
-  } catch {
-    return null;
-  }
-}
-
-// 重算并写两级缓存。单飞：已有重算在跑就复用同一个 Promise。
-function refreshCache(redis) {
-  if (refreshing) return refreshing;
-  refreshing = (async () => {
-    const payload = await computeTodayMarket();
-
-    // 非交易时段：别用没有行情的空结果覆盖缓存，回放最近一次有效快照。
-    if (!payload.live) {
-      const last = await readLastGood(redis);
-      if (last) {
-        const body = JSON.stringify({ ...JSON.parse(last), stale: true, marketClosed: true });
-        memEntry = { body, cachedAt: Date.now() };
-        return body;
-      }
-      const body = JSON.stringify({
-        live: false,
-        marketClosed: true,
-        history: [],
-        updatedAt: new Date().toISOString(),
-        notice: "当前非交易时段，东方财富暂未推送行情数据。开盘（09:30）后自动恢复。",
-      });
-      memEntry = { body, cachedAt: Date.now() };
-      return body;
-    }
-
-    const body = JSON.stringify(payload);
-    memEntry = { body, cachedAt: Date.now() };
-    memLastGood = body;
-    if (redis) {
-      try {
-        await Promise.all([
-          redis.set(CACHE_KEY, body, { EX: REDIS_TTL_SEC }),
-          redis.set(CACHE_TS_KEY, String(memEntry.cachedAt), { EX: REDIS_TTL_SEC }),
-          redis.set(LAST_GOOD_KEY, body, { EX: LAST_GOOD_TTL_SEC }),
-        ]);
-      } catch {
-        // 缓存写失败不影响返回。
-      }
-    }
-    return body;
-  })().finally(() => {
-    refreshing = null;
+export function createTodayMarketHandler({load = computeTodayMarket, loadFallback = null, getRedis = getRedisClient, now = Date.now} = {}) {
+  const cache = createMarketSnapshotCache({
+    key: "today-market:v1", freshMs: 10 * 60000, staleMs: 30 * 60000, load, loadFallback, validate: validTodayMarket, now,
+    emptyClosed: (at) => ({live: false, marketClosed: true, history: [], updatedAt: new Date(at).toISOString(),
+      notice: "当前数据源未提供当日行情，且没有可用的历史快照。"}),
   });
-  return refreshing;
-}
-
-export function createTodayMarketHandler() {
   return async function todayMarketHandler(req, res) {
-    const sendJson = (status, body) => {
+    function send(status, payload) {
       res.statusCode = status;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(body);
-    };
-
+      res.setHeader("Cache-Control", "no-store");
+      res.end(JSON.stringify(payload));
+    }
     let redis = null;
+    try { redis = await getRedis(); } catch { /* Use validated process memory. */ }
     try {
-      redis = await getRedisClient();
+      const query = new URL(req.url || "", "http://localhost").searchParams;
+      send(200, await cache.get(redis, {retry: query.get("retry") === "1"}));
     } catch {
-      // Redis 不可用则只走进程内内存缓存兜底。
-    }
-
-    const entry = await readCache(redis);
-    if (entry) {
-      const age = Date.now() - entry.cachedAt;
-      if (age < STALE_MS) {
-        // 还在陈旧窗口内：直接返回（可能略旧）。超过新鲜期则后台静默刷新，下次就是新数据。
-        if (age >= FRESH_MS) refreshCache(redis).catch(() => {});
-        sendJson(200, entry.body);
-        return;
-      }
-    }
-
-    // 冷启动或缓存已彻底过期：只能同步等这次重算（单飞复用）。
-    try {
-      sendJson(200, await refreshCache(redis));
-    } catch (error) {
-      // 重算失败时，若还有可用的旧缓存，宁可返回旧数据也别报错。
-      if (entry) sendJson(200, entry.body);
-      else sendJson(502, JSON.stringify({ error: error?.message || String(error) }));
+      send(502, {error: "行情数据源暂不可用，且没有可用的历史快照，请稍后重试。"});
     }
   };
 }

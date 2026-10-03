@@ -20,10 +20,10 @@ async function enrichAShareNames(items) {
   }
 }
 
-function normalizeMarket(value) {
+export function normalizeMarket(value) {
   const market = String(value || "").trim().toLowerCase();
-  if (market === "ashare" || market === "us") return market;
-  throw new Error("Unsupported market. Expected ashare or us.");
+  if (market === "ashare" || market === "hk" || market === "us") return market;
+  throw new Error("Unsupported market. Expected ashare, hk, or us.");
 }
 
 function normalizeUserId(value) {
@@ -34,7 +34,7 @@ function normalizeUserId(value) {
   return digits;
 }
 
-function normalizeFavoriteCode(value, market) {
+export function normalizeFavoriteCode(value, market) {
   const raw = String(value || "").trim();
   if (market === "us") {
     const code = raw.toUpperCase().replace(/[^A-Z0-9.-]/g, "").slice(0, 12);
@@ -42,6 +42,12 @@ function normalizeFavoriteCode(value, market) {
       throw new Error("Invalid US stock code.");
     }
     return code;
+  }
+
+  if (market === "hk") {
+    const stripped = raw.toUpperCase().replace(/^HK/, "").replace(/\.HK$/, "");
+    if (!/^\d{1,5}$/.test(stripped)) throw new Error("Invalid HK stock code.");
+    return stripped.padStart(5, "0");
   }
 
   const code = raw.replace(/\D/g, "").slice(0, 6);

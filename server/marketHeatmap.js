@@ -1,6 +1,7 @@
 import { handleHeatmapHistory } from "./heatmapHistory.js";
 import { getRedisClient } from "./redisClient.js";
 import { EM_UT, EM_FETCH_HEADERS, mapWithConcurrency } from "./boardTrend.js";
+import { createMarketSnapshotCache } from "./marketSnapshotCache.js";
 
 // 市场热力图：一次全 A 快照，按东财细分行业（f100，如「半导体」「银行Ⅱ」）聚合成树图数据。
 // 行业视图和个股视图共用同一份数据，保证两边的面积/涨跌完全自洽。
@@ -46,7 +47,9 @@ function num(v) {
 // f62 主力净流入 / f100 所属细分行业 / f124 该股行情时间戳（秒）。多 host 兜底。
 // f124 很关键：东财这几个 host 给的是延时行情，拿它当「行情时间」透给前端，
 // 用户能直接看到数据截止到几点，而不是把抓取时间误当成行情时间。
-async function fetchAllStocks() {
+export async function fetchAllStocks({request = fetch, now = Date.now} = {}) {
+  const deadline = now() + 15000;
+  const signal = () => AbortSignal.timeout(Math.max(1, Math.min(12000, deadline - now())));
   const PAGE = 100;
   function pageUrl(host, pn) {
     return (
@@ -75,15 +78,18 @@ async function fetchAllStocks() {
   }
 
   const errors = [];
+  let lastCause;
   for (const host of PUSH2_HOSTS) {
+    if (now() >= deadline) break;
     try {
-      const first = await fetch(pageUrl(host, 1), { headers: EM_FETCH_HEADERS, signal: AbortSignal.timeout(12000) });
+      const first = await request(pageUrl(host, 1), { headers: EM_FETCH_HEADERS, signal: signal() });
       if (!first.ok) {
         errors.push(`${host}: HTTP ${first.status}`);
         continue;
       }
       const firstPayload = await first.json();
       const total = Number(firstPayload?.data?.total) || 0;
+      if (!Number.isInteger(total) || total <= 0) throw new Error("全A快照总数无效");
       let rows = parse(firstPayload);
       if (!rows.length) {
         errors.push(`${host}: empty(total=${total})`);
@@ -100,35 +106,42 @@ async function fetchAllStocks() {
           Array.from({ length: pages - 1 }, (_, i) => i + 2),
           12,
           async (pn) => {
+            if (now() >= deadline) return [];
             try {
-              const r = await fetch(pageUrl(host, pn), { headers: EM_FETCH_HEADERS, signal: AbortSignal.timeout(12000) });
+              const r = await request(pageUrl(host, pn), { headers: EM_FETCH_HEADERS, signal: signal() });
               if (!r.ok) return [];
               return parse(await r.json());
-            } catch {
+            } catch (error) {
+              lastCause = error;
               return [];
             }
           },
         );
+        if (rest.some((page) => !page.length)) throw new Error("全A快照分页不完整");
         rows = rows.concat(...rest);
       }
       const seen = new Set();
-      return { stocks: rows.filter((s) => (seen.has(s.code) ? false : seen.add(s.code))), live: true };
+      const stocks = rows.filter((s) => (seen.has(s.code) ? false : seen.add(s.code)));
+      if (stocks.length < total) throw new Error("全A快照数量不完整");
+      return { stocks, live: true };
     } catch (e) {
+      if (!lastCause || e?.cause || e?.code) lastCause = e;
       errors.push(`${host}: ${e?.message || e}`);
     }
   }
-  throw new Error(`全A快照不可用：${errors.slice(-4).join("；")}`);
+  throw new Error(`全A快照不可用：${errors.slice(-4).join("；")}`, {cause: lastCause});
 }
 
 // 按行业聚合。面积口径（流通市值/成交额）由前端切换，这里两个都算好；
 // 行业涨跌幅用流通市值加权，和「板块涨跌幅」的口径一致（停牌股 f21 为 0，自然不参与）。
-function aggregate(stocks) {
+export function aggregateHeatmapStocks(stocks) {
   const map = new Map();
   for (const s of stocks) {
     const key = s.industry || "其他";
     let row = map.get(key);
     if (!row) {
-      row = { name: key, count: 0, quoted: 0, up: 0, down: 0, cap: 0, floatCap: 0, amount: 0, mainInflow: 0, weighted: 0, weight: 0, pctSum: 0, members: [] };
+      row = { name: key, count: 0, quoted: 0, up: 0, down: 0, cap: 0, floatCap: 0, amount: 0, mainInflow: 0,
+        capKnown: 0, floatCapKnown: 0, amountKnown: 0, mainInflowKnown: 0, weighted: 0, weight: 0, pctSum: 0, members: [] };
       map.set(key, row);
     }
     row.count += 1;
@@ -140,9 +153,10 @@ function aggregate(stocks) {
       if (s.pct > 0) row.up += 1;
       else if (s.pct < 0) row.down += 1;
     }
-    if (Number.isFinite(s.cap)) row.cap += s.cap;
-    if (Number.isFinite(s.amount)) row.amount += s.amount;
-    if (Number.isFinite(s.mainInflow)) row.mainInflow += s.mainInflow;
+    if (Number.isFinite(s.cap)) { row.cap += s.cap; row.capKnown += 1; }
+    if (Number.isFinite(s.floatCap)) row.floatCapKnown += 1;
+    if (Number.isFinite(s.amount)) { row.amount += s.amount; row.amountKnown += 1; }
+    if (Number.isFinite(s.mainInflow)) { row.mainInflow += s.mainInflow; row.mainInflowKnown += 1; }
     if (Number.isFinite(s.floatCap) && s.floatCap > 0) {
       row.floatCap += s.floatCap;
       if (Number.isFinite(s.pct)) {
@@ -173,20 +187,20 @@ function aggregate(stocks) {
         name: s.name,
         market: s.market,
         pct: round2(s.pct),
-        cap: round2(s.cap / YI),
-        floatCap: round2(s.floatCap / YI),
-        amount: round2(s.amount / YI),
-        mainInflow: round2(s.mainInflow / YI),
+        cap: Number.isFinite(s.cap) ? round2(s.cap / YI) : null,
+        floatCap: Number.isFinite(s.floatCap) ? round2(s.floatCap / YI) : null,
+        amount: Number.isFinite(s.amount) ? round2(s.amount / YI) : null,
+        mainInflow: Number.isFinite(s.mainInflow) ? round2(s.mainInflow / YI) : null,
       }));
     return {
       name: row.name,
       count: row.count,
       up: row.up,
       down: row.down,
-      cap: round2(row.cap / YI),
-      floatCap: round2(row.floatCap / YI),
-      amount: round2(row.amount / YI),
-      mainInflow: round2(row.mainInflow / YI),
+      cap: row.capKnown ? round2(row.cap / YI) : null,
+      floatCap: row.floatCapKnown ? round2(row.floatCap / YI) : null,
+      amount: row.amountKnown ? round2(row.amount / YI) : null,
+      mainInflow: row.mainInflowKnown ? round2(row.mainInflow / YI) : null,
       // pct：流通市值加权，和「方块面积＝流通市值」同口径，大票主导大方块的颜色。
       // pctEqual：成分股等权平均，用于和行情软件的「板块涨跌幅」对照——东财板块列表基本就是这个口径
       // （128 个可对照行业里中位偏差 0.004pp），少数行业例外（如光学光电子，东财板块指数本身
@@ -200,8 +214,6 @@ function aggregate(stocks) {
 
 // 最近一次全量快照。列表接口返回的是裁剪过的成分股（够铺树图就行），
 // 行业下钻要看全部成分股时从这里取，避免为此把响应体撑到几百 KB。
-let snapshot = null; // { stocks, at }
-
 async function computeHeatmap() {
   const t0 = Date.now();
   const fetched = await fetchAllStocks();
@@ -210,8 +222,7 @@ async function computeHeatmap() {
     return { live: false };
   }
   const stocks = fetched.stocks;
-  snapshot = { stocks, at: Date.now() };
-  const industries = aggregate(stocks);
+  const industries = aggregateHeatmapStocks(stocks);
   // 停牌股 pct 为 null，不再像过去那样被整行丢弃（丢弃会让它连方块都没有），
   // 但涨跌家数只按有行情的票统计，否则停牌股会被算进"平盘"，把口径撑大。
   const quoted = stocks.filter((s) => Number.isFinite(s.pct));
@@ -222,7 +233,7 @@ async function computeHeatmap() {
   console.log(
     `[market-heatmap] stocks=${stocks.length} industries=${industries.length} up=${up} down=${down} totalMs=${Date.now() - t0}`,
   );
-  return {
+  const payload = {
     live: true,
     scope: "ashare",
     totalStocks: stocks.length,
@@ -235,190 +246,107 @@ async function computeHeatmap() {
     quoteTime: quoteAt > 0 ? new Date(quoteAt * 1000).toISOString() : null, // 行情截止时刻（延时源）
     updatedAt: new Date().toISOString(), // 本次抓取时刻
   };
+  return {payload, snapshot: {stocks, at: Date.now()}};
 }
 
-// ===== 缓存（stale-while-revalidate）=====
-// 全量快照要 6~15s，纯 TTL 缓存会让过期后的第一个人吃满慢加载。
-// 新鲜期内直接给缓存；过了新鲜期先给旧数据、后台静默重算；彻底过期才同步等。
-// 与 todayMarket 同构，只是热力图刷新更快、窗口更短。
-const CACHE_KEY = "market-heatmap:v1";
-const CACHE_TS_KEY = "market-heatmap:v1:ts";
-const FRESH_MS = 60 * 1000; // 1 分钟内直接返回缓存。
-const STALE_MS = 15 * 60 * 1000; // 1~15 分钟返回旧数据并后台刷新；超过则同步重算。
-const REDIS_TTL_SEC = Math.round(STALE_MS / 1000);
+// Full aggregates keep the established cache format; raw members use a private key.
+const SNAPSHOT_KEY = "market-heatmap:v2:stocks:lastgood";
+const MAX_CACHE_AGE = 7 * 86400000;
+export { aggregateHeatmapStocks as aggregate };
 
-// 最近一次「拿到真实行情」的快照，TTL 给到 7 天，足够跨过周末和小长假。
-// 非交易时段（每天约 21:00 至次日 09:30、以及整个周末）东财不推当日行情，
-// 这时热力图展示的就是它 —— 上一个交易日的收盘全景，并标注数据截止时间。
-const LAST_GOOD_KEY = "market-heatmap:v1:lastgood";
-const LAST_GOOD_TTL_SEC = 7 * 24 * 60 * 60;
-
-let memEntry = null; // { body, cachedAt } —— Redis 不可用时的进程内兜底。
-let memLastGood = null; // 最近一次有效快照的进程内副本。
-let refreshing = null; // 单飞：进行中的重算 Promise。
-
-async function readLastGood(redis) {
-  if (memLastGood) return memLastGood;
-  if (!redis) return null;
-  try {
-    const v = await redis.get(LAST_GOOD_KEY);
-    if (v) memLastGood = v;
-    return v;
-  } catch {
-    return null;
-  }
+function validHeatmap(payload) {
+  const finiteOrNull = (value) => value == null || Number.isFinite(value);
+  const counts = [payload?.up, payload?.down, payload?.flat, payload?.suspended ?? 0];
+  return payload?.live === true && Number.isInteger(payload.totalStocks) && payload.totalStocks > 0
+    && counts.every((count) => Number.isInteger(count) && count >= 0) && counts.reduce((sum, count) => sum + count, 0) === payload.totalStocks
+    && Array.isArray(payload.industries) && payload.industries.length > 0
+    && payload.industries.every((row) => typeof row.name === "string" && row.name
+      && Number.isInteger(row.count) && row.count > 0 && Array.isArray(row.stocks) && row.stocks.length <= row.count
+      && [row.cap, row.floatCap, row.amount, row.mainInflow, row.pct, row.pctEqual].every(finiteOrNull)
+      && row.stocks.every((stock) => stock && typeof stock.code === "string" && stock.code && typeof stock.name === "string" && stock.name
+        && [stock.cap, stock.floatCap, stock.amount, stock.mainInflow, stock.pct].every(finiteOrNull)));
 }
 
-async function readCache(redis) {
-  if (memEntry) return memEntry;
-  if (!redis) return null;
-  try {
-    const [body, ts] = await Promise.all([redis.get(CACHE_KEY), redis.get(CACHE_TS_KEY)]);
-    if (!body) return null;
-    memEntry = { body, cachedAt: Number(ts) || 0 };
-    return memEntry;
-  } catch {
-    return null;
-  }
-}
-
-function refreshCache(redis) {
-  if (refreshing) return refreshing;
-  refreshing = (async () => {
-    const payload = await computeHeatmap();
-
-    // 非交易时段：不要用这份没有行情的空快照覆盖缓存，改为回放最近一次有效快照。
-    if (!payload.live) {
-      const last = await readLastGood(redis);
-      if (last) {
-        const body = JSON.stringify({ ...JSON.parse(last), stale: true, marketClosed: true });
-        memEntry = { body, cachedAt: Date.now() };
-        return body;
-      }
-      // 冷启动恰好撞上非交易时段：确实一份历史数据都没有，给前端一个明确的状态，
-      // 而不是抛错让页面显示红字。开盘后第一次刷新就会自动补上。
-      const body = JSON.stringify({
-        live: false,
-        marketClosed: true,
-        scope: "ashare",
-        totalStocks: 0,
-        up: 0,
-        down: 0,
-        flat: 0,
-        industries: [],
-        quoteTime: null,
-        updatedAt: new Date().toISOString(),
-        notice: "当前非交易时段，东方财富暂未推送行情数据。开盘（09:30）后自动恢复。",
-      });
-      memEntry = { body, cachedAt: Date.now() };
-      return body;
-    }
-
-    const body = JSON.stringify(payload);
-    memEntry = { body, cachedAt: Date.now() };
-    memLastGood = body;
-    if (redis) {
-      try {
-        await Promise.all([
-          redis.set(CACHE_KEY, body, { EX: REDIS_TTL_SEC }),
-          redis.set(CACHE_TS_KEY, String(memEntry.cachedAt), { EX: REDIS_TTL_SEC }),
-          redis.set(LAST_GOOD_KEY, body, { EX: LAST_GOOD_TTL_SEC }),
-        ]);
-      } catch {
-        // 缓存写失败不影响返回。
-      }
-    }
-    return body;
-  })().finally(() => {
-    refreshing = null;
-  });
-  return refreshing;
-}
-
-// 单个行业的全部成分股，按流通市值降序。
-function industryDetail(name) {
-  const stocks = (snapshot?.stocks || [])
-    .filter((s) => (s.industry || "其他") === name)
+function stockDetail(stocks, name) {
+  return stocks.filter((stock) => (stock.industry || "其他") === name)
     .sort((a, b) => (b.floatCap || 0) - (a.floatCap || 0))
-    .map((s) => ({
-      code: s.code,
-      name: s.name,
-      market: s.market,
-      pct: round2(s.pct),
-      cap: round2(s.cap / YI),
-      floatCap: round2(s.floatCap / YI),
-      amount: round2(s.amount / YI),
-      mainInflow: round2(s.mainInflow / YI),
+    .map((stock) => ({
+      code: stock.code, name: stock.name, market: stock.market, pct: round2(stock.pct),
+      cap: Number.isFinite(stock.cap) ? round2(stock.cap / YI) : null,
+      floatCap: Number.isFinite(stock.floatCap) ? round2(stock.floatCap / YI) : null,
+      amount: Number.isFinite(stock.amount) ? round2(stock.amount / YI) : null,
+      mainInflow: Number.isFinite(stock.mainInflow) ? round2(stock.mainInflow / YI) : null,
     }));
-  return { industry: name, count: stocks.length, stocks, updatedAt: new Date(snapshot?.at || Date.now()).toISOString() };
 }
 
-export function createMarketHeatmapHandler() {
-  // 服务启动时后台预热 Redis 快照，避免首位用户等待远端缓存建连和读取。
-  getRedisClient()
-    .then((redis) => Promise.all([readCache(redis), readLastGood(redis)]))
-    .catch(() => {});
+export function createMarketHeatmapHandler({ load = computeHeatmap, loadFallback = null, getRedis = getRedisClient, now = Date.now, historyHandler = handleHeatmapHistory } = {}) {
+  let snapshot = null;
+  const sourceOf = (payload) => payload?.source || "eastmoney";
+  const validSnapshot = (candidate, payload) => candidate && Array.isArray(candidate.stocks) && candidate.stocks.length > 0
+    && candidate.stocks.length === payload.totalStocks
+    && candidate.stocks.every((stock) => stock && typeof stock.code === "string" && stock.code && typeof stock.name === "string" && stock.name)
+    && Number.isFinite(candidate.at) && candidate.at <= now() && now() - candidate.at < MAX_CACHE_AGE
+    && candidate.updatedAt === payload.updatedAt && candidate.source === sourceOf(payload);
+  const cache = createMarketSnapshotCache({
+    key: "market-heatmap:v1", freshMs: 60000, staleMs: 15 * 60000, load, loadFallback, validate: validHeatmap, now,
+    emptyClosed: (at) => ({live: false, marketClosed: true, scope: "ashare", totalStocks: 0, up: 0, down: 0, flat: 0, industries: [], quoteTime: null,
+      updatedAt: new Date(at).toISOString(), notice: "当前数据源未提供当日行情，且没有可用的历史快照。"}),
+    onFull: async (result, redis) => {
+      const candidate = result.snapshot ? {...result.snapshot, at: Date.parse(result.payload.updatedAt), updatedAt: result.payload.updatedAt, source: sourceOf(result.payload)} : null;
+      if (!validSnapshot(candidate, result.payload)) return;
+      snapshot = candidate;
+      if (redis) { try { await redis.set(SNAPSHOT_KEY, JSON.stringify(candidate), {EX: MAX_CACHE_AGE / 1000}); } catch { /* Aggregate remains available. */ } }
+    },
+  });
+
+  async function readSnapshot(redis, payload) {
+    if (validSnapshot(snapshot, payload)) return snapshot;
+    if (!redis) return null;
+    try {
+      const raw = await redis.get(SNAPSHOT_KEY);
+      const candidate = raw ? JSON.parse(raw) : null;
+      if (validSnapshot(candidate, payload)) { snapshot = candidate; return candidate; }
+    } catch { /* Cropped same-source members remain usable. */ }
+    return null;
+  }
 
   return async function marketHeatmapHandler(req, res) {
-    if (handleHeatmapHistory(req, res)) return;
-    const sendJson = (status, body) => {
+    if (historyHandler(req, res)) return;
+    function send(status, payload) {
       res.statusCode = status;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(body);
-    };
-
+      res.setHeader("Cache-Control", "no-store");
+      res.end(JSON.stringify(payload));
+    }
     let redis = null;
+    try { redis = await getRedis(); } catch { /* Valid process memory works without Redis. */ }
     try {
-      redis = await getRedisClient();
+      const query = new URL(req.url || "", "http://localhost").searchParams;
+      let payload = await cache.get(redis, {retry: query.get("retry") === "1"});
+      const industry = query.get("industry");
+      if (!industry) { send(200, payload); return; }
+      const requestedSource = query.get("source");
+      if (requestedSource && requestedSource !== sourceOf(payload)) {
+        const candidates = [await cache.lastGood(redis), await cache.lastFallback(redis)];
+        const hit = candidates.find((candidate) => candidate && sourceOf(candidate.payload) === requestedSource);
+        if (!hit) throw new Error("行业缓存与当前行情来源不一致，请刷新热力图后重试。");
+        payload = {...hit.payload, stale: true, staleReason: "source-changed"};
+      }
+      const raw = await readSnapshot(redis, payload);
+      const aggregate = payload.industries?.find((row) => row.name === industry);
+      if (!raw && !aggregate) throw new Error("暂无该行业的同来源缓存，请刷新热力图后重试。");
+      const stocks = raw ? stockDetail(raw.stocks, industry) : aggregate.stocks;
+      const partial = !raw;
+      send(200, {
+        industry, stocks, count: stocks.length, returnedCount: stocks.length,
+        totalCount: aggregate?.count ?? stocks.length, partial, providerPartial: Boolean(payload.partial),
+        source: sourceOf(payload), classification: payload.classification, coverage: payload.coverage,
+        quoteTime: payload.quoteTime, updatedAt: payload.updatedAt,
+        stale: Boolean(payload.stale), staleReason: payload.staleReason, marketClosed: payload.marketClosed,
+        notice: partial ? "缓存仅包含该行业的部分成分股，不能视为完整行业列表。" : payload.notice,
+      });
     } catch {
-      // Redis 不可用则只走进程内缓存兜底。
-    }
-
-    // 行业下钻：要的是该行业全部成分股，走进程内全量快照（必要时先刷一次）。
-    const industry = new URL(req.url || "", "http://localhost").searchParams.get("industry");
-    if (industry) {
-      try {
-        if (!snapshot || Date.now() - snapshot.at > STALE_MS) await refreshCache(redis);
-        // 非交易时段 snapshot 为空，退回最近一次有效快照里该行业的成分股。
-        if (!snapshot?.stocks?.length) {
-          const last = await readLastGood(redis);
-          const prev = last ? JSON.parse(last) : null;
-          const hit = (prev?.industries || []).find((x) => x.name === industry);
-          sendJson(
-            200,
-            JSON.stringify({
-              industry,
-              count: hit?.stocks?.length || 0,
-              stocks: hit?.stocks || [],
-              updatedAt: prev?.updatedAt || new Date().toISOString(),
-              stale: true,
-            }),
-          );
-          return;
-        }
-        sendJson(200, JSON.stringify(industryDetail(industry)));
-      } catch (error) {
-        sendJson(502, JSON.stringify({ error: error?.message || String(error) }));
-      }
-      return;
-    }
-
-    const entry = await readCache(redis);
-    if (entry) {
-      const age = Date.now() - entry.cachedAt;
-      if (age < STALE_MS) {
-        if (age >= FRESH_MS) refreshCache(redis).catch(() => {});
-        sendJson(200, entry.body);
-        return;
-      }
-    }
-
-    try {
-      sendJson(200, await refreshCache(redis));
-    } catch (error) {
-      // 重算失败时宁可返回旧数据也别报错。
-      if (entry) sendJson(200, entry.body);
-      else sendJson(502, JSON.stringify({ error: error?.message || String(error) }));
+      send(502, {error: "行情数据源暂不可用，且没有匹配的有效缓存，请稍后重试。"});
     }
   };
 }

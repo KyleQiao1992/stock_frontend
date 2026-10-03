@@ -64,7 +64,7 @@ function normalizeBoardCode(raw) {
 }
 
 // 拉全部概念板块列表（按主力净流入 f62 降序）。多个 host 兜底。
-export async function fetchConceptBoardList() {
+export async function fetchConceptBoardList({ signal } = {}) {
   // push2delay 是东财「延时行情」host：在实时 push2 被墙/限流的网络里它仍可达，优先用它。
   const hosts = [
     "https://push2delay.eastmoney.com",
@@ -98,8 +98,12 @@ export async function fetchConceptBoardList() {
 
   const errors = [];
   for (const host of hosts) {
+    if (signal?.aborted) break;
     try {
-      const first = await fetch(pageUrl(host, 1), { headers: EM_FETCH_HEADERS, signal: AbortSignal.timeout(12000) });
+      const requestSignal = () => signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(12000)])
+        : AbortSignal.timeout(12000);
+      const first = await fetch(pageUrl(host, 1), { headers: EM_FETCH_HEADERS, signal: requestSignal() });
       if (!first.ok) {
         errors.push(`${host}: HTTP ${first.status}`);
         continue;
@@ -117,7 +121,7 @@ export async function fetchConceptBoardList() {
         const rest = await Promise.all(
           Array.from({ length: pages - 1 }, (_, i) => i + 2).map(async (pn) => {
             try {
-              const r = await fetch(pageUrl(host, pn), { headers: EM_FETCH_HEADERS, signal: AbortSignal.timeout(12000) });
+              const r = await fetch(pageUrl(host, pn), { headers: EM_FETCH_HEADERS, signal: requestSignal() });
               if (!r.ok) return [];
               return parsePage(await r.json());
             } catch {
@@ -125,8 +129,12 @@ export async function fetchConceptBoardList() {
             }
           }),
         );
+        if (signal && rest.some((page) => !page.length)) {
+          throw new Error("概念板块目录分页未完成，无法确定资金流排名");
+        }
         boards = boards.concat(...rest);
       }
+      if (signal?.aborted) throw signal.reason;
       // 按代码去重（翻页偶发重复）。
       const seen = new Set();
       return boards.filter((b) => (seen.has(b.code) ? false : seen.add(b.code)));

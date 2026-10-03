@@ -1,19 +1,19 @@
 import { useEffect, useState } from 'react';
 import { NEWS_CATEGORIES, loadStockNews } from '../lib/stockNews.js';
 
-export default function StockNewsPanel({ code }) {
+export default function StockNewsPanel({ code, market = 'ashare' }) {
   const [category, setCategory] = useState('news');
   const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState(null);
-  const key = `${code}:${category}:${attempt}`;
+  const key = `${market}:${code}:${category}:${attempt}`;
   useEffect(() => {
     let cancelled = false;
     if (!code) return;
-    loadStockNews(code, category, attempt > 0)
+    loadStockNews(code, category, attempt > 0, market)
       .then((items) => { if (!cancelled) setResult({ key, items }); })
       .catch((error) => { if (!cancelled) setResult({ key, error: error.name === 'TimeoutError' ? '资讯请求超时，请重试' : error.message || '资讯加载失败，请重试' }); });
     return () => { cancelled = true; };
-  }, [code, category, attempt, key]);
+  }, [code, category, attempt, key, market]);
   const current = result?.key === key ? result : null;
   const label = NEWS_CATEGORIES.find((c) => c.key === category).label;
   return <section aria-label="个股资讯" className="flex h-full min-h-0 w-full flex-col overflow-hidden">

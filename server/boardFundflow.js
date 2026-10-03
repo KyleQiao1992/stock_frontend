@@ -1,5 +1,6 @@
 import { getRedisClient } from "./redisClient.js";
 import { EM_UT, EM_FETCH_HEADERS, fetchConceptBoardList, mapWithConcurrency } from "./boardTrend.js";
+import { loadSinaDaySnapshot } from "./sinaBoardFundflowSnapshot.js";
 
 // 维度 → 东财 fflow klt + 取多少根。
 // day：klt=1 盘中分钟，f52 本身就是“自开盘累计主力净流入”，直接当曲线。
@@ -165,12 +166,13 @@ async function loadBoardFundflowFromSina({ dim, top, date }) {
   return { dim, top, date: date || null, source: "sina", count: finalSeries.length, series: finalSeries, updatedAt: new Date().toISOString() };
 }
 
-async function loadBoardFundflow({ dim, top, date }) {
+export async function loadBoardFundflow({ dim, top, date }) {
   // 周/月走新浪日度（东财历史 host 部分网络不可达）；日（盘中分钟）仍走东财 push2delay。
   if (dim !== "day") return loadBoardFundflowFromSina({ dim, top, date });
 
   const t0 = Date.now();
-  const boards = await fetchConceptBoardList();
+  // 日内主源的目录最多等待 8 秒，避免四个节点顺序超时使兜底迟迟无法启动。
+  const boards = await fetchConceptBoardList({ signal: AbortSignal.timeout(8000) });
   const listMs = Date.now() - t0;
 
   // 候选池：剔除宽基/风格/聚合板，只留题材板，按“今日主力净流入 f62”取两端各 top 个。
@@ -207,53 +209,180 @@ async function loadBoardFundflow({ dim, top, date }) {
       `series=${finalSeries.length} listMs=${listMs} totalMs=${Date.now() - t0}`,
   );
 
-  return { dim, top, date: date || null, count: finalSeries.length, series: finalSeries, updatedAt: new Date().toISOString() };
+  return { dim, top, date: date || null, source: "eastmoney", mode: "intraday", count: finalSeries.length, series: finalSeries, updatedAt: new Date().toISOString() };
 }
 
-export function createBoardFundflowHandler() {
+const LAST_GOOD_MS = 7 * 24 * 60 * 60 * 1000;
+
+function shanghaiDate(timestamp) {
+  return new Date(timestamp + 8 * 3600000).toISOString().slice(0, 10);
+}
+
+function validDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const timestamp = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
+}
+
+function normalizeFundflowPayload(body, query) {
+  if (!body || !Array.isArray(body.series) || !body.series.length) return null;
+  if (body.dim && body.dim !== query.dim) return null;
+  if (body.date && body.date !== (query.date || null)) return null;
+  const mode = body.mode || (query.dim === "day" ? "intraday" : "cumulative");
+  if (!["intraday", "cumulative", "daily-snapshot"].includes(mode)) return null;
+  if (mode === "daily-snapshot" && (query.dim !== "day" || body.source !== "sina")) return null;
+  const minPoints = mode === "daily-snapshot" ? 1 : 2;
+  const timestamps = [];
+  for (const line of body.series) {
+    if (!line?.code || !line.name || !Number.isFinite(line.final) || !Array.isArray(line.points) || line.points.length < minPoints) return null;
+    if (mode === "daily-snapshot" && line.points.length !== 1) return null;
+    for (const point of line.points) {
+      const t = String(point?.t || "");
+      if (!Number.isFinite(point?.v) || !validDate(t.slice(0, 10))) return null;
+      if (query.dim === "day" && query.date && t.slice(0, 10) !== query.date) return null;
+      timestamps.push(t);
+    }
+  }
+  if (query.dim === "day" && new Set(timestamps.map((t) => t.slice(0, 10))).size !== 1) return null;
+  const asOf = timestamps.sort().at(-1);
+  return {
+    ...body,
+    dim: query.dim,
+    top: query.top,
+    date: query.date || null,
+    source: body.source || (query.dim === "day" ? "eastmoney" : "sina"),
+    mode,
+    count: body.series.length,
+    dataDate: asOf.slice(0, 10),
+    asOf,
+  };
+}
+
+export function createBoardFundflowHandler({
+  load = loadBoardFundflow,
+  loadSnapshot = loadSinaDaySnapshot,
+  getRedis = getRedisClient,
+  now = Date.now,
+} = {}) {
+  const freshCache = new Map();
+  const lastGoodCache = new Map();
+  const inflight = new Map();
+
+  function ttlFor(query) {
+    if (query.date && query.date < shanghaiDate(now())) return 86400;
+    return query.dim === "day" ? 120 : 600;
+  }
+
+  function cacheEntry(body, query) {
+    const payload = normalizeFundflowPayload(body, query);
+    const at = Date.parse(payload?.updatedAt);
+    if (!payload || payload.stale || !Number.isFinite(at) || at > now() || now() - at >= LAST_GOOD_MS) return null;
+    return {payload, at};
+  }
+
+  function isFresh(entry, query) {
+    if (!entry || now() - entry.at >= ttlFor(query) * 1000) return false;
+    // 上海跨日后，不能把昨天缓存直接当成最新窗口。
+    if (!query.date && shanghaiDate(entry.at) !== shanghaiDate(now())) return false;
+    return true;
+  }
+
+  function stalePayload(entry) {
+    return {
+      ...entry.payload,
+      stale: true,
+      notice: "数据源刷新失败，正在显示最近一次有效缓存，暂非实时行情。",
+    };
+  }
+
+  async function resolve(query, key, redis) {
+    let previous = lastGoodCache.get(key);
+    if (previous && now() - previous.at >= LAST_GOOD_MS) previous = null;
+    if (!previous && redis) {
+      try {
+        const raw = await redis.get(`board-fundflow:lastgood:v2:${key}`);
+        previous = raw ? cacheEntry(JSON.parse(raw), query) : null;
+        if (previous) lastGoodCache.set(key, previous);
+      } catch { /* 网络获取不依赖缓存服务可用。 */ }
+    }
+    let payload;
+    let primaryError;
+    try {
+      payload = normalizeFundflowPayload(await load(query), query);
+      if (!payload) throw new Error("未获取到有效资金流曲线");
+      if (!cacheEntry(payload, query)) throw new Error("资金流数据的时间或格式异常");
+    } catch (error) {
+      primaryError = error;
+      if (previous && previous.payload.mode !== "daily-snapshot") return stalePayload(previous);
+      if (query.dim !== "day") throw error;
+      try {
+        payload = normalizeFundflowPayload(await loadSnapshot(query), query);
+        if (!payload || payload.mode !== "daily-snapshot") throw new Error("暂无可用的单日资金流快照", {cause: error});
+        if (!cacheEntry(payload, query)) throw new Error("单日资金流快照的时间或格式异常", {cause: error});
+      } catch (snapshotError) {
+        if (previous) return stalePayload(previous);
+        const error = new Error("资金流数据源暂不可用，请稍后重试，或查看周、月维度。", {cause: snapshotError});
+        error.details = [primaryError?.message, snapshotError?.message].filter(Boolean).join("；");
+        throw error;
+      }
+    }
+    const entry = cacheEntry(payload, query);
+    if (!entry) throw new Error("资金流数据的时间或格式异常，请稍后重试。");
+    freshCache.set(key, entry);
+    lastGoodCache.set(key, entry);
+    if (redis) {
+      const body = JSON.stringify(payload);
+      await Promise.allSettled([
+        // 新格式有单日快照模式，旧版前端只认识分钟曲线，必须隔离写入。
+        redis.set(`board-fundflow:v2:${key}`, body, {EX: ttlFor(query)}),
+        redis.set(`board-fundflow:lastgood:v2:${key}`, body, {EX: LAST_GOOD_MS / 1000}),
+      ]);
+    }
+    return payload;
+  }
+
   return async function boardFundflowHandler(req, res) {
+    function send(status, payload) {
+      res.statusCode = status;
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store");
+      res.end(JSON.stringify(payload));
+    }
     try {
       const requestUrl = new URL(req.url || "", "http://localhost");
       const dimRaw = requestUrl.searchParams.get("dim") || "day";
       const dim = DIM_CONFIG[dimRaw] ? dimRaw : "day";
-      const top = Math.min(25, Math.max(3, Number(requestUrl.searchParams.get("top")) || 12));
-      const dateRaw = requestUrl.searchParams.get("date") || "";
-      const date = /^\d{4}-\d{2}-\d{2}$/.test(dateRaw) ? dateRaw : "";
-
-      const cacheKey = `board-fundflow:${dim}:${top}:${date || "latest"}`;
-      // 指定历史日期的结果不会变，可长缓存；最新窗口盘中会动，短缓存。
-      const ttl = date ? 86400 : dim === "day" ? 120 : 600;
-
+      const top = Math.min(25, Math.max(3, Math.floor(Number(requestUrl.searchParams.get("top")) || 12)));
+      const date = requestUrl.searchParams.get("date") || "";
+      if (date && (!validDate(date) || date > shanghaiDate(now()))) {
+        send(400, {error: "请选择有效日期，不能晚于上海时区的今天。"});
+        return;
+      }
+      const query = {dim, top, date};
+      const key = `${dim}:${top}:${date || "latest"}`;
+      const retry = requestUrl.searchParams.get("retry") === "1";
+      let entry = freshCache.get(key);
+      if (!retry && isFresh(entry, query)) { send(200, entry.payload); return; }
       let redis = null;
       try {
-        redis = await getRedisClient();
-        const cached = await redis.get(cacheKey);
-        if (cached) {
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json; charset=utf-8");
-          res.end(cached);
-          return;
+        redis = await getRedis();
+        const raw = await redis.get(`board-fundflow:v2:${key}`) || await redis.get(`board-fundflow:${key}`);
+        if (raw) {
+          entry = cacheEntry(JSON.parse(raw), query);
+          if (entry) {
+            freshCache.set(key, entry);
+            lastGoodCache.set(key, entry);
+            if (!retry && isFresh(entry, query)) { send(200, entry.payload); return; }
+          }
         }
-      } catch {
-        redis = null;
+      } catch { /* 缓存不可用时走网络和进程内的最后有效数据。 */ }
+      if (!inflight.has(key)) {
+        const task = resolve(query, key, redis).finally(() => inflight.delete(key));
+        inflight.set(key, task);
       }
-
-      const payload = await loadBoardFundflow({ dim, top, date });
-      const body = JSON.stringify(payload);
-      if (redis && payload.count >= top) {
-        try {
-          await redis.set(cacheKey, body, { EX: ttl });
-        } catch {
-          // ignore cache write failures
-        }
-      }
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(body);
+      send(200, await inflight.get(key));
     } catch (error) {
-      res.statusCode = 502;
-      res.setHeader("Content-Type", "application/json; charset=utf-8");
-      res.end(JSON.stringify({ error: error?.message || String(error) }));
+      send(502, {error: "资金流数据源暂不可用，请稍后重试，或查看周、月维度。", details: error?.details || error?.message || String(error)});
     }
   };
 }

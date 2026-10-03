@@ -12,10 +12,12 @@ import { createFavoritesBacktestHandler } from "./server/favoritesBacktestHandle
 import { createRedisRecommendationsHandler } from "./server/redisHandlers.js";
 import { createUsKlineHandler } from "./server/usKline.js";
 import { createUsProfileHandler } from "./server/usProfile.js";
+import { createHkKlineHandler, createHkSearchHandler } from "./server/hkMarket.js";
 import { createKlineForecastHandler } from "./server/klineForecast.js";
 import { createBoardFundflowHandler } from "./server/boardFundflow.js";
 import { createTodayMarketHandler } from "./server/todayMarket.js";
 import { createMarketHeatmapHandler } from "./server/marketHeatmap.js";
+import { createMarketSnapshotFallbacks } from "./server/marketSnapshotFallback.js";
 import { createSuspensionAlertHandler } from "./server/suspensionAlert.js";
 import { createMacdFactorReturnsHandler } from "./server/macdFactorHandler.js";
 import { createMacdFactorDetailHandler } from "./server/macdFactorDetailHandler.js";
@@ -26,34 +28,41 @@ import { createAgentHandler } from "./server/agent/agentHandler.js";
 import { authMiddleware } from "./server/authMiddleware.js";
 
 function usKlinePlugin() {
-  loadServerEnv();
-  const handler = createUsKlineHandler();
-  const usProfileHandler = createUsProfileHandler();
-  const klineForecastHandler = createKlineForecastHandler();
-  const boardFundflowHandler = createBoardFundflowHandler();
-  const todayMarketHandler = createTodayMarketHandler();
-  const marketHeatmapHandler = createMarketHeatmapHandler();
-  const suspensionAlertHandler = createSuspensionAlertHandler();
-  const ashareFinanceHandler = createAshareFinanceHandler();
-  const ashareFundFlowHandler = createAshareFundFlowHandler();
-  const ashareProfileHandler = createAshareProfileHandler();
-  const ashareSearchHandler = createAshareSearchHandler();
-  const redisRecommendationsHandler = createRedisRecommendationsHandler();
-  const favoritesHandler = createFavoritesHandler();
-  const favoriteGroupsHandler = createFavoriteGroupsHandler();
-  const favoritesBacktestHandler = createFavoritesBacktestHandler();
-  const factorReturnsHandler = createMacdFactorReturnsHandler();
-  const factorDetailHandler = createMacdFactorDetailHandler();
-  const factorsHandler = createFactorsHandler();
-  const factorAdminHandler = createFactorAdminHandler();
-  const authHandler = createAuthHandler();
-  const agentHandler = createAgentHandler();
-
   function register(middlewares) {
+    // Vite 构建只需要前端插件，不应在读取配置时实例化后端 handler。
+    // 否则 createAshareSearchHandler 会启动全量股票列表刷新，让 build 完成后仍被网络任务挂住。
+    loadServerEnv();
+    const handler = createUsKlineHandler();
+    const usProfileHandler = createUsProfileHandler();
+    const hkKlineHandler = createHkKlineHandler();
+    const hkSearchHandler = createHkSearchHandler();
+    const klineForecastHandler = createKlineForecastHandler();
+    const boardFundflowHandler = createBoardFundflowHandler();
+    const marketFallbacks = createMarketSnapshotFallbacks();
+    const todayMarketHandler = createTodayMarketHandler({loadFallback: marketFallbacks.today});
+    const marketHeatmapHandler = createMarketHeatmapHandler({loadFallback: marketFallbacks.heatmap});
+    const suspensionAlertHandler = createSuspensionAlertHandler();
+    const ashareFinanceHandler = createAshareFinanceHandler();
+    const ashareFundFlowHandler = createAshareFundFlowHandler();
+    const ashareProfileHandler = createAshareProfileHandler();
+    const ashareSearchHandler = createAshareSearchHandler();
+    const redisRecommendationsHandler = createRedisRecommendationsHandler();
+    const favoritesHandler = createFavoritesHandler();
+    const favoriteGroupsHandler = createFavoriteGroupsHandler();
+    const favoritesBacktestHandler = createFavoritesBacktestHandler();
+    const factorReturnsHandler = createMacdFactorReturnsHandler();
+    const factorDetailHandler = createMacdFactorDetailHandler();
+    const factorsHandler = createFactorsHandler();
+    const factorAdminHandler = createFactorAdminHandler();
+    const authHandler = createAuthHandler();
+    const agentHandler = createAgentHandler();
+
     middlewares.use("/api/auth", authHandler);
     middlewares.use("/api", authMiddleware);
     middlewares.use("/api/us-kline", handler);
     middlewares.use("/api/us-profile", usProfileHandler);
+    middlewares.use("/api/hk-kline", hkKlineHandler);
+    middlewares.use("/api/hk-search", hkSearchHandler);
     middlewares.use("/api/kline-forecast", klineForecastHandler);
     middlewares.use("/api/board-fundflow", boardFundflowHandler);
     middlewares.use("/api/today-market", todayMarketHandler);
