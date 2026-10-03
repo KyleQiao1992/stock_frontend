@@ -2,6 +2,8 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { getRedisClient } from "./redisClient.js";
 import { loadServerEnv } from "./env.js";
+import { publicUser, tokenVersion, updateUser } from "./userStore.js";
+import { createAuthMiddleware } from "./authMiddleware.js";
 
 loadServerEnv();
 
@@ -23,29 +25,32 @@ async function readRequestBody(req) {
   const text = Buffer.concat(chunks).toString("utf8").trim();
   if (!text) return {};
   try {
-    return JSON.parse(text);
+    const body = JSON.parse(text);
+    if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("Invalid body");
+    return body;
   } catch {
-    throw new Error("Invalid JSON body.");
+    throw Object.assign(new Error("Invalid JSON body."), { status: 400 });
   }
 }
 
 function sendJson(res, statusCode, payload) {
   res.statusCode = statusCode;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
   res.end(JSON.stringify(payload));
 }
 
 function normalizeUsername(value) {
   const username = String(value || "").trim().toLowerCase();
   if (!/^[a-z0-9_]{3,20}$/.test(username)) {
-    throw new Error("用户名只能包含字母、数字、下划线，长度3-20位。");
+    throw Object.assign(new Error("用户名只能包含字母、数字、下划线，长度3-20位。"), { status: 400 });
   }
   return username;
 }
 
 function normalizePassword(value) {
   const password = String(value || "");
-  if (password.length < 6) throw new Error("密码至少6位。");
+  if (password.length < 6) throw Object.assign(new Error("密码至少6位。"), { status: 400 });
   return password;
 }
 
@@ -56,7 +61,11 @@ export function isPasswordHash(value) {
 }
 
 export async function hashPassword(password) {
-  return bcrypt.hash(normalizePassword(password), PASSWORD_HASH_ROUNDS);
+  const normalized = normalizePassword(password);
+  if (Buffer.byteLength(normalized, 'utf8') > 72) {
+    throw Object.assign(new Error('新密码不能超过72个UTF-8字节（英文字符最多72位，中文通常每字3字节）。'), { status: 400 });
+  }
+  return bcrypt.hash(normalized, PASSWORD_HASH_ROUNDS);
 }
 
 export async function verifyStoredPassword(user, password) {
@@ -75,28 +84,52 @@ export function createAuthHandler({
   getSecret = getJwtSecret,
   migratePasswords = process.env.AUTH_PASSWORD_MIGRATION === "1",
 } = {}) {
+  const authenticate = createAuthMiddleware({ getRedis, getSecret });
   return async function authHandler(req, res) {
     try {
       const requestUrl = new URL(req.url || "", "http://localhost");
       const action = requestUrl.pathname.replace(/^\/(api\/auth\/)?/, "");
       const method = String(req.method || "").toUpperCase();
 
+      if (action === "me" && method === "GET" || action === "change-password" && method === "POST") {
+        await authenticate(req, res, () => {});
+        if (!req.user) return;
+        if (action === "me") return sendJson(res, 200, { ok: true, user: publicUser(req.user) });
+        const body = await readRequestBody(req);
+        const passwordHash = await hashPassword(body.newPassword);
+        const redis = await getRedis();
+        await updateUser(redis, req.user.username, async (user) => {
+          if (tokenVersion(user) !== req.user.tokenVersion || (user.status || 'active') !== 'active') {
+            throw Object.assign(new Error('登录已失效，请重新登录。'), { status: 401 });
+          }
+          if (!(await verifyStoredPassword(user, body.currentPassword))) {
+            throw Object.assign(new Error('原密码错误。'), { status: 400 });
+          }
+          const next = { ...user, passwordHash, tokenVersion: tokenVersion(user) + 1 };
+          delete next.password;
+          return next;
+        });
+        return sendJson(res, 200, { ok: true });
+      }
+
       if (action === "register" && method === "POST") {
         const body = await readRequestBody(req);
         const username = normalizeUsername(body.username);
         const password = normalizePassword(body.password);
 
+        const secret = getSecret();
         const redis = await getRedis();
         const exists = await redis.exists(getUserKey(username));
         if (exists) {
           return sendJson(res, 409, { ok: false, error: "用户名已存在。" });
         }
 
-        const id = await redis.incr("user:id_counter");
         const passwordHash = await hashPassword(password);
-        await redis.set(getUserKey(username), JSON.stringify({ id, username, passwordHash, createdAt: Date.now() }));
-
-        const token = jwt.sign({ id, username }, getSecret());
+        const id = await redis.incr("user:id_counter");
+        const user = { id, username, passwordHash, createdAt: Date.now(), role: 'user', status: 'active', tokenVersion: 1 };
+        const created = await redis.set(getUserKey(username), JSON.stringify(user), { NX: true });
+        if (!created) return sendJson(res, 409, { ok: false, error: "用户名已存在。" });
+        const token = jwt.sign({ id, username, tokenVersion: 1 }, secret, { expiresIn: '7d', algorithm: 'HS256' });
         return sendJson(res, 200, { ok: true, token, id, username });
       }
 
@@ -116,7 +149,10 @@ export function createAuthHandler({
           return sendJson(res, 401, { ok: false, error: "用户名或密码错误。" });
         }
 
-        const token = jwt.sign({ id: user.id, username }, getSecret());
+        if ((user.status || 'active') !== 'active') {
+          return sendJson(res, 401, { ok: false, code: 'ACCOUNT_DISABLED', error: '账号已被禁用。' });
+        }
+        const token = jwt.sign({ id: user.id, username, tokenVersion: tokenVersion(user) }, getSecret(), { expiresIn: '7d', algorithm: 'HS256' });
 
         if (migratePasswords && !isPasswordHash(user.passwordHash)) {
           try {
@@ -137,7 +173,7 @@ export function createAuthHandler({
 
       return sendJson(res, 404, { ok: false, error: "Not found." });
     } catch (error) {
-      return sendJson(res, 400, { ok: false, error: error?.message || String(error) });
+      return sendJson(res, error.status || 503, { ok: false, error: error.status ? error.message : "账号服务暂时不可用，请稍后重试。" });
     }
   };
 }

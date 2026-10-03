@@ -1,4 +1,5 @@
-import { Component, lazy, Suspense, useState } from "react";
+import { Component, lazy, Suspense, useEffect, useState } from "react";
+import { authJson, clearAuth } from "./lib/authClient.js";
 import LoginPage from "./components/LoginPage";
 import { useTheme } from "./theme";
 
@@ -45,33 +46,68 @@ class AppErrorBoundary extends Component {
   }
 }
 
-function getStoredAuth() {
-  const token = localStorage.getItem("token");
-  const id = localStorage.getItem("userId");
-  const username = localStorage.getItem("username");
-  return token && id ? { token, id: Number(id), username } : null;
-}
-
 export default function App() {
-  const [auth, setAuth] = useState(() => getStoredAuth());
+  const [token, setToken] = useState(() => localStorage.getItem('token'));
+  const [auth, setAuth] = useState(null);
+  const [notice, setNotice] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    if (!token) return;
+    const controller = new AbortController();
+    let active = true;
+    let revision = 0;
+    async function refresh() {
+      const requestRevision = ++revision;
+      try {
+        const data = await authJson('/api/auth/me', { signal: controller.signal });
+        if (active && requestRevision === revision && localStorage.getItem('token') === token) {
+          setAuth(data.user); setAuthError('');
+        }
+      } catch (error) {
+        if (active && requestRevision === revision && error.name !== 'AbortError' && error.status !== 401) setAuthError(error.message);
+      }
+    }
+    const expired = (event) => { setToken(null); setAuth(null); setNotice(event.detail || '请重新登录。'); };
+    window.addEventListener('auth-expired', expired);
+    window.addEventListener('auth-forbidden', refresh);
+    window.addEventListener('focus', refresh);
+    refresh();
+    const timer = window.setInterval(refresh, 60000);
+    return () => { active = false; controller.abort(); window.clearInterval(timer); window.removeEventListener('auth-expired', expired); window.removeEventListener('auth-forbidden', refresh); window.removeEventListener('focus', refresh); };
+  }, [token, retry]);
+  useEffect(() => {
+    function syncStorage(event) {
+      if (event.key !== 'token' && event.key !== null) return;
+      const nextToken = localStorage.getItem('token');
+      if (nextToken === token) return;
+      setAuth(null); setAuthError(''); setNotice(''); setToken(nextToken);
+    }
+    window.addEventListener('storage', syncStorage);
+    return () => window.removeEventListener('storage', syncStorage);
+  }, [token]);
   const { preference: themePreference, setPreference: setThemePreference } = useTheme();
 
-  function handleLogout() {
-    localStorage.removeItem("token");
-    localStorage.removeItem("userId");
-    localStorage.removeItem("username");
-    setAuth(null);
+  function handleLogout(message = '') {
+    clearAuth(); setToken(null); setAuth(null); setAuthError('');
+    setNotice(typeof message === 'string' ? message : '');
   }
-
-  if (!auth) {
-    return <LoginPage onLogin={setAuth} />;
+  function handleLogin(data) {
+    setAuth(null); setNotice(''); setAuthError(''); setToken(data.token);
   }
+  if (!token) return <LoginPage onLogin={handleLogin} notice={notice} />;
+  if (!auth) return <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-canvas text-sm text-slate-600">
+    <p>{authError || '正在验证登录状态…'}</p>
+    {authError && <button onClick={() => { setAuthError(''); setRetry((v) => v + 1); }}>重试</button>}
+    <button onClick={() => handleLogout()}>返回登录</button>
+  </div>;
 
   return (
     <AppErrorBoundary>
       <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-canvas text-sm text-slate-500">正在加载行情工作台…</div>}>
         <AShareTD9InteractiveChart
           onLogout={handleLogout}
+          user={auth}
           themePreference={themePreference}
           onThemeChange={setThemePreference}
         />

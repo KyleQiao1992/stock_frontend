@@ -10,7 +10,8 @@
     "test": "node --test server/*.test.js src/lib/*.test.js src/lib/chan/*.test.js",
     "preview": "vite preview",
     "start": "node server/index.js",
-    "refresh-ashare-list": "node server/scripts/refreshAshareList.js"
+    "refresh-ashare-list": "node server/scripts/refreshAshareList.js",
+    "initialize-admin": "node server/scripts/initializeAdmin.js"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.0",

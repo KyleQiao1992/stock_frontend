@@ -1,3 +1,4 @@
+import { registerApiPermissions } from "./server/apiPermissions.js";
 import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
@@ -23,6 +24,7 @@ import { createMacdFactorReturnsHandler } from "./server/macdFactorHandler.js";
 import { createMacdFactorDetailHandler } from "./server/macdFactorDetailHandler.js";
 import { createFactorsHandler } from "./server/factorsHandler.js";
 import { createFactorAdminHandler } from "./server/factorAdminHandler.js";
+import { createUserAdminHandler } from "./server/userAdminHandler.js";
 import { createAuthHandler } from "./server/authHandlers.js";
 import { createAgentHandler } from "./server/agent/agentHandler.js";
 import { authMiddleware } from "./server/authMiddleware.js";
@@ -59,6 +61,8 @@ function usKlinePlugin() {
 
     middlewares.use("/api/auth", authHandler);
     middlewares.use("/api", authMiddleware);
+    registerApiPermissions(middlewares);
+    middlewares.use("/api/admin/users", createUserAdminHandler());
     middlewares.use("/api/us-kline", handler);
     middlewares.use("/api/us-profile", usProfileHandler);
     middlewares.use("/api/hk-kline", hkKlineHandler);

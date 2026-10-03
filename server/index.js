@@ -1,3 +1,4 @@
+import { registerApiPermissions } from "./apiPermissions.js";
 import path from "node:path";
 import express from "express";
 import { fileURLToPath } from "node:url";
@@ -22,6 +23,7 @@ import { createMacdFactorReturnsHandler } from "./macdFactorHandler.js";
 import { createMacdFactorDetailHandler } from "./macdFactorDetailHandler.js";
 import { createFactorsHandler } from "./factorsHandler.js";
 import { createFactorAdminHandler } from "./factorAdminHandler.js";
+import { createUserAdminHandler } from "./userAdminHandler.js";
 import { createAuthHandler } from "./authHandlers.js";
 import { createAgentHandler } from "./agent/agentHandler.js";
 import { authMiddleware } from "./authMiddleware.js";
@@ -40,6 +42,8 @@ app.use("/api/auth", createAuthHandler());
 
 // All routes below require a valid JWT
 app.use("/api", authMiddleware);
+registerApiPermissions(app);
+app.use("/api/admin/users", createUserAdminHandler());
 
 app.get("/api/us-kline", createUsKlineHandler());
 app.get("/api/us-profile", createUsProfileHandler());

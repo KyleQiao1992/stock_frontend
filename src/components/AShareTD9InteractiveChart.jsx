@@ -1,3 +1,6 @@
+import { authFetch as apiFetch } from "../lib/authClient.js";
+import UserAdminPanel from "./UserAdminPanel";
+import AccountPanel from "./AccountPanel";
 import StockAnalysisPanel from "./StockAnalysisPanel";
 import ChanOverlay from "./ChanOverlay";
 import ChanControls from "./ChanControls";
@@ -40,23 +43,6 @@ import { THEME_OPTIONS } from "@/theme";
 const THEME_ICONS = { light: Sun, dark: Moon, system: Monitor };
 const AgentMarkdownMessage = lazy(() => import("./AgentMarkdownMessage"));
 
-function apiFetch(url, opts = {}) {
-  const token = localStorage.getItem("token");
-  // 防御：合法 JWT 是纯 ASCII。若 token 含非 Latin1 字符（脏数据/旧残留），
-  // 直接拼进 Authorization 头会让浏览器抛 ByteString 错误。检测到就清理并跳回登录。
-  if (token && Array.from(token).some((ch) => ch.charCodeAt(0) > 0xff)) {
-    localStorage.removeItem("token");
-    localStorage.removeItem("userId");
-    localStorage.removeItem("username");
-    location.reload();
-    return Promise.reject(new Error("登录信息异常，已清理，请重新登录。"));
-  }
-  return fetch(url, {
-    ...opts,
-    headers: { ...(opts.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-  });
-}
-
 const PERIOD_OPTIONS = [
   { value: "101", label: "日K" },
   { value: "102", label: "周K" },
@@ -85,7 +71,9 @@ const MARKET_TABS = [
   { value: "hk", label: "港股" },
   { value: "us", label: "美股" },
   { value: "agent", label: "Agent" },
-  { value: "factor-research", label: "因子研究" },
+  { value: "factor-research", label: "因子研究", adminOnly: true },
+  { value: "user-admin", label: "账号管理", adminOnly: true },
+  { value: "account", label: "账号设置" },
 ];
 
 // 趋势大盘要展示的四大指数。secid 用于东方财富，tencentSymbol 用于腾讯兜底。
@@ -7887,7 +7875,7 @@ function FactorResearchPageLayout() {
 
   return (
     <div className="space-y-6">
-      {/* 左：成熟/预备 切换  右：因子管理（独立放置，便于后续按权限隐藏） */}
+      {/* 此页面整体仅管理员可访问。 */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm w-fit">
           {categoryTabs.map((t) => (
@@ -7906,7 +7894,6 @@ function FactorResearchPageLayout() {
           ))}
         </div>
 
-        {/* 权限上线后，把这个按钮包一层 role === 'admin' 判断即可整体隐藏 */}
         <button
           type="button"
           onClick={() => setFactorCategory("manage")}
@@ -9060,7 +9047,7 @@ function FavoritesToolbar({
   );
 }
 
-export default function AShareTD9InteractiveChart({ onLogout, themePreference = "system", onThemeChange }) {
+export default function AShareTD9InteractiveChart({ onLogout, user, themePreference = "system", onThemeChange }) {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [market, setMarket] = useState("ashare");
   // 初始为空：挂载后默认选中自选/收藏夹里的第一只，不再写死茅台/MSFT。
@@ -9171,7 +9158,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
   }, [rawRows, market, meta.sessionVwap, meta.sessionVwapPremium, meta.sessionVwapSource]);
 
   // 这些 tab 是独立页面，没有个股的代码搜索/周期/复权等控件，也不触发自动取数。
-  const isStandaloneMarket = market === "agent" || market === "factor-research" || market === "market-trend";
+  const isStandaloneMarket = market === "agent" || market === "factor-research" || market === "market-trend" || market === "user-admin" || market === "account";
   const currentCode = marketCodes[market] || "";
 
   const watchlistInput = watchlistInputMap[market] || "";
@@ -9939,7 +9926,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
         <div className="flex flex-col gap-3 rounded-2xl bg-white p-4 shadow-sm 2xl:flex-row 2xl:items-center 2xl:justify-between">
           <div>
             <div className="mb-3 inline-flex max-w-full flex-wrap rounded-2xl border border-slate-200 bg-slate-50 p-1 sm:rounded-full">
-              {MARKET_TABS.map((tab) => {
+              {MARKET_TABS.filter((tab) => !tab.adminOnly || user?.role === "admin").map((tab) => {
                 const active = market === tab.value;
                 return (
                   <button
@@ -9964,7 +9951,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                       } else if (tab.value === "ashare") {
                         setRawRows([]);
                         setMeta({ code: marketCodes.ashare || "", name: "" });
-                      } else if (tab.value === "agent" || tab.value === "factor-research" || tab.value === "market-trend") {
+                      } else if (tab.value === "agent" || tab.value === "factor-research" || tab.value === "market-trend" || tab.value === "user-admin" || tab.value === "account") {
                         setRawRows([]);
                         setMeta({ code: "", name: "" });
                       }
@@ -10603,6 +10590,12 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
               setMarket("ashare");
             }}
           />
+        ) : market === "account" ? (
+          <AccountPanel user={user} onLogout={onLogout} />
+        ) : user?.role !== "admin" ? (
+          <div role="alert" className="rounded-2xl bg-white p-6 text-sm text-slate-600">没有访问权限，仅管理员可访问此页面。</div>
+        ) : market === "user-admin" ? (
+          <UserAdminPanel user={user} />
         ) : (
           <FactorResearchErrorBoundary>
             <FactorResearchPageLayout />

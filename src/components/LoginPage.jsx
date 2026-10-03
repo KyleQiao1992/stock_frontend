@@ -9,7 +9,7 @@ async function apiFetch(path, body) {
   return res.json();
 }
 
-export default function LoginPage({ onLogin }) {
+export default function LoginPage({ onLogin, notice }) {
   const [mode, setMode] = useState("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -44,6 +44,7 @@ export default function LoginPage({ onLogin }) {
           {mode === "login" ? "登录" : "注册"}
         </h1>
 
+        {notice && <p role="status" className="mb-4 text-sm text-slate-600">{notice}</p>}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-700">用户名</label>

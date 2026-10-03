@@ -15,7 +15,7 @@ function createStore(user) {
     async get(key) { return values.get(key) || null; },
     async exists(key) { return values.has(key) ? 1 : 0; },
     async incr() { return 17; },
-    async set(key, value) { values.set(key, value); writes.push(key); },
+    async set(key, value, options = {}) { if (options.NX && values.has(key)) return null; values.set(key, value); writes.push(key); return "OK"; },
     async eval(script, { keys, arguments: args }) {
       assert.ok(script.includes('"KEEPTTL"'));
       if (values.get(keys[0]) !== args[0]) return null;
@@ -120,4 +120,13 @@ test("registration writes a hash and never stores the submitted plaintext passwo
   const user = JSON.parse(store.values.get("user:new_user"));
   assert.equal(Object.hasOwn(user, "password"), false);
   assert.equal(await verifyStoredPassword(user, "Fixture_only_pw_2026"), true);
+});
+
+
+test("new password hashing rejects UTF-8 truncation while legacy long plaintext can still verify", async () => {
+  await assert.rejects(hashPassword('a'.repeat(73)), /72/);
+  await assert.rejects(hashPassword('中'.repeat(25)), /72/);
+  const passwordHash = await hashPassword('中'.repeat(24));
+  assert.equal(await verifyStoredPassword({ passwordHash }, '中'.repeat(24)), true);
+  assert.equal(await verifyStoredPassword({ password: 'a'.repeat(73) }, 'a'.repeat(73)), true);
 });
