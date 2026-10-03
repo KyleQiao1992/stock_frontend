@@ -111,7 +111,7 @@ const TOOL_MAP = new Map(TOOL_SPECS.map((t) => [t.name, t]));
 export function makeToolContext(req) {
   let token = (req.headers["authorization"] || "").replace(/^Bearer\s+/i, "");
   // 防御：token 必须是合法 Latin1，否则放进请求头会抛 ByteString。脏 token 直接丢弃。
-  if (/[^\x00-\xff]/.test(token)) token = "";
+  if (Array.from(token).some((ch) => ch.charCodeAt(0) > 0xff)) token = "";
   const base = process.env.AGENT_API_BASE?.trim() || `http://${req.headers.host}`;
   return {
     async apiGet(pathname, params) {

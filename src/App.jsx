@@ -1,7 +1,8 @@
-import { Component, useState } from "react";
-import AShareTD9InteractiveChart from "./components/AShareTD9InteractiveChart";
+import { Component, lazy, Suspense, useState } from "react";
 import LoginPage from "./components/LoginPage";
 import { useTheme } from "./theme";
+
+const AShareTD9InteractiveChart = lazy(() => import("./components/AShareTD9InteractiveChart"));
 
 class AppErrorBoundary extends Component {
   constructor(props) {
@@ -68,11 +69,13 @@ export default function App() {
 
   return (
     <AppErrorBoundary>
-      <AShareTD9InteractiveChart
-        onLogout={handleLogout}
-        themePreference={themePreference}
-        onThemeChange={setThemePreference}
-      />
+      <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-canvas text-sm text-slate-500">正在加载行情工作台…</div>}>
+        <AShareTD9InteractiveChart
+          onLogout={handleLogout}
+          themePreference={themePreference}
+          onThemeChange={setThemePreference}
+        />
+      </Suspense>
     </AppErrorBoundary>
   );
 }
