@@ -2260,16 +2260,27 @@ function buildTrendPrediction(rawRows) {
   };
 }
 
+function popoverLeft(element, width) {
+  const left = element?.getBoundingClientRect().left || 0;
+  return Math.min(0, window.innerWidth - 16 - left - Math.min(width, window.innerWidth - 32));
+}
+
 function InfoTip({ text }) {
   const [open, setOpen] = useState(false);
+  const [popupLeft, setPopupLeft] = useState(0);
   const ref = useRef(null);
   useEffect(() => {
     if (!open) return undefined;
     const handlePointerDown = (e) => {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     };
+    const handleResize = () => setPopupLeft(popoverLeft(ref.current, 256));
+    window.addEventListener("resize", handleResize);
     document.addEventListener("mousedown", handlePointerDown);
-    return () => document.removeEventListener("mousedown", handlePointerDown);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      document.removeEventListener("mousedown", handlePointerDown);
+    };
   }, [open]);
   return (
     <span ref={ref} className="relative inline-flex">
@@ -2277,6 +2288,7 @@ function InfoTip({ text }) {
         type="button"
         onClick={(e) => {
           e.stopPropagation();
+          setPopupLeft(popoverLeft(ref.current, 256));
           setOpen((v) => !v);
         }}
         className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 hover:bg-slate-100"
@@ -2285,7 +2297,7 @@ function InfoTip({ text }) {
         <Info className="h-3 w-3" />
       </button>
       {open && (
-        <span className="absolute left-0 top-5 z-30 w-64 whitespace-pre-line rounded-xl border bg-white p-3 text-xs leading-relaxed text-slate-600 shadow-lg">
+        <span style={{ left: popupLeft }} className="absolute top-5 z-30 w-64 max-w-[calc(100vw-2rem)] whitespace-pre-line rounded-xl border bg-white p-3 text-xs leading-relaxed text-slate-600 shadow-lg">
           {text}
         </span>
       )}
@@ -2297,6 +2309,7 @@ function InfoTip({ text }) {
 // 反推（短期内流通股本近似不变），故最后一个点恰好等于面板显示的换手率。
 function TurnoverSparkline({ rows, currentRate, days = 30 }) {
   const [open, setOpen] = useState(false);
+  const [popupLeft, setPopupLeft] = useState(0);
   const [hoverIdx, setHoverIdx] = useState(null);
   const ref = useRef(null);
   const svgRef = useRef(null);
@@ -2305,8 +2318,13 @@ function TurnoverSparkline({ rows, currentRate, days = 30 }) {
     const handlePointerDown = (e) => {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     };
+    const handleResize = () => setPopupLeft(popoverLeft(ref.current, 240));
+    window.addEventListener("resize", handleResize);
     document.addEventListener("mousedown", handlePointerDown);
-    return () => document.removeEventListener("mousedown", handlePointerDown);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      document.removeEventListener("mousedown", handlePointerDown);
+    };
   }, [open]);
 
   const series = useMemo(() => {
@@ -2360,6 +2378,7 @@ function TurnoverSparkline({ rows, currentRate, days = 30 }) {
         onClick={(e) => {
           e.stopPropagation();
           setHoverIdx(null);
+          setPopupLeft(popoverLeft(ref.current, 240));
           setOpen((v) => !v);
         }}
         className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 hover:bg-slate-100"
@@ -2368,7 +2387,7 @@ function TurnoverSparkline({ rows, currentRate, days = 30 }) {
         <Activity className="h-3 w-3" />
       </button>
       {open && (
-        <span className="absolute left-0 top-5 z-30 w-60 rounded-xl border bg-white p-3 shadow-lg">
+        <span style={{ left: popupLeft }} className="absolute top-5 z-30 w-60 max-w-[calc(100vw-2rem)] rounded-xl border bg-white p-3 shadow-lg">
           {hasSeries ? (
             <>
               <span className="mb-1 flex items-center justify-between text-[11px]">
@@ -3304,7 +3323,7 @@ function SuspensionRiskBadge({ risk }) {
             className="fixed inset-0 z-30 cursor-default bg-transparent"
             onClick={() => setOpen(false)}
           />
-          <div className="absolute left-0 top-full z-40 mt-1 w-80 rounded-xl border border-slate-200 bg-white p-3 text-left text-xs shadow-lg">
+          <div className="absolute left-0 top-full z-40 mt-1 w-80 max-w-[calc(100vw-6rem)] rounded-xl border border-slate-200 bg-white p-3 text-left text-xs shadow-lg">
             <div className="mb-2 flex items-center justify-between gap-2">
               <div className="font-semibold text-slate-800">
                 停牌风险诊断 · {risk.board}
@@ -3357,7 +3376,7 @@ function ChartToolbar({
     <>
       <SuspensionRiskBadge risk={suspensionRisk} />
       <ChanControls options={chanOptions} onChange={onChanOptionsChange} />
-      <div className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 text-xs text-slate-600">
+      <div className="inline-flex max-w-full flex-wrap items-center gap-1 rounded-xl border border-slate-200 bg-white p-1 text-xs text-slate-600">
         <button
           type="button"
           onClick={() => setDrawOpen((v) => !v)}
@@ -4903,8 +4922,8 @@ function AgentChatPanel({ marketCodes }) {
   const hasConversation = messages.length > 1;
 
   return (
-    <div className="grid h-[calc(100vh-150px)] min-h-[520px] gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-      <aside className="flex h-full flex-col overflow-hidden rounded-2xl border bg-white p-4 shadow-sm">
+    <div className="grid gap-4 lg:h-[calc(100vh-150px)] lg:min-h-[520px] lg:grid-cols-[260px_minmax(0,1fr)]">
+      <aside className="flex max-h-[360px] flex-col overflow-hidden rounded-2xl border bg-white p-4 shadow-sm lg:h-full lg:max-h-none">
         <div className="text-sm font-semibold text-slate-700">研究上下文</div>
         <div className="mt-4 flex-1 space-y-5 overflow-y-auto text-sm">
           {/* 本次对话讨论过的标的 */}
@@ -4989,8 +5008,8 @@ function AgentChatPanel({ marketCodes }) {
         </div>
       </aside>
 
-      <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border bg-white shadow-sm">
-        <div className="flex items-center justify-between border-b px-5 py-4">
+      <section className="flex h-[calc(100dvh-2rem)] min-h-[640px] flex-col overflow-hidden rounded-2xl border bg-white shadow-sm lg:h-full lg:min-h-0">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-4">
           <div>
             <div className="text-lg font-semibold text-slate-800">股票研究 Agent</div>
             <div className="text-xs text-slate-500">对话保留在当前页面，刷新后清空。</div>
@@ -5001,13 +5020,13 @@ function AgentChatPanel({ marketCodes }) {
                 type="button"
                 onClick={() => setMessages([AGENT_WELCOME])}
                 disabled={loading}
-                className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-50"
+                className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-50"
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 清空
               </button>
             )}
-            <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-xs text-emerald-600">
+            <div className="inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full bg-emerald-50 px-3 py-1 text-xs text-emerald-600">
               <Bot className="h-3.5 w-3.5" />
               已接入
             </div>
@@ -5024,7 +5043,7 @@ function AgentChatPanel({ marketCodes }) {
                     <Bot className="h-4 w-4" />
                   </div>
                 )}
-                <div className="flex max-w-[760px] flex-col gap-1">
+                <div className="flex min-w-0 max-w-[760px] flex-col gap-1">
                   {message.steps?.length > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {message.steps.map((step, stepIndex) => (
@@ -5039,7 +5058,7 @@ function AgentChatPanel({ marketCodes }) {
                     </div>
                   )}
                   <div
-                    className={`rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${
+                    className={`min-w-0 break-words rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${
                       isUser
                         ? "bg-slate-900 text-white"
                         : message.isError
@@ -5101,7 +5120,7 @@ function AgentChatPanel({ marketCodes }) {
               }}
               rows={2}
               placeholder="输入股票、行业、策略或财报问题（Enter 发送，Shift+Enter 换行）"
-              className="max-h-40 min-h-12 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none placeholder:text-slate-400"
+              className="max-h-40 min-h-12 min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none placeholder:text-slate-400"
             />
             <Button type="button" onClick={() => sendMessage()} disabled={!input.trim() || loading} className="h-10 rounded-xl px-3">
               <Send className="h-4 w-4" />
@@ -5401,7 +5420,7 @@ function FactorDetailPanel({ status = "production" }) {
             </div>
           )}
         </div>
-        <div className={`flex items-center gap-2 ${favoritesMode ? "opacity-40" : ""}`}>
+        <div className={`flex min-w-0 flex-wrap items-center gap-2 ${favoritesMode ? "opacity-40" : ""}`}>
           <input
             type="date"
             value={startDate}
@@ -5421,7 +5440,7 @@ function FactorDetailPanel({ status = "production" }) {
             className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-slate-400 disabled:cursor-not-allowed"
           />
         </div>
-        <div className={`flex items-center gap-1.5 ${favoritesMode ? "opacity-40" : ""}`}>
+        <div className={`flex flex-wrap items-center gap-1.5 ${favoritesMode ? "opacity-40" : ""}`}>
           {[
             { label: "近7天", days: 7 },
             { label: "近1个月", months: 1 },
@@ -5458,7 +5477,7 @@ function FactorDetailPanel({ status = "production" }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-xl bg-slate-50 px-4 py-2.5 text-xs text-slate-400 leading-5">
-        <span className="shrink-0">收益率 = ( 第 N 交易日收盘价 &minus; 信号日收盘价 ) &divide; 信号日收盘价 &times; 100%</span>
+        <span className="min-w-0 break-words">收益率 = ( 第 N 交易日收盘价 &minus; 信号日收盘价 ) &divide; 信号日收盘价 &times; 100%</span>
         {result && result.stats && (
           <FactorStatsSummary stats={result.stats} startDate={result.startDate} endDate={result.endDate} total={result.total} />
         )}
@@ -5579,7 +5598,7 @@ function FactorBarChart({ data, label }) {
               className="flex items-center gap-2 text-xs"
               title={item.sampleSize != null ? `非重叠独立样本 n=${item.sampleSize}` : undefined}
             >
-              <div className="w-10 shrink-0 text-right text-slate-500">{item.factor}</div>
+              <div className="w-16 shrink-0 truncate text-right text-slate-500" title={item.factor}>{item.factor}</div>
               <div className="flex flex-1 items-center">
                 <div className="flex flex-1 justify-end pr-px">
                   {!isPos && (
@@ -7748,7 +7767,7 @@ function MarketTrendPageLayout({ onOpenStock }) {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
+        <div className="inline-flex max-w-full flex-wrap rounded-2xl border border-slate-200 bg-slate-50 p-1 sm:rounded-full">
           {TREND_TABS.map((tab) => {
             const active = tab.value === trendTab;
             return (
@@ -7858,14 +7877,14 @@ function FactorResearchPageLayout() {
   return (
     <div className="space-y-6">
       {/* 左：成熟/预备 切换  右：因子管理（独立放置，便于后续按权限隐藏） */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm w-fit">
           {categoryTabs.map((t) => (
             <button
               key={t.key}
               type="button"
               onClick={() => setFactorCategory(t.key)}
-              className={`rounded-lg px-5 py-1.5 text-sm font-medium transition-colors ${
+              className={`whitespace-nowrap rounded-lg px-5 py-1.5 text-sm font-medium transition-colors ${
                 factorCategory === t.key
                   ? "bg-slate-900 text-white"
                   : "text-slate-500 hover:text-slate-800"
@@ -7880,7 +7899,7 @@ function FactorResearchPageLayout() {
         <button
           type="button"
           onClick={() => setFactorCategory("manage")}
-          className={`rounded-xl border px-5 py-1.5 text-sm font-medium shadow-sm transition-colors ${
+          className={`whitespace-nowrap rounded-xl border px-5 py-1.5 text-sm font-medium shadow-sm transition-colors ${
             factorCategory === "manage"
               ? "border-slate-900 bg-slate-900 text-white"
               : "border-slate-200 bg-white text-slate-500 hover:text-slate-800"
@@ -8061,7 +8080,7 @@ function FactorAdminPanel() {
           className={`border-b border-slate-100 ${expanded ? "bg-slate-50/60" : ""} ${dim ? "text-slate-400" : "text-slate-700"}`}
         >
           <td className="px-3 py-3 align-top">
-            <div className="font-mono text-xs whitespace-nowrap">{r.name}</div>
+            <div className="truncate font-mono text-xs" title={r.name}>{r.name}</div>
             <button
               type="button"
               disabled={!hasDetails}
@@ -8079,7 +8098,7 @@ function FactorAdminPanel() {
               {hasDetails ? (expanded ? "收起资料" : "查看资料") : "暂无资料"}
             </button>
           </td>
-          <td className="px-3 py-3 align-top whitespace-nowrap">
+          <td className="break-words px-3 py-3 align-top">
             {r.displayName || r.label}
           </td>
           <td className="px-3 py-3 align-top">
@@ -8134,7 +8153,7 @@ function FactorAdminPanel() {
               formatUpdatedAt(r.updatedAt)
             )}
           </td>
-          <td className="px-3 py-3 align-top whitespace-nowrap text-xs">{r.updatedBy || "-"}</td>
+          <td className="break-all px-3 py-3 align-top text-xs">{r.updatedBy || "-"}</td>
         </tr>
         {expanded && (
           <tr className={`border-b border-slate-100 ${dim ? "text-slate-400" : "text-slate-700"}`}>
@@ -8239,10 +8258,10 @@ function FactorAdminPanel() {
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="text-base font-semibold text-slate-700">因子管理</div>
         {rows && (
-          <div className="flex gap-3 text-xs text-slate-500">
+          <div className="flex flex-wrap gap-3 text-xs text-slate-500">
             <span>共 {total} 个</span>
             <span>正式 {productionCount} · 预备 {preliminaryCount}</span>
             <span>已停用 {disabledCount}</span>
@@ -8263,17 +8282,17 @@ function FactorAdminPanel() {
       {loadError && <div className="mt-4 text-sm text-red-600">加载失败：{loadError}</div>}
 
       {rows && (
-        <div className="mt-4">
-          <table className="w-full table-fixed text-sm">
+        <div className="mt-4 overflow-x-auto">
+          <table aria-label="因子管理列表" className="w-full min-w-[1200px] table-fixed text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-slate-500">
-                <th className="w-[11%] px-3 py-3 text-left font-medium">因子名</th>
-                <th className="w-[18%] px-3 py-3 text-left font-medium">显示名</th>
-                <th className="w-[36%] px-3 py-3 text-left font-medium">简介</th>
-                <th className="w-[13%] px-3 py-3 text-left font-medium">状态</th>
-                <th className="w-[7%] px-3 py-3 text-left font-medium">启用</th>
-                <th className="w-[8%] px-3 py-3 text-left font-medium">更新时间</th>
-                <th className="w-[7%] px-3 py-3 text-left font-medium">更新人</th>
+                <th className="w-[160px] px-3 py-3 text-left font-medium">因子名</th>
+                <th className="w-[180px] px-3 py-3 text-left font-medium">显示名</th>
+                <th className="w-[360px] px-3 py-3 text-left font-medium">简介</th>
+                <th className="w-[160px] px-3 py-3 text-left font-medium">状态</th>
+                <th className="w-[80px] px-3 py-3 text-left font-medium">启用</th>
+                <th className="w-[140px] px-3 py-3 text-left font-medium">更新时间</th>
+                <th className="w-[120px] px-3 py-3 text-left font-medium">更新人</th>
               </tr>
             </thead>
             <tbody>
@@ -8398,7 +8417,7 @@ function FactorResearchPanel({ status = "production" }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="text-base font-semibold text-slate-700">因子整体表现</div>
           <div className="mt-1 text-xs text-slate-400">硬刷新会清空所有因子收益缓存，并基于最新历史信号与 K 线重新计算。</div>
@@ -8414,7 +8433,7 @@ function FactorResearchPanel({ status = "production" }) {
         </button>
       </div>
       {/* Tab 切换 + 日期选择器 */}
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center gap-4">
         <div className="flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
           {tabs.map((t) => (
             <button
@@ -8461,12 +8480,12 @@ function FactorResearchPanel({ status = "production" }) {
       </div>
 
       {/* 图表网格 */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {periods.slice(0, 3).map((p) => (
           <FactorBarChart key={p.key} data={p.data} label={p.displayLabel} />
         ))}
       </div>
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {periods.slice(3).map((p) => (
           <FactorBarChart key={p.key} data={p.data} label={p.displayLabel} />
         ))}
@@ -8629,7 +8648,7 @@ function WatchlistPanel({
             placeholder={placeholder}
             className="min-h-20 w-full resize-none bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
           />
-          <div className="mt-3 flex items-center justify-between gap-2">
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <div className="text-[11px] text-slate-400">支持逗号、空格、换行分隔，也支持一行一个代码</div>
             <Button onClick={onRefresh} disabled={loading} className="rounded-xl">
               <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
@@ -9913,7 +9932,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
       <div className="mx-auto max-w-[1600px] space-y-4">
         <div className="flex flex-col gap-3 rounded-2xl bg-white p-4 shadow-sm 2xl:flex-row 2xl:items-center 2xl:justify-between">
           <div>
-            <div className="mb-3 inline-flex rounded-full border border-slate-200 bg-slate-50 p-1">
+            <div className="mb-3 inline-flex max-w-full flex-wrap rounded-2xl border border-slate-200 bg-slate-50 p-1 sm:rounded-full">
               {MARKET_TABS.map((tab) => {
                 const active = market === tab.value;
                 return (
@@ -9922,6 +9941,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                     type="button"
                     className={`whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium transition ${active ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-900"}`}
                     onClick={() => {
+                      if (active) return;
                       marketRef.current = tab.value;
                       loadRunRef.current += 1;
                       setMarket(tab.value);
@@ -9950,8 +9970,8 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
               })}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-          {!isStandaloneMarket && <div className="grid grid-cols-2 gap-2 md:flex md:items-center">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {!isStandaloneMarket && <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center">
             <div className="relative col-span-2 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 md:w-56">
               <Search className="h-4 w-4 text-slate-400" />
               <input
@@ -10126,7 +10146,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
             </Button>
           </div>}
           {onLogout && (
-            <div className="relative shrink-0">
+            <div className="relative ml-auto shrink-0">
               <button
                 type="button"
                 onClick={() => setShowProfileMenu((v) => !v)}
@@ -10191,14 +10211,14 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
             <Card className="rounded-2xl">
               <CardContent className="p-4">
                 <div className="text-sm text-slate-500">当前标的</div>
-                <div className="mt-1 flex items-center gap-2">
-                  <div className="text-2xl font-semibold">{meta.name || "-"}</div>
+                <div className="mt-1 flex min-w-0 items-center gap-2">
+                  <div className="min-w-0 break-words text-2xl font-semibold">{meta.name || "-"}</div>
                   {activeMetaCode ? (
                     <button
                       type="button"
                       onClick={() => toggleFavorite({ code: activeMetaCode, name: meta.name || activeMetaCode }, market)}
                       disabled={activeMetaFavoritePending}
-                      className={`inline-flex h-8 w-8 items-center justify-center rounded-full border transition ${
+                      className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border transition ${
                         activeMetaFavorited
                           ? "border-amber-200 bg-amber-50 text-amber-500 hover:bg-amber-100"
                           : "border-slate-200 bg-white text-slate-400 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-600"
@@ -10212,38 +10232,38 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                 </div>
                 <div className="text-sm text-slate-500">{meta.code || currentCode}</div>
                 {latest && (
-                  <div className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                    <div className="col-span-2 flex justify-between">
+                  <div className="quote-metrics mt-4 grid gap-x-4 gap-y-2 text-sm">
+                    <div className="quote-metric quote-metric-wide flex justify-between">
                       <span>日期</span>
                       <span>{latest.date}{latest.isIntradayEstimate ? " 盘中" : ""}</span>
                     </div>
                     {market === "hk" && meta.quoteTime ? (
-                      <div className="col-span-2 flex justify-between gap-3">
+                      <div className="quote-metric quote-metric-wide quote-snapshot flex justify-between gap-3">
                         <span>腾讯快照</span>
                         <span className="text-right">{meta.quoteTime} · {meta.currency || "HKD"}</span>
                       </div>
                     ) : null}
-                    <div className="flex justify-between">
+                    <div className="quote-metric flex justify-between">
                       <span>{market === "hk" ? "最新" : "收盘"}</span>
                       <span className={`font-semibold ${latestColor}`}>{displayedPrice.toFixed(2)}</span>
                     </div>
-                    <div className="flex justify-between">
+                    <div className="quote-metric flex justify-between">
                       <span>涨跌幅</span>
                       <span className={displayedPct >= 0 ? "text-red-600" : "text-green-700"}>
                         {Number.isFinite(displayedPct) ? displayedPct.toFixed(2) : "-"}%
                       </span>
                     </div>
-                    <div className="flex justify-between">
+                    <div className="quote-metric flex justify-between">
                       <span>成交量</span>
                       <span>{formatNumber(latest.volume)}</span>
                     </div>
                     {market === "hk" && Number.isFinite(meta.boardLot) ? (
-                      <div className="flex justify-between">
+                      <div className="quote-metric flex justify-between">
                         <span>每手股数</span>
                         <span>{meta.boardLot}</span>
                       </div>
                     ) : null}
-                    <div className="flex justify-between">
+                    <div className="quote-metric flex justify-between">
                       <span className="inline-flex items-center">
                         换手率
                         <InfoTip text={"换手率 = 某段时期成交量 ÷ 流通总股数 × 100%，反映流通性与活跃度。\n\n<3%  多数股票常态，3% 是活跃分界线\n3%～7%  相对活跃，较适合波段操作\n7%～10%  强势股，高度活跃\n10%～15%  顶部上升浪，大股本超10%多已临近见顶\n>15%  中小盘疯狂冲顶、分歧加大、上行空间有限，连续高换手后见大阴线宜减仓\n>20%  极少见，多为疯狂炒作的题材股\n\n高于10% 即属异常活跃，可结合顶部反转K线（吞没/乌云盖顶等）判断见顶。"} />
@@ -10251,19 +10271,19 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                       </span>
                       <span>{Number.isFinite(meta.turnoverRate) ? `${meta.turnoverRate.toFixed(2)}%` : "-"}</span>
                     </div>
-                    <div className="flex justify-between">
+                    <div className="quote-metric flex justify-between">
                       <span>总市值{market === "hk" && meta.currency ? `（${meta.currency}）` : ""}</span>
                       <span>{formatNumber(meta.marketCap)}</span>
                     </div>
-                    <div className="flex justify-between">
+                    <div className="quote-metric flex justify-between">
                       <span>流通市值{market === "hk" && meta.currency ? `（${meta.currency}）` : ""}</span>
                       <span>{formatNumber(meta.floatMarketCap)}</span>
                     </div>
-                    <div className="flex justify-between">
+                    <div className="quote-metric flex justify-between">
                       <span>市盈</span>
                       <span>{Number.isFinite(meta.peRatio) ? meta.peRatio.toFixed(2) : "-"}</span>
                     </div>
-                    <div className="flex justify-between">
+                    <div className="quote-metric flex justify-between">
                       <span className="inline-flex items-center">
                         量比
                         <InfoTip text={(market === "ashare" ? "" : "港美股量比直接取腾讯行情字段，不使用本地估算。港股与美股字段位置不同，已通过股票样本交叉核对；接口没有公开字段文档。数据时间见下方腾讯快照时间，缺失时不填零。\n\n") + "量比 = 当日每分钟均量 ÷ 过去5日每分钟均量，衡量成交活跃度。\n\n<0.8  缩量\n0.8～1.5  正常\n1.5～2.5  温和放量，配合股价缓升较健康\n2.5～5  明显放量，突破支撑/阻力时有效性更高\n5～10  剧烈放量，低位突破后空间大、高位则警惕见顶\n>10  极端放量，涨势中多预示见顶、可考虑反向\n\n涨停时量比偏小（<1）次日续涨概率高。"} />
@@ -10272,7 +10292,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                         {Number.isFinite(meta.volumeRatio) ? meta.volumeRatio.toFixed(2) : market === "ashare" ? "-" : "源未提供"}
                       </span>
                     </div>
-                    <div className="flex justify-between">
+                    <div className="quote-metric flex justify-between">
                       <span className="inline-flex items-center">
                         内盘
                         <span className="ml-1 font-semibold text-green-700">S</span>
@@ -10280,7 +10300,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                       </span>
                       <span className="text-green-700">{Number.isFinite(meta.innerVol) ? formatNumber(meta.innerVol) : market === "ashare" ? "-" : <span className="text-xs text-slate-400">源未提供</span>}</span>
                     </div>
-                    <div className="flex justify-between">
+                    <div className="quote-metric flex justify-between">
                       <span className="inline-flex items-center">
                         外盘
                         <span className="ml-1 font-semibold text-red-600">B</span>
@@ -10288,12 +10308,12 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                       <span className="text-red-600">{Number.isFinite(meta.outerVol) ? formatNumber(meta.outerVol) : market === "ashare" ? "-" : <span className="text-xs text-slate-400">源未提供</span>}</span>
                     </div>
                     {market !== "ashare" && meta.volumeRatioSource === "tencent" ? (
-                      <div className="col-span-2 text-xs text-slate-400">
+                      <div className="quote-metric-wide text-xs text-slate-400">
                         量比：腾讯 · {meta.indicatorsQuoteTime || meta.quoteTime}
                         {market === "hk" ? " 香港时间" : " 美东时间"}
                       </div>
                     ) : null}
-                    <div className="col-span-2 flex justify-between">
+                    <div className="quote-metric quote-metric-wide flex justify-between">
                       <span className="inline-flex items-center">
                         RSI14
                         <InfoTip text={"RSI = 100 − 100 ÷ (1 + 近14日平均涨幅 ÷ 近14日平均跌幅)，衡量涨跌动能强弱，取值 0～100。\n\n>75  高位过热，追高风险大，常见滞涨/回调\n60～75  强势区，多头动能占优\n40～60  中性震荡，方向不明\n30～40  弱势区，空头动能占优\n<30  低位超跌，易出现反弹，但下跌趋势中可长期钝化\n\n单看数值意义有限：强趋势中 RSI 会长时间贴在高位或低位（钝化），更实用的是「价格创新高而 RSI 未创新高」的顶背离，以及反向的底背离。"} />
@@ -10313,7 +10333,7 @@ export default function AShareTD9InteractiveChart({ onLogout, themePreference = 
                         {rsiInfo.ready ? <span className="text-xs text-slate-400">{rsiInfo.label}</span> : null}
                       </span>
                     </div>
-                    <div className="col-span-2 flex justify-between">
+                    <div className="quote-metric quote-metric-wide flex justify-between">
                       <span className="inline-flex items-center">
                         VWAP20
                         <InfoTip text={"VWAP = Σ(单日均价 × 当日成交量) ÷ Σ成交量，即近 20 个交易日成交量加权平均价，近似这段时间买入者的平均成本。\n\n股价 > VWAP  多数持仓浮盈，回踩 VWAP 常成支撑\n股价 < VWAP  多数持仓套牢，反弹到 VWAP 常遇解套抛压\n偏离 ±10% 以上  乖离偏大，有向均价回归的需求\n\n右侧百分比为收盘价相对 VWAP 的溢价（+）或折价（−）。日线数据没有分笔明细，单日均价优先用 成交额 ÷ 成交量；数据源未提供成交额时用 (最高+最低+收盘)/3 近似，与券商分笔口径会有小幅差异。"} />

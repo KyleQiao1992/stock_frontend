@@ -25,12 +25,17 @@ function industryMap() {
 }
 
 const loadIndustries = async () => industryMap();
+const loadCapitals = async ({date, stocks}) => ({capitalSource: "eastmoney", capitalDate: date,
+  capitalUpdatedAt: new Date(NOW).toISOString(), coverage: {expected: stocks.length, received: stocks.length},
+  capitals: stocks.map((row) => ({symbol: row.symbol || `${row.exchange || (row.market === 1 ? "sh" : "sz")}${row.code}`,
+    cap: row.cap, floatCap: row.floatCap, close: row.close, quoteDate: date}))});
+function testFallbacks(options) { return createMarketSnapshotFallbacks({loadCapitals, ...options}); }
 
 test("alternate snapshots share one successful full fetch and retain only current-day measurements", async () => {
   let calls = 0;
   let maps = 0;
   const requests = [];
-  const fallbacks = createMarketSnapshotFallbacks({now: () => NOW,
+  const fallbacks = testFallbacks({now: () => NOW,
     loadIndustries: async () => { maps += 1; return industryMap(); },
     loadSnapshot: async (options) => { calls += 1; requests.push(options); return snapshot(); }});
   const [heatmap, today] = await Promise.all([fallbacks.heatmap(), fallbacks.today()]);
@@ -63,7 +68,7 @@ test("alternate snapshots share one successful full fetch and retain only curren
 
 test("failed and old alternate snapshots cannot become a successful reusable cache", async () => {
   let calls = 0;
-  const fallbacks = createMarketSnapshotFallbacks({now: () => NOW, loadIndustries, loadSnapshot: async () => {
+  const fallbacks = testFallbacks({now: () => NOW, loadIndustries, loadSnapshot: async () => {
     calls += 1;
     if (calls === 1) throw new Error("provider unavailable");
     const result = snapshot();
@@ -78,7 +83,7 @@ test("failed and old alternate snapshots cannot become a successful reusable cac
 
 test("an unavailable verified Eastmoney map cannot produce a heatmap or an unverified dashboard universe", async () => {
   const calls = [];
-  const fallbacks = createMarketSnapshotFallbacks({now: () => NOW,
+  const fallbacks = testFallbacks({now: () => NOW,
     loadIndustries: async () => { throw new Error("verified industry source unavailable"); },
     loadSnapshot: async ({withIndustries}) => {
     calls.push(withIndustries);
@@ -92,7 +97,7 @@ test("an unavailable verified Eastmoney map cannot produce a heatmap or an unver
 
 test("freshly fetched closing quotes remain dated correctly across a long market holiday", async () => {
   const later = Date.parse("2026-10-08T04:00:00Z");
-  const fallbacks = createMarketSnapshotFallbacks({now: () => later, loadIndustries, loadSnapshot: async () => {
+  const fallbacks = testFallbacks({now: () => later, loadIndustries, loadSnapshot: async () => {
     const result = snapshot();
     result.metadata.updatedAt = new Date(later).toISOString();
     return result;
@@ -115,7 +120,7 @@ async function request(handler, query = "") {
 test("cold outage handlers expose real alternate data without writing it to full Eastmoney caches", async () => {
   const values = new Map();
   const redis = {get: async (key) => values.get(key), set: async (key, value) => values.set(key, value)};
-  const fallbacks = createMarketSnapshotFallbacks({now: () => NOW, loadIndustries, loadSnapshot: async () => snapshot()});
+  const fallbacks = testFallbacks({now: () => NOW, loadIndustries, loadSnapshot: async () => snapshot()});
   const options = {now: () => NOW, getRedis: async () => redis, load: async () => {throw new Error("all Eastmoney hosts down");}};
   const heatmap = createMarketHeatmapHandler({...options, historyHandler: () => false, loadFallback: fallbacks.heatmap});
   const today = createTodayMarketHandler({...options, loadFallback: fallbacks.today});
@@ -142,7 +147,7 @@ test("cold outage handlers expose real alternate data without writing it to full
 
 test("manual refresh bypasses the quote reuse window while concurrent requests share one forced scan", async () => {
   let calls = 0;
-  const fallbacks = createMarketSnapshotFallbacks({now: () => NOW, loadIndustries,
+  const fallbacks = testFallbacks({now: () => NOW, loadIndustries,
     loadSnapshot: async () => { calls += 1; return snapshot(); }});
   await fallbacks.heatmap();
   await fallbacks.today();
@@ -157,7 +162,7 @@ test("manual refresh bypasses the quote reuse window while concurrent requests s
 test("a missing ownership or duplicate industry identity cannot become reusable quote data", async () => {
   for (const failure of ["missing", "duplicate"]) {
     let calls = 0;
-    const fallbacks = createMarketSnapshotFallbacks({now: () => NOW,
+    const fallbacks = testFallbacks({now: () => NOW,
       loadIndustries: async () => {
         calls += 1;
         const result = industryMap();
@@ -178,7 +183,7 @@ test("a missing ownership or duplicate industry identity cannot become reusable 
 test("confirmed listed CDRs are supplemented and classified under the same original industry taxonomy", async () => {
   const cdr = {symbol: "sh689009", code: "689009", name: "上市CDR样本", listingDate: "2020-10-01"};
   let options;
-  const fallbacks = createMarketSnapshotFallbacks({now: () => NOW,
+  const fallbacks = testFallbacks({now: () => NOW,
     loadIndustries: async () => {
       const result = industryMap();
       result.listedCdrs = [cdr];
@@ -201,7 +206,7 @@ test("confirmed listed CDRs are supplemented and classified under the same origi
 });
 
 test("Sina quote fallback retains the same Eastmoney taxonomy rather than its own industry groups", async () => {
-  const fallbacks = createMarketSnapshotFallbacks({now: () => NOW, loadIndustries,
+  const fallbacks = testFallbacks({now: () => NOW, loadIndustries,
     loadSnapshot: async () => snapshot({quoteSource: "sina"})});
   const heatmap = await fallbacks.heatmap();
   const today = await fallbacks.today();
@@ -209,4 +214,58 @@ test("Sina quote fallback retains the same Eastmoney taxonomy rather than its ow
   assert.equal(today.source, "eastmoney-sina");
   assert.deepEqual(heatmap.payload.industries.map((row) => row.name).sort(), ["半导体", "银行Ⅱ"]);
   assert.equal(heatmap.payload.classificationSource, "eastmoney");
+});
+
+
+test("misdated, incomplete or differently priced capital cannot become a reusable heatmap", async (t) => {
+  for (const [name, change] of [
+    ["different provider", (v) => {v.capitalSource = "tencent";}],
+    ["different session", (v) => {v.capitalDate = "2026-09-29";}],
+    ["incomplete coverage", (v) => {v.coverage.received -= 1;}],
+    ["price differs", (v) => {v.capitals[0].close += 1;}],
+    ["duplicate capital identity", (v) => {v.capitals[1].symbol = v.capitals[0].symbol;}],
+  ]) await t.test(name, async () => {
+    let calls = 0;
+    const fallbacks = testFallbacks({now: () => NOW, loadIndustries, loadSnapshot: async () => snapshot(),
+      loadCapitals: async (options) => {calls += 1; const result = await loadCapitals(options); if(calls === 1) change(result); return result;}});
+    await assert.rejects(fallbacks.heatmap(), (e) => e.code === "FALLBACK_SNAPSHOT_INVALID");
+    assert.equal((await fallbacks.heatmap()).payload.capitalSource, "eastmoney");
+    assert.equal(calls, 2);
+  });
+});
+
+test("industry colors use verified Eastern float capital rather than alternate share weights", async () => {
+  const fallbacks = testFallbacks({now: () => NOW, loadIndustries,
+    loadSnapshot: async () => {const s = snapshot();s.stocks[1].quoteDate = "2026-09-30";return s;},
+    loadCapitals: async (options) => {const v = await loadCapitals(options);v.capitals[0].floatCap = 1e8;v.capitals[1].floatCap = 1e8;return v;}});
+  const result = await fallbacks.heatmap();
+  assert.equal(result.payload.industries.find((g) => g.name === "半导体").pct, -1.5);
+  assert.equal(result.payload.capitalSource, "eastmoney");
+});
+
+
+test("one missing quote and one older quote cannot block a verified-capital snapshot or inflate breadth", async () => {
+  const fallbacks = testFallbacks({now: () => NOW, loadIndustries,
+    loadSnapshot: async () => {const result = snapshot();Object.assign(result.stocks[2], {close: null, open: null, pct: null, quoteDate: null, amount: null});return result;},
+    loadCapitals: async (options) => {const result = await loadCapitals(options);result.capitals[1].close = 20;result.capitals[2].close = 30;return result;}});
+  const heatmap = await fallbacks.heatmap();
+  const today = await fallbacks.today();
+  assert.equal(heatmap.payload.totalStocks, 3);
+  assert.deepEqual(heatmap.payload.quoteCoverage, {quoted: 1, total: 3, unavailable: 2});
+  assert.equal(today.breadth.total, 1);
+  assert.equal(today.breadth.up, 1);
+  assert.equal(today.breadth.down, 0);
+  for (const s of heatmap.snapshot.stocks.filter((s) => s.quoteDate !== "2026-09-30")) {
+    assert.equal(s.pct, null);assert.equal(s.amount, null);assert.equal(s.close, null);
+    assert.ok(s.cap > 0 && s.floatCap > 0);
+  }
+});
+
+test("snapshot metadata cannot redirect actual quotations to a different valuation session", async () => {
+  let capitalCalls = 0;
+  const fallbacks = testFallbacks({now: () => NOW, loadIndustries,
+    loadSnapshot: async () => {const result = snapshot();result.metadata.quoteTime = "2026-10-02T07:00:00Z";return result;},
+    loadCapitals: async (options) => {capitalCalls += 1;return loadCapitals(options);}});
+  await assert.rejects(fallbacks.heatmap(), (e) => e.code === "FALLBACK_SNAPSHOT_INVALID");
+  assert.equal(capitalCalls, 0);
 });

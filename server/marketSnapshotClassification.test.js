@@ -45,10 +45,11 @@ function today(at = START) {
 }
 
 function alternate(body) {
-  return {...body, source: GOOD_SOURCE, mode: "snapshot", partial: true,
+  return {quoteCoverage: {total: 3, quoted: body.breadth?.total ?? body.totalStocks, unavailable: 3 - (body.breadth?.total ?? body.totalStocks)}, ...body, source: GOOD_SOURCE, mode: "snapshot", partial: true,
     snapshotSchemaVersion: 3, universePolicy: "listed-ashare-with-cdr",
     classificationSource: "eastmoney", industryLevel: 2, classification: "东方财富行业",
-    classificationCoverage: {classified: 3, total: 3, unclassified: 0, conflicts: 0}};
+    classificationCoverage: {classified: 3, total: 3, unclassified: 0, conflicts: 0},
+    capitalSource: "eastmoney", capitalDate: "2026-09-30", capitalCoverage: {expected: 3, received: 3}};
 }
 
 async function request(handler, query = "") {
@@ -110,7 +111,24 @@ for (const kind of kinds) {
 
 test("heatmap rejects unknown industry, incomplete coverage and different classification semantics in v3", async (t) => {
   const changes = [
+    ["missing mode marker", (body) => { delete body.mode; }],
+    ["missing partial marker", (body) => { delete body.partial; }],
+    ["source with all quality markers removed", (body) => {
+      for (const key of ["mode", "partial", "snapshotSchemaVersion", "classificationCoverage", "capitalSource", "capitalCoverage"]) delete body[key];
+      body.industries[0].name = "未分类";
+    }],
+    ["conflicting quote date", (body) => { body.quoteTime = "2026-10-02T07:00:00Z"; }],
+    ["capital source", (body) => { body.capitalSource = "tencent"; }],
+    ["capital date", (body) => { body.capitalDate = "2026-09-29"; }],
+    ["capital coverage", (body) => { body.capitalCoverage.received = 2; }],
     ["schema", (body) => { body.snapshotSchemaVersion = 2; }],
+    ["universe policy", (body) => { body.universePolicy = "sina-hs-a"; }],
+    ["quote coverage missing", (body) => { delete body.quoteCoverage; }],
+    ["quote coverage total", (body) => { body.quoteCoverage.total = 2; }],
+    ["quoted count", (body) => { body.quoteCoverage.quoted = 0; }],
+    ["unavailable count", (body) => { body.quoteCoverage.unavailable = 1; }],
+    ["null industry", (body) => { body.industries[0] = null; }],
+    ["null stock", (body) => { body.industries[0].stocks = [null]; }],
     ["classification source", (body) => { body.classificationSource = "sina"; }],
     ["industry level", (body) => { body.industryLevel = 1; }],
     ["classification name", (body) => { body.classification = "新浪行业"; }],
@@ -138,7 +156,23 @@ test("heatmap rejects unknown industry, incomplete coverage and different classi
 
 test("today snapshot requires schema 3 and the agreed listed-A-share universe", async (t) => {
   for (const [name, change] of [
+    ["missing mode marker", (body) => { delete body.mode; }],
+    ["missing partial marker", (body) => { delete body.partial; }],
+    ["source with all quality markers removed", (body) => {
+      for (const key of ["mode", "partial", "snapshotSchemaVersion", "classificationCoverage", "capitalSource", "capitalCoverage"]) delete body[key];
+    }],
+    ["conflicting quote date", (body) => { body.quoteTime = "2026-10-02T07:00:00Z"; }],
+    ["capital source", (body) => { body.capitalSource = "tencent"; }],
+    ["capital date", (body) => { body.capitalDate = "2026-09-29"; }],
+    ["capital coverage", (body) => { body.capitalCoverage.received = 2; }],
     ["schema", (body) => { body.snapshotSchemaVersion = 2; }],
+    ["quote coverage missing", (body) => { delete body.quoteCoverage; }],
+    ["quote count mismatch", (body) => { body.quoteCoverage.quoted -= 1; }],
+    ["quote universe mismatch", (body) => { body.quoteCoverage.total = 100; }],
+    ["unclassified members", (body) => { body.classificationCoverage.unclassified = 1; }],
+    ["classification source", (body) => { body.classificationSource = "sina"; }],
+    ["classification name", (body) => { body.classification = "新浪行业"; }],
+    ["classification level", (body) => { body.industryLevel = 1; }],
     ["policy missing", (body) => { delete body.universePolicy; }],
     ["policy different", (body) => { body.universePolicy = "sina-hs-a"; }],
   ]) await t.test(name, async () => {

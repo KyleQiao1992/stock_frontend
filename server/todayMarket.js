@@ -1,6 +1,7 @@
 import { getRedisClient } from "./redisClient.js";
 import { EM_UT, EM_FETCH_HEADERS, mapWithConcurrency } from "./boardTrend.js";
 import { createMarketSnapshotCache } from "./marketSnapshotCache.js";
+import { hasSameDayMarketCapital } from "./eastmoneyMarketCapital.js";
 
 // 涨停/跌停/炸板池接口用的是另一套 ut 令牌（push2ex），和行情 clist 的 EM_UT 不同。
 const ZT_UT = "7eea3edcaed734bea9cbfc24409ed989";
@@ -429,10 +430,20 @@ function validTodayMarket(payload) {
   if (payload.premium != null && (!nonnegativeInt(payload.premium.count) || !Number.isFinite(payload.premium.avg)
     || !ratioOrUnknown(payload.premium.redRate) || !Array.isArray(payload.premium.dist)
     || !payload.premium.dist.every((row) => row && typeof row.key === "string" && typeof row.label === "string" && nonnegativeInt(row.count)))) return false;
-  if (payload.partial || payload.mode === "snapshot") return payload.snapshotSchemaVersion === 3
+  if (payload.partial || payload.mode === "snapshot" || ["eastmoney-tencent", "eastmoney-sina"].includes(payload.source)) {
+    const coverage = payload.classificationCoverage;
+    const quotes = payload.quoteCoverage;
+    return payload.partial === true && payload.mode === "snapshot" && payload.snapshotSchemaVersion === 3
     && payload.universePolicy === "listed-ashare-with-cdr"
+    && payload.classificationSource === "eastmoney" && payload.classification === "东方财富行业" && payload.industryLevel === 2
+    && nonnegativeInt(coverage?.total) && coverage.total > 0 && coverage.classified === coverage.total
+    && coverage.unclassified === 0 && coverage.conflicts === 0
+    && quotes?.total === coverage.total && nonnegativeInt(quotes.quoted) && nonnegativeInt(quotes.unavailable)
+    && quotes.quoted + quotes.unavailable === quotes.total && quotes.quoted === counts.total
+    && hasSameDayMarketCapital(payload, coverage.total)
     && ["eastmoney-tencent", "eastmoney-sina"].includes(payload.source);
-  return Boolean(payload.strong && payload.consecutive && payload.heat && payload.yangYin);
+  }
+  return (!payload.source || payload.source === "eastmoney") && Boolean(payload.strong && payload.consecutive && payload.heat && payload.yangYin);
 }
 
 export function createTodayMarketHandler({load = computeTodayMarket, loadFallback = null, getRedis = getRedisClient, now = Date.now} = {}) {

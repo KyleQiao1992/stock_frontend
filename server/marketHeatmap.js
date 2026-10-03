@@ -2,6 +2,7 @@ import { handleHeatmapHistory } from "./heatmapHistory.js";
 import { getRedisClient } from "./redisClient.js";
 import { EM_UT, EM_FETCH_HEADERS, mapWithConcurrency } from "./boardTrend.js";
 import { createMarketSnapshotCache } from "./marketSnapshotCache.js";
+import { hasSameDayMarketCapital } from "./eastmoneyMarketCapital.js";
 
 // 市场热力图：一次全 A 快照，按东财细分行业（f100，如「半导体」「银行Ⅱ」）聚合成树图数据。
 // 行业视图和个股视图共用同一份数据，保证两边的面积/涨跌完全自洽。
@@ -262,19 +263,28 @@ function validHeatmap(payload) {
   const valid = payload?.live === true && Number.isInteger(payload.totalStocks) && payload.totalStocks > 0
     && counts.every((count) => Number.isInteger(count) && count >= 0) && counts.reduce((sum, count) => sum + count, 0) === payload.totalStocks
     && Array.isArray(payload.industries) && payload.industries.length > 0
-    && payload.industries.every((row) => typeof row.name === "string" && row.name
+    && payload.industries.every((row) => row && typeof row.name === "string" && row.name
       && Number.isInteger(row.count) && row.count > 0 && Array.isArray(row.stocks) && row.stocks.length <= row.count
       && [row.cap, row.floatCap, row.amount, row.mainInflow, row.pct, row.pctEqual].every(finiteOrNull)
       && row.stocks.every((stock) => stock && typeof stock.code === "string" && stock.code && typeof stock.name === "string" && stock.name
         && [stock.cap, stock.floatCap, stock.amount, stock.mainInflow, stock.pct].every(finiteOrNull)));
   if (!valid) return false;
-  if (!payload.partial && payload.mode !== "snapshot") return true;
+  const alternate = ["eastmoney-tencent", "eastmoney-sina"].includes(payload.source);
+  if (!alternate && !payload.partial && payload.mode !== "snapshot") return !payload.source || payload.source === "eastmoney";
   const coverage = payload.classificationCoverage;
-  return payload.snapshotSchemaVersion === 3 && payload.classificationSource === "eastmoney"
+  const quotes = payload.quoteCoverage;
+  return payload.partial === true && payload.mode === "snapshot"
+    && payload.snapshotSchemaVersion === 3 && payload.universePolicy === "listed-ashare-with-cdr"
+    && payload.classificationSource === "eastmoney"
     && payload.industryLevel === 2 && payload.classification === "东方财富行业"
     && ["eastmoney-tencent", "eastmoney-sina"].includes(payload.source)
+    && hasSameDayMarketCapital(payload, payload.totalStocks)
     && coverage?.total === payload.totalStocks && coverage.classified === payload.totalStocks
     && coverage.unclassified === 0 && coverage.conflicts === 0
+    && quotes?.total === payload.totalStocks && Number.isSafeInteger(quotes.quoted) && quotes.quoted >= 0
+    && Number.isSafeInteger(quotes.unavailable) && quotes.unavailable >= 0
+    && quotes.quoted === payload.up + payload.down + payload.flat && quotes.unavailable === (payload.suspended ?? 0)
+    && quotes.quoted + quotes.unavailable === quotes.total
     && payload.industries.every((row) => row.name.trim() && !["未分类", "其他", "-"].includes(row.name.trim()))
     && payload.industries.reduce((sum, row) => sum + row.count, 0) === payload.totalStocks;
 }

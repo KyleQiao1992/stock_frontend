@@ -116,3 +116,16 @@ test("an older alternate has an identifiable rejection while the original cached
   assert.equal(result.updatedAt, original.updatedAt);
   assert.equal(messages.at(-1), `[${KEY}] fallback failed (type=upstream, code=FALLBACK_QUOTE_OLDER, stage=quote-comparison, status=unknown)`);
 });
+
+
+test("classification and dated-capital failures expose controlled codes without raw provider payloads", async (t) => {
+  const messages = captureWarnings(t);
+  for (const [code, stage] of [["EASTMONEY_CLASSIFICATION_INVALID", "industry-map"],
+    ["EM_CAPITAL_CLOSE_MISMATCH", "market-capital"], ["EM_CAPITAL_COVERAGE_INCOMPLETE", "market-capital"]]) {
+    const cache = create({load: async () => {throw new Error(SECRET);},
+      loadFallback: async () => {throw Object.assign(new Error(SECRET), {code, stage});}});
+    await assert.rejects(cache.get(null, {retry: true}));
+    assert.equal(messages.at(-1), `[${KEY}] fallback failed (type=upstream, code=${code}, stage=${stage}, status=unknown)`);
+  }
+  assert.ok(messages.every((line) => !line.includes(SECRET)));
+});

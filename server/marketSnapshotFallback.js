@@ -1,11 +1,12 @@
 import { loadSinaMarketSnapshot } from "./sinaMarketSnapshot.js";
 import { loadEastmoneyIndustryMap } from "./eastmoneyIndustryMap.js";
+import { loadEastmoneyMarketCapital } from "./eastmoneyMarketCapital.js";
 import { aggregateHeatmapStocks } from "./marketHeatmap.js";
 import { buildSnapshotPanels } from "./todayMarket.js";
 
 // Share the successful alternate snapshot between the heatmap and its dashboard
 // prefetch. Nothing is fetched at import time and failures are never cached.
-export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSnapshot, loadIndustries = loadEastmoneyIndustryMap, now = Date.now } = {}) {
+export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSnapshot, loadIndustries = loadEastmoneyIndustryMap, loadCapitals = loadEastmoneyMarketCapital, now = Date.now } = {}) {
   let recent = null;
   let inflight = null;
   const usable = (entry) => entry && now() >= entry.at && now() - entry.at < 60000;
@@ -35,8 +36,12 @@ export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSna
       if (!result.stocks?.length || !Number.isFinite(at) || at > now() || now() - at >= 14 * 86400000) {
         throw invalid("备用行情没有有效的近期数据");
       }
+      const quoteDate = new Date(at + 8 * 3600000).toISOString().slice(0, 10);
+      if (data.dataDate !== quoteDate || data.date != null && data.date !== quoteDate) {
+        throw invalid("备用行情交易日与实际报价时间不一致");
+      }
       const seen = new Set();
-      const stocks = result.stocks.map((row) => {
+      let stocks = result.stocks.map((row) => {
         const exchange = row.exchange || (row.market === 1 ? "sh" : /^(?:[48]|920)/.test(row.code) ? "bj" : "sz");
         const symbol = `${exchange}${row.code}`;
         const member = membership.get(symbol);
@@ -45,6 +50,26 @@ export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSna
         return {...row, industry: member.industry, industryCode: member.industryCode};
       });
       if (ownership.listedCdrs.some((row) => !seen.has(row.symbol))) throw invalid("备用行情缺少已上市 CDR");
+      // Tencent's tradable share count differs from f21 for some stocks. The
+      // original heatmap weights require Eastmoney valuations from this session.
+      const valuations = await loadCapitals({date: data.dataDate, stocks});
+      if (valuations?.capitalSource !== "eastmoney" || valuations.capitalDate !== data.dataDate
+        || !Array.isArray(valuations.capitals) || valuations.capitals.length !== stocks.length
+        || valuations.coverage?.expected !== stocks.length || valuations.coverage.received !== stocks.length) {
+        throw invalid("备用行情缺少同交易日的原市值口径");
+      }
+      const capitalMap = new Map(valuations.capitals.map((row) => [row.symbol, row]));
+      if (capitalMap.size !== stocks.length) throw invalid("备用行情市值身份重复");
+      stocks = stocks.map((row) => {
+        const exchange = row.exchange || (row.market === 1 ? "sh" : /^(?:[48]|920)/.test(row.code) ? "bj" : "sz");
+        const capital = capitalMap.get(`${exchange}${row.code}`);
+        if (!capital || capital.quoteDate !== data.dataDate || !Number.isFinite(capital.cap) || capital.cap < 0
+          || !Number.isFinite(capital.floatCap) || capital.floatCap < 0 || !Number.isFinite(capital.close)
+          || row.quoteDate === data.dataDate && Number.isFinite(row.close) && Math.abs(capital.close - row.close) > 0.000001) {
+          throw invalid("备用报价与原市值的日期、价格或身份不一致");
+        }
+        return {...row, cap: capital.cap, floatCap: capital.floatCap};
+      });
       const quoteSource = data.quoteSource || (data.source === "sina-tencent" ? "tencent" : data.source);
       if (!["sina", "tencent"].includes(quoteSource)) throw invalid("备用行情报价来源不明确");
       const classified = {...result, stocks, metadata: {
@@ -52,6 +77,8 @@ export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSna
         universePolicy: "listed-ashare-with-cdr", classification: "东方财富行业", classificationSource: "eastmoney", industryLevel: 2,
         classificationUpdatedAt: ownership.classificationUpdatedAt, classificationStale: Boolean(ownership.classificationStale),
         classificationCoverage: {classified: stocks.length, total: stocks.length, unclassified: 0, conflicts: 0},
+        capitalSource: "eastmoney", capitalDate: valuations.capitalDate, capitalUpdatedAt: valuations.capitalUpdatedAt,
+        capitalCoverage: valuations.coverage,
       }};
       recent = {result: classified, at: now()};
       return classified;
@@ -86,7 +113,7 @@ export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSna
         down: quoted.filter((row) => row.pct < 0).length, flat: quoted.filter((row) => row.pct === 0).length,
         suspended: stocks.length - quoted.length, industries,
         quoteCoverage: {quoted: quoted.length, total: stocks.length, unavailable: stocks.length - quoted.length},
-        notice: "行业归属沿用东方财富；主力资金净额暂不可用，报价时间见上方。",
+        notice: "行业与市值沿用东方财富；主力资金净额暂不可用，报价时间见上方。",
       };
       return {payload, snapshot: {stocks, at: Date.parse(payload.updatedAt)}};
     },

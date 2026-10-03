@@ -77,6 +77,7 @@
   --color-red-500: #f16d6d;
   --color-red-600: #f88585;
   --color-red-700: #fca5a5;
+  --color-red-800: #fecaca;
 
   --color-rose-50: #2c1218;
   --color-rose-500: #f77e93;
@@ -86,6 +87,7 @@
   --color-emerald-100: #123328;
   --color-emerald-600: #4ade9f;
   --color-emerald-700: #6ee7b7;
+  --color-emerald-800: #a7f3d0;
 
   --color-green-50: #0e2318;
   --color-green-700: #6ee7a5;
@@ -94,16 +96,24 @@
   --color-amber-100: #3a2a0d;
   --color-amber-200: #533c14;
   --color-amber-500: #f5c451;
+  --color-amber-600: #f5c451;
   --color-amber-700: #fcd34d;
+  --color-amber-800: #fde68a;
 
   --color-blue-50: #12203a;
   --color-blue-100: #172a4a;
+  --color-blue-600: #60a5fa;
   --color-blue-700: #93c5fd;
 
   --color-sky-50: #0f2236;
   --color-sky-100: #142c45;
   --color-sky-600: #6fc3f7;
   --color-sky-700: #93d3fb;
+  --color-sky-900: #bae6fd;
+  --color-green-600: #4ade80;
+  --color-rose-700: #fda4af;
+  --color-orange-700: #fdba74;
+  --color-pink-600: #f9a8d4;
 
   --chart-surface: #131a24;
   --chart-ink: #e8eef7;
@@ -139,12 +149,6 @@ body {
   color: var(--color-slate-900);
 }
 
-button,
-input,
-select {
-  font: inherit;
-}
-
 /* Chan structure overlays: theme-aware and independent of candle colors. */
 :root {
   --chan-bi: #b78200;
@@ -177,4 +181,32 @@ select {
 .chart-panel-tools button,
 .chart-panel-tools label {
   white-space: nowrap;
+}
+
+/* Quote fields need room for the label, help controls, and an unbroken value.
+   Sidebar cards show one field per row; wider cards can share a row. */
+.quote-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+}
+.quote-metric-wide {
+  grid-column: 1 / -1;
+}
+.quote-metric {
+  min-width: 0;
+  align-items: baseline;
+  gap: 12px;
+}
+.quote-metric > span {
+  white-space: nowrap;
+}
+.quote-metric > span:first-child {
+  flex-shrink: 0;
+}
+.quote-metric > span:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.quote-snapshot > span:last-child {
+  min-width: 0;
+  white-space: normal;
 }

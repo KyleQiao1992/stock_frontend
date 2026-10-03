@@ -2,10 +2,13 @@ const LAST_GOOD_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_QUOTE_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const DIAGNOSTIC_STAGES = new Set([
   "universe-count", "universe-page", "quotes", "industry-directory", "industry-page",
-  "snapshot-validation", "quote-comparison",
+  "snapshot-validation", "quote-comparison", "industry-map", "market-capital",
 ]);
 const DIAGNOSTIC_CODES = new Set([
   "PRIMARY_SNAPSHOT_INVALID", "FALLBACK_SNAPSHOT_INVALID", "FALLBACK_QUOTE_OLDER",
+  "EASTMONEY_CLASSIFICATION_INVALID", "EASTMONEY_CLASSIFICATION_HTTP_ERROR",
+  "EM_CAPITAL_INPUT_INVALID", "EM_CAPITAL_ABORTED", "EM_CAPITAL_TIMEOUT", "EM_CAPITAL_NETWORK_ERROR",
+  "EM_CAPITAL_HTTP_ERROR", "EM_CAPITAL_RESPONSE_INVALID", "EM_CAPITAL_COVERAGE_INCOMPLETE", "EM_CAPITAL_CLOSE_MISMATCH",
   "SINA_HTTP_ERROR", "SINA_NETWORK_ERROR", "SINA_TIMEOUT", "SINA_RESPONSE_INVALID", "SINA_COVERAGE_INCOMPLETE",
   "TENCENT_HTTP_ERROR", "TENCENT_NETWORK_ERROR", "TENCENT_TIMEOUT", "TENCENT_RESPONSE_INVALID", "TENCENT_COVERAGE_INCOMPLETE",
   "ECONNREFUSED", "ECONNRESET", "ECONNABORTED", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT",
@@ -235,7 +238,9 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
       if (loadFallback) {
         try {
           const result = unpack(await loadFallback({force}));
-          const candidate = entry({...result.payload, partial: true}, now());
+          // Version 3 providers must supply their entire declared contract;
+          // adding a missing marker here could silently repair invalid data.
+          const candidate = entry(fallbackVersion >= 3 ? result.payload : {...result.payload, partial: true}, now());
           if (!candidate) throw snapshotError("备用行情快照的结构或时间异常", "FALLBACK_SNAPSHOT_INVALID", "snapshot-validation");
           const best = bestAvailable(previous, cachedBackup);
           if (best && compareQuotes(candidate, best) < 0) throw snapshotError("备用行情时间早于已有快照", "FALLBACK_QUOTE_OLDER", "quote-comparison");

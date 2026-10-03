@@ -69,7 +69,11 @@ test("zero turnover alone does not fabricate a suspension when Tencent has no S 
 
 test("fallback dashboard excludes the current suspended quote from flat and breadth counts", async () => {
   const load = createSinaMarketSnapshotProvider({ request: source(), now: () => NOW });
-  const fallbacks = createMarketSnapshotFallbacks({ loadSnapshot: load, now: () => NOW, loadIndustries: async () => ({
+  const fallbacks = createMarketSnapshotFallbacks({ loadSnapshot: load, now: () => NOW,
+    loadCapitals: async ({ date, stocks }) => ({ capitalSource: "eastmoney", capitalDate: date,
+      capitalUpdatedAt: new Date(NOW).toISOString(), coverage: { expected: stocks.length, received: stocks.length },
+      capitals: stocks.map((row) => ({ symbol: `${row.exchange}${row.code}`, quoteDate: date, cap: row.cap, floatCap: row.floatCap, close: row.close })),
+    }), loadIndustries: async () => ({
     classificationSource: "eastmoney", level: 2, classification: "东方财富行业", listedCdrs: [],
     members: rows.map((row) => ({ symbol: row.symbol, industry: "Synthetic industry", industryCode: "BK0001" })),
   }) });

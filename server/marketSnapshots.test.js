@@ -44,9 +44,10 @@ function today(at = START) {
 }
 
 function classifiedFallback(payload) {
-  return {...payload, mode: "snapshot", partial: true, source: "eastmoney-tencent", snapshotSchemaVersion: 3,
+  return {quoteCoverage: {total: 3, quoted: payload.breadth?.total ?? payload.totalStocks, unavailable: 3 - (payload.breadth?.total ?? payload.totalStocks)}, ...payload, mode: "snapshot", partial: true, source: "eastmoney-tencent", snapshotSchemaVersion: 3,
     universePolicy: "listed-ashare-with-cdr", classification: "东方财富行业", classificationSource: "eastmoney", industryLevel: 2,
-    classificationCoverage: {classified: 3, total: 3, unclassified: 0, conflicts: 0}};
+    classificationCoverage: {classified: 3, total: 3, unclassified: 0, conflicts: 0},
+    capitalSource: "eastmoney", capitalDate: "2026-09-30", capitalCoverage: {expected: 3, received: 3}};
 }
 
 async function request(handler, query = "") {
