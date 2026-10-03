@@ -6582,8 +6582,8 @@ function TMCapTiers({ tiers }) {
   return (
     <div className="space-y-1.5">
       {tiers.map((t) => {
-        const v = t.avg || 0;
-        const w = (Math.abs(v) / max) * 50; // 半幅 50%
+        const v = Number.isFinite(t.avg) ? t.avg : null;
+        const w = v === null ? 0 : (Math.abs(v) / max) * 50; // 半幅 50%
         return (
           <div key={t.key} className="flex items-center gap-2 text-xs">
             <span className="w-20 shrink-0 text-slate-500">{t.label}</span>
@@ -6647,11 +6647,12 @@ function TMMultiLine({ series, height = 170, suffix = "" }) {
   const m = { top: 10, right: 70, bottom: 20, left: 30 };
   const plotW = width - m.left - m.right;
   const plotH = height - m.top - m.bottom;
-  const lines = (series || []).filter((s) => s.points?.length);
+  const lines = (series || []).filter((s) => s.points?.some((p) => Number.isFinite(p.v)));
   if (!lines.length) return <div className="py-8 text-center text-sm text-slate-400">暂无数据</div>;
   const n = Math.max(...lines.map((s) => s.points.length));
-  let vMin = Math.min(...lines.flatMap((s) => s.points.map((p) => p.v)));
-  let vMax = Math.max(...lines.flatMap((s) => s.points.map((p) => p.v)));
+  const values = lines.flatMap((s) => s.points.map((p) => p.v).filter(Number.isFinite));
+  let vMin = Math.min(...values);
+  let vMax = Math.max(...values);
   if (vMin > 0) vMin = 0;
   const pad = (vMax - vMin) * 0.08 || 1;
   vMax += pad;
@@ -6678,13 +6679,21 @@ function TMMultiLine({ series, height = 170, suffix = "" }) {
         </text>
       ))}
       {lines.map((s) => {
-        const pts = s.points.map((p, i) => ({ x: x(i), y: y(p.v) }));
-        const last = pts[pts.length - 1];
+        // 缺失日期保留横轴位置并断开折线，不能被当成 0 或跨过去连接。
+        const segments = [];
+        let segment = [];
+        s.points.forEach((p, i) => {
+          if (Number.isFinite(p.v)) segment.push({ x: x(i), y: y(p.v) });
+          else if (segment.length) { segments.push(segment); segment = []; }
+        });
+        if (segment.length) segments.push(segment);
+        const last = segments.at(-1)?.at(-1);
+        const lastValue = [...s.points].reverse().find((p) => Number.isFinite(p.v))?.v;
         return (
           <g key={s.name}>
-            <path d={smoothLinePath(pts)} fill="none" stroke={s.color} strokeWidth="1.6" />
+            {segments.map((pts, index) => <path key={index} d={smoothLinePath(pts)} fill="none" stroke={s.color} strokeWidth="1.6" />)}
             <text x={width - m.right + 4} y={last.y + 3} fontSize="9.5" fill={s.color}>
-              {s.name} {s.points[s.points.length - 1].v}
+              {s.name} {lastValue}
               {suffix}
             </text>
           </g>
@@ -6701,11 +6710,17 @@ function TMDailyCombo({ history }) {
   const m = { top: 10, right: 10, bottom: 20, left: 28 };
   const plotW = width - m.left - m.right;
   const plotH = height - m.top - m.bottom;
-  const rows = history.filter((d) => Number.isFinite(d.zbRate));
-  if (!rows.length) return <div className="py-8 text-center text-sm text-slate-400">暂无数据</div>;
+  const rows = history;
+  if (!rows.some((d) => Number.isFinite(d.zbRate) || Number.isFinite(d.nextDaySuccess))) return <div className="py-8 text-center text-sm text-slate-400">暂无数据</div>;
   const bw = plotW / rows.length;
   const y = (v) => m.top + (1 - v) * plotH; // 0-1
-  const linePts = rows.map((d, i) => ({ x: m.left + i * bw + bw / 2, y: y(d.zbRate) }));
+  const lineSegments = [];
+  let linePts = [];
+  rows.forEach((d, i) => {
+    if (Number.isFinite(d.zbRate)) linePts.push({ x: m.left + i * bw + bw / 2, y: y(d.zbRate) });
+    else if (linePts.length) { lineSegments.push(linePts); linePts = []; }
+  });
+  if (linePts.length) lineSegments.push(linePts);
   const hasSuccess = rows.some((d) => Number.isFinite(d.nextDaySuccess));
   return (
     <div>
@@ -6734,7 +6749,7 @@ function TMDailyCombo({ history }) {
             />
           );
         })}
-        <path d={smoothLinePath(linePts)} fill="none" stroke={TM_AMBER} strokeWidth="1.8" />
+        {lineSegments.map((pts, index) => <path key={index} d={smoothLinePath(pts)} fill="none" stroke={TM_AMBER} strokeWidth="1.8" />)}
         {rows
           .filter((_, i) => i === 0 || i === rows.length - 1 || i === Math.floor(rows.length / 2))
           .map((d) => (
@@ -6760,10 +6775,10 @@ let todayMarketCache = null; // { body, at }
 let todayMarketInflight = null; // 单飞：预取与用户主动打开合并成一次请求
 
 function readTodayMarketCache() {
-  if (todayMarketCache && Date.now() - todayMarketCache.at < TODAY_MARKET_TTL_MS) return todayMarketCache.body;
+  if (todayMarketCache && !todayMarketCache.body?.stale && Date.now() >= todayMarketCache.at && Date.now() - todayMarketCache.at < TODAY_MARKET_TTL_MS) return todayMarketCache.body;
   try {
     const cached = JSON.parse(sessionStorage.getItem(TODAY_MARKET_SESSION_KEY) || "null");
-    if (cached && Date.now() - Number(cached.at) < TODAY_MARKET_TTL_MS && cached.body?.updatedAt) {
+    if (cached && !cached.body?.stale && Date.now() >= Number(cached.at) && Date.now() - Number(cached.at) < TODAY_MARKET_TTL_MS && cached.body?.breadth && Array.isArray(cached.body?.hist)) {
       todayMarketCache = cached;
       return cached.body;
     }
@@ -6774,6 +6789,7 @@ function readTodayMarketCache() {
 }
 
 function writeTodayMarketCache(body) {
+  if (body?.stale || !body?.breadth || !Array.isArray(body?.hist)) return;
   const cached = { body, at: Date.now() };
   todayMarketCache = cached;
   try {
@@ -6790,7 +6806,7 @@ function fetchTodayMarket({ force = false } = {}) {
     // 预取还在路上就复用它，避免用户手快切过去时又打一次 20s 的接口。
     if (todayMarketInflight) return todayMarketInflight;
   }
-  const req = apiFetch("/api/today-market")
+  const req = apiFetch(`/api/today-market${force ? "?retry=1" : ""}`)
     .then(async (res) => {
       const body = await res.json().catch(() => null);
       if (!res.ok) throw new Error(body?.error || `加载失败（${res.status}）`);
@@ -6845,10 +6861,10 @@ function TodayMarketPanel() {
     };
   }, [reloadKey]);
 
-  if (loading) {
+  if (loading && !payload) {
     return <div className="flex h-64 items-center justify-center text-sm text-slate-400">今日盘面加载中…（全市场快照较慢，请稍候）</div>;
   }
-  if (error) {
+  if (error && !payload) {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-3 text-sm text-rose-500">
         <div>{error}</div>
@@ -6865,35 +6881,41 @@ function TodayMarketPanel() {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-1.5 text-center text-sm text-slate-400">
         <span>{payload.notice || "当前非交易时段，暂无行情数据。"}</span>
-        <span className="text-xs text-slate-500">开盘后会自动恢复，不必刷新页面。</span>
+        <button type="button" onClick={() => setReloadKey((k) => k + 1)} className="rounded-lg border px-3 py-1">重新查询</button>
       </div>
     );
   }
 
   const p = payload;
   const ratioStr = `${p.breadth.up}:${p.breadth.down}`;
-  const lbSeries = [{ name: "连板数", color: TM_AMBER, points: p.history.map((d) => ({ t: d.date, v: d.lbCount })) }];
+  const history = Array.isArray(p.history) ? p.history : [];
+  const lbSeries = [{ name: "连板数", color: TM_AMBER, points: history.map((d) => ({ t: d.date, v: d.lbCount })) }];
   const cycleSeries = [
-    { name: "涨停", color: TM_UP, points: p.history.map((d) => ({ t: d.date, v: d.ztCount })) },
-    { name: "跌停", color: TM_DOWN, points: p.history.map((d) => ({ t: d.date, v: d.dtCount })) },
-    { name: "连板", color: TM_AMBER, points: p.history.map((d) => ({ t: d.date, v: d.lbCount })) },
+    { name: "涨停", color: TM_UP, points: history.map((d) => ({ t: d.date, v: d.ztCount })) },
+    { name: "跌停", color: TM_DOWN, points: history.map((d) => ({ t: d.date, v: d.dtCount })) },
+    { name: "连板", color: TM_AMBER, points: history.map((d) => ({ t: d.date, v: d.lbCount })) },
   ];
-  const latestSuccess = [...p.history].reverse().find((d) => Number.isFinite(d.nextDaySuccess));
-  const lastZbRate = p.history[p.history.length - 1]?.zbRate;
+  const latestSuccess = [...history].reverse().find((d) => Number.isFinite(d.nextDaySuccess));
+  const lastZbRate = history.at(-1)?.zbRate;
+  const unavailable = <div className="flex h-32 items-center justify-center text-xs text-slate-400">涨停、跌停或炸板池暂不可用，无法计算该指标。</div>;
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="text-xs text-slate-400">数据日期 {p.date}  ·  全市场 {p.breadth.total} 只  ·  东方财富口径（更新 {new Date(p.updatedAt).toLocaleTimeString("zh-CN", { hour12: false })}）</div>
-        <button type="button" onClick={() => setReloadKey((k) => k + 1)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50">
-          刷新
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-xs text-slate-400">数据日期 {p.date}  ·  行情覆盖 {p.breadth.total} 只  ·  {p.source === "sina" ? "新浪行情" : "东方财富口径"}（获取 {new Date(p.updatedAt).toLocaleTimeString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" })} 北京时间）</div>
+        <button type="button" disabled={loading} onClick={() => setReloadKey((k) => k + 1)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-50">
+          {loading ? "刷新中…" : "刷新"}
         </button>
       </div>
+      {(p.notice || p.stale || error) && <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">
+        {error ? "刷新失败，继续展示已有快照；数据日期见上方。" : p.notice || "当前展示缓存快照，请留意数据日期。"}
+      </div>}
+      {p.quoteCoverage && <div className="text-xs text-slate-500">当前交易日有效报价 {p.quoteCoverage.quoted} / {p.quoteCoverage.total} 只；{p.quoteCoverage.unavailable} 只旧日期或缺失报价未计入统计。</div>}
 
       <div className="grid gap-3 lg:grid-cols-3">
         {/* ① 市场真实热度 */}
-        <TMCard title="市场真实热度" extra={`宽度 ${p.heat.breadth}% · 强弱 ${p.heat.ztStrength}%`}>
-          <TMGauge value={p.heat.value} />
+        <TMCard title="市场真实热度" extra={p.heat ? `宽度 ${p.heat.breadth}% · 强弱 ${p.heat.ztStrength}%` : "—"}>
+          {p.heat ? <TMGauge value={p.heat.value} /> : unavailable}
         </TMCard>
 
         {/* ② 涨跌对比 */}
@@ -6904,7 +6926,8 @@ function TodayMarketPanel() {
         </TMCard>
 
         {/* ③ 强弱对比 */}
-        <TMCard title="强弱对比" extra={`封板成功率 ${p.strong.fbSuccess != null ? (p.strong.fbSuccess * 100).toFixed(0) + "%" : "—"}`}>
+        <TMCard title="强弱对比" extra={`封板成功率 ${p.strong?.fbSuccess != null ? (p.strong.fbSuccess * 100).toFixed(0) + "%" : "—"}`}>
+          {p.strong ? <>
           <div className="grid grid-cols-3 gap-2 pt-4 text-center">
             <div>
               <div className="text-2xl font-bold" style={{ color: TM_UP }}>{p.strong.ztCount}</div>
@@ -6922,6 +6945,7 @@ function TodayMarketPanel() {
           <div className="mt-3 text-center text-xs text-slate-500">
             炸板率 {p.strong.zbRate != null ? (p.strong.zbRate * 100).toFixed(1) + "%" : "—"}
           </div>
+          </> : unavailable}
         </TMCard>
 
         {/* ④ 涨跌统计 */}
@@ -6936,7 +6960,7 @@ function TodayMarketPanel() {
         {/* ⑤ 昨日涨停股平均涨幅 */}
         <TMCard title="昨日涨停股今日表现" extra="接力溢价">
           <div className="pt-1">
-            <TMPremiumBar premium={p.premium} />
+            {p.partial && !p.premium ? unavailable : <TMPremiumBar premium={p.premium} />}
           </div>
         </TMCard>
 
@@ -6948,18 +6972,18 @@ function TodayMarketPanel() {
         </TMCard>
 
         {/* ⑦ 连板数 */}
-        <TMCard title="连板数" extra={`连板 ${p.consecutive.lbCount} · 非一字 ${p.consecutive.nonOneWordLb} · 最高 ${p.consecutive.maxLb} 板`}>
-          <TMMultiLine series={lbSeries} />
+        <TMCard title="连板数" extra={p.consecutive ? `连板 ${p.consecutive.lbCount} · 非一字 ${p.consecutive.nonOneWordLb} · 最高 ${p.consecutive.maxLb} 板` : "—"}>
+          {history.length ? <TMMultiLine series={lbSeries} /> : unavailable}
         </TMCard>
 
         {/* ⑧ 打板次日成功率 */}
         <TMCard title="打板次日成功率" extra={`成功率 ${latestSuccess ? (latestSuccess.nextDaySuccess * 100).toFixed(1) + "%" : "—"} · 炸板率 ${Number.isFinite(lastZbRate) ? (lastZbRate * 100).toFixed(1) + "%" : "—"}`}>
-          <TMDailyCombo history={p.history} />
+          {history.length ? <TMDailyCombo history={history} /> : unavailable}
         </TMCard>
 
         {/* ⑨ 情绪周期监控 */}
         <TMCard title="情绪周期监控" extra="涨停/跌停/连板">
-          <TMMultiLine series={cycleSeries} />
+          {history.length ? <TMMultiLine series={cycleSeries} /> : unavailable}
         </TMCard>
       </div>
     </div>
@@ -7090,7 +7114,7 @@ const HEATMAP_DATE_PRESETS = [
 ];
 
 const HEATMAP_CLIENT_CACHE_PREFIX = "market-heatmap:query:v1:";
-const HEATMAP_LATEST_CACHE_MS = 24 * 60 * 60 * 1000;
+const HEATMAP_LATEST_CACHE_MS = 2 * 60 * 1000;
 const HEATMAP_HISTORY_CACHE_MS = 30 * 60 * 1000;
 const heatmapClientCache = new Map();
 
@@ -7098,10 +7122,10 @@ function readHeatmapClientCache(query) {
   const key = query || "latest";
   const maxAge = query ? HEATMAP_HISTORY_CACHE_MS : HEATMAP_LATEST_CACHE_MS;
   const memory = heatmapClientCache.get(key);
-  if (memory && Date.now() - memory.at < maxAge) return memory.body;
+  if (memory && !memory.body?.stale && Date.now() >= memory.at && Date.now() - memory.at < maxAge) return memory.body;
   try {
     const cached = JSON.parse(sessionStorage.getItem(`${HEATMAP_CLIENT_CACHE_PREFIX}${key}`) || "null");
-    if (cached && Date.now() - Number(cached.at) < maxAge && Array.isArray(cached.body?.industries) && cached.body.industries.length) {
+    if (cached && !cached.body?.stale && Date.now() >= Number(cached.at) && Date.now() - Number(cached.at) < maxAge && Array.isArray(cached.body?.industries) && cached.body.industries.length) {
       heatmapClientCache.set(key, cached);
       return cached.body;
     }
@@ -7112,7 +7136,7 @@ function readHeatmapClientCache(query) {
 }
 
 function writeHeatmapClientCache(query, body) {
-  if (!Array.isArray(body?.industries) || !body.industries.length) return;
+  if (body?.stale || !Array.isArray(body?.industries) || !body.industries.length) return;
   const key = query || "latest";
   const cached = { body, at: Date.now() };
   heatmapClientCache.set(key, cached);
@@ -7197,6 +7221,7 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
   const [payload, setPayload] = useState(initialPayload);
   const [loading, setLoading] = useState(() => !initialPayload);
   const [error, setError] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
   const [view, setView] = useState("industry");
   const [metric, setMetric] = useState("amount"); // 默认按成交额铺面积：当天资金去了哪儿更直观
   const [focus, setFocus] = useState(""); // 下钻到的行业名，空＝全市场
@@ -7205,16 +7230,18 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
   const [box, setBox] = useState({ w: 0, h: 0 });
   const [hover, setHover] = useState(null); // { tile, x, y }
   const boxRef = useRef(null);
+  const payloadRef = useRef(initialPayload);
 
   useEffect(() => {
     // Query selection remounts this panel; polling is cancelled when selection changes.
     let cancelled = false;
     let timer;
     let firstRequest = true;
+    const controller = new AbortController();
     function load() {
     const retry = firstRequest ? "&retry=1" : "";
     firstRequest = false;
-    apiFetch(`/api/market-heatmap${historical ? `?${historyQuery}${retry}` : ""}`)
+    apiFetch(`/api/market-heatmap${historical ? `?${historyQuery}${retry}` : reloadKey > 0 ? "?retry=1" : ""}`, { signal: controller.signal })
       .then(async (res) => {
         const body = await res.json().catch(() => null);
         if (!res.ok) throw new Error(body?.error || `加载失败（${res.status}）`);
@@ -7229,28 +7256,31 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
         }
         if (body.error) throw new Error(body.error);
         writeHeatmapClientCache(historyQuery, body);
+        if (payloadRef.current && payloadRef.current.source !== body.source) {
+          setFocus("");
+          setDetail(null);
+          setDetailError("");
+        }
+        payloadRef.current = body;
         setPayload(body);
+        setError("");
         setLoading(false);
+        if (!historical && !body.stale && body.industries?.length) prefetchTodayMarket();
       })
       .catch((e) => {
         if (!cancelled) {
           // 已有快照时继续展示；网络刷新失败不应把可用页面替换成整屏错误。
-          if (!initialPayload) setError(e?.message || "加载失败");
+          setError(e?.message || "加载失败");
           setLoading(false);
         }
       })
       .finally(() => {
         if (!cancelled && !historical) setLoading(false);
-        // 热力图自己先加载完，再顺手把「今日盘面」预热进内存。
-        // 刻意放在 finally 而不是并发发起：两个接口都要翻 ~59 页东财行情，
-        // 并发既会拖慢用户正盯着的这块，也更容易触发对方限流。
-        // 不看 cancelled：就算用户已经切走，把缓存焐热也是我们要的。
-        if (!historical) prefetchTodayMarket();
       });
     }
     load();
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [historical, historyQuery, initialPayload]);
+    return () => { cancelled = true; clearTimeout(timer); controller.abort(); };
+  }, [historical, historyQuery, reloadKey]);
 
   // 下钻：列表接口只带了每个行业的前几大成分股（够铺树图），进到单行业要看全部，单独拉一次。
   // loading 由点击那一刻置位，这里不做同步 setState。
@@ -7263,7 +7293,7 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
     const retry = firstRequest ? "&retry=1" : "";
     firstRequest = false;
     const board = payload?.industries?.find((row) => row.name === focus)?.code;
-    apiFetch(`/api/market-heatmap?${historical ? `${historyQuery}&board=${encodeURIComponent(board || "")}${retry}` : `industry=${encodeURIComponent(focus)}`}`)
+    apiFetch(`/api/market-heatmap?${historical ? `${historyQuery}&board=${encodeURIComponent(board || "")}${retry}` : `industry=${encodeURIComponent(focus)}&source=${encodeURIComponent(payload?.source || "eastmoney")}`}`)
       .then(async (res) => {
         const body = await res.json().catch(() => null);
         if (!res.ok) throw new Error(body?.error || `加载失败（${res.status}）`);
@@ -7455,23 +7485,36 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
           ) : null}
         </div>
 
-        <div className="flex items-center gap-3 text-xs text-slate-400">
+        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
           {historical ? <span>{payload?.source || "行业指数口径"} · {payload?.industries?.length || 0} 个行业</span> : payload ? (
             <span>
               <span className="text-rose-500">{payload.up} 涨</span> / <span className="text-emerald-600">{payload.down} 跌</span>
               <span className="ml-1">共 {payload.totalStocks} 只</span>
-              {quoteText ? <span className="ml-1" title="东方财富延时行情的行情截止时刻">行情 {quoteText}</span> : null}
+              {quoteText ? <span className="ml-1" title="行情截止时刻（北京时间），不是本次加载时间">行情 {quoteText}</span> : null}
             </span>
           ) : null}
           <HeatmapLegend />
+          {!historical && <button type="button" disabled={loading} onClick={() => { setLoading(true); setReloadKey((k) => k + 1); }} className="rounded-lg border border-slate-200 px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50">{loading ? "刷新中…" : "刷新"}</button>}
         </div>
       </div>
 
+      {!historical && (payload?.notice || payload?.stale || error && payload) && <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">
+        {error ? "刷新失败，继续展示已有快照；行情时间见上方。" : payload.notice || "当前展示缓存快照，请留意行情时间。"}
+      </div>}
+      {!historical && payload?.source === "sina" && <div className="text-xs text-slate-500">
+        备用数据源：新浪行情 · {payload.classification || "新浪行业"}，与东方财富行业分类不同。
+        {payload.classificationCoverage && <> 已分类 {payload.classificationCoverage.classified} / {payload.classificationCoverage.total} 只，未分类 {payload.classificationCoverage.unclassified} 只。</>}
+        {payload.quoteCoverage && <> 当前交易日有效报价 {payload.quoteCoverage.quoted} / {payload.quoteCoverage.total} 只。</>}
+      </div>}
+      {!historical && focus && (detail?.partial || detailError) && <div className="text-xs text-amber-600" role="status">
+        {detail?.partial ? `当前仅展示缓存中的 ${detail.returnedCount ?? detail.stocks?.length ?? 0} / ${detail.totalCount ?? focusIndustry?.count ?? "—"} 只成分股。` : "完整成分股加载失败，当前仅展示行业快照中的部分股票。"}
+      </div>}
+
       {historical && <div className="text-xs text-slate-500">
         {new URLSearchParams(historyQuery).get("start")} 至 {new URLSearchParams(historyQuery).get("end")} · 面积为累计成交额，颜色为区间涨跌幅。休市日不补行情。{payload?.supportsDrilldown === false ? "当前采用同花顺行业分类，与最新行情分类不同；暂不支持成分股下钻。" : "下钻采用当前成分股，非历史成分股还原。"}
-        {payload?.partial && <div className="mt-1 text-amber-600">部分数据：{payload.failed.length} 个行业失败；仅展示成功结果。失败：{payload.failed.slice(0, 10).join("、")}{payload.failed.length > 10 ? "等" : ""}</div>}
+        {payload?.partial && Array.isArray(payload.failed) && <div className="mt-1 text-amber-600">部分数据：{payload.failed.length} 个行业失败；仅展示成功结果。失败：{payload.failed.slice(0, 10).join("、")}{payload.failed.length > 10 ? "等" : ""}</div>}
         {!!payload?.empty && <div>{payload.empty} 个行业在所选区间无日线。</div>}
-        {detail?.partial && <div className="text-amber-600">{detail.failed.length} 只成分股加载失败，当前为部分结果。</div>}
+        {detail?.partial && Array.isArray(detail.failed) && <div className="text-amber-600">{detail.failed.length} 只成分股加载失败，当前为部分结果。</div>}
         {detailError && <div className="text-rose-500">成分股加载失败：{detailError}</div>}
       </div>}
       <Card className="rounded-2xl border-slate-200">
@@ -7485,18 +7528,18 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
             <span>{historical && payload?.supportsDrilldown === false ? "悬浮查看行业区间数据" : focusIndustry ? "点击个股查看 K 线" : view === "industry" ? "点击行业下钻成分股" : "点击个股查看 K 线"}</span>
           </div>
 
-          {loading ? (
+          {loading && !payload ? (
             <div className="flex h-[620px] items-center justify-center text-sm text-slate-400">热力图加载中…{historical && <span className="ml-2">{progress?.notice || `已处理 ${progress?.done || 0} / ${progress?.total || "待获取"}，首次加载需请求外部接口`}</span>}</div>
-          ) : error ? (
-            <div className="flex h-[620px] items-center justify-center px-4 text-center text-sm text-rose-500">{error}</div>
+          ) : error && !industries.length ? (
+            <div className="flex h-[620px] flex-col items-center justify-center gap-3 px-4 text-center text-sm text-rose-500"><span>{error}</span><button type="button" onClick={() => { setLoading(true); setReloadKey((k) => k + 1); }} className="rounded-lg border px-3 py-1 text-slate-500">重试</button></div>
           ) : payload?.marketClosed && !industries.length ? (
             <div className="flex h-[620px] flex-col items-center justify-center gap-1.5 px-4 text-center text-sm text-slate-400">
               <span>{payload.notice || "当前非交易时段，暂无行情数据。"}</span>
-              <span className="text-xs text-slate-500">开盘后会自动恢复，不必刷新页面。</span>
+              <span className="text-xs text-slate-500">可稍后点击刷新重新查询。</span>
             </div>
           ) : !industries.length ? (
             <div className="flex h-[620px] items-center justify-center px-4 text-center text-sm text-slate-400">
-              {historical ? "所选区间没有可展示的历史行情（休市、尚未上市或数据缺失），请更换日期。" : "未拉到行情快照，请确认服务端能访问东方财富行情接口后重试。"}
+              {historical ? "所选区间没有可展示的历史行情（休市、尚未上市或数据缺失），请更换日期。" : "暂无可用行情快照，请稍后刷新重试。"}
             </div>
           ) : (
             <div
