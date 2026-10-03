@@ -1,5 +1,25 @@
 const LAST_GOOD_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_QUOTE_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+const DIAGNOSTIC_STAGES = new Set([
+  "universe-count", "universe-page", "quotes", "industry-directory", "industry-page",
+  "snapshot-validation", "quote-comparison",
+]);
+const DIAGNOSTIC_CODES = new Set([
+  "PRIMARY_SNAPSHOT_INVALID", "FALLBACK_SNAPSHOT_INVALID", "FALLBACK_QUOTE_OLDER",
+  "SINA_HTTP_ERROR", "SINA_NETWORK_ERROR", "SINA_TIMEOUT", "SINA_RESPONSE_INVALID", "SINA_COVERAGE_INCOMPLETE",
+  "TENCENT_HTTP_ERROR", "TENCENT_NETWORK_ERROR", "TENCENT_TIMEOUT", "TENCENT_RESPONSE_INVALID", "TENCENT_COVERAGE_INCOMPLETE",
+  "ECONNREFUSED", "ECONNRESET", "ECONNABORTED", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT",
+  "EHOSTUNREACH", "ENETUNREACH", "EPIPE", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT", "UND_ERR_SOCKET", "UND_ERR_ABORTED", "UND_ERR_REQ_CONTENT_LENGTH_MISMATCH",
+  "UND_ERR_RESPONSE_CONTENT_LENGTH_MISMATCH", "UND_ERR_RES_EXCEEDED_MAX_SIZE", "UND_ERR_RESPONSE_STATUS_CODE",
+  "CERT_HAS_EXPIRED", "ERR_TLS_CERT_ALTNAME_INVALID", "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "DEPTH_ZERO_SELF_SIGNED_CERT", "SELF_SIGNED_CERT_IN_CHAIN", "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "CERT_NOT_YET_VALID", "ERR_SSL_WRONG_VERSION_NUMBER",
+]);
+
+function snapshotError(message, code, stage) {
+  return Object.assign(new Error(message), {code, stage});
+}
 
 // Full snapshots keep their established keys. Incomplete provider fallbacks use
 // a separate key so another deployed version cannot mistake them for full data.
@@ -148,14 +168,22 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
 
   function logFailure(phase, error) {
     let cause = error;
-    let rawCode = "";
+    let code = "unknown";
+    let stage = "unknown";
+    let status = "unknown";
+    let type = "upstream";
     for (let depth = 0; cause && depth < 5; depth += 1) {
-      if (cause.code) {rawCode = cause.code; break;}
+      // Only enumerated metadata may reach logs. Never interpolate messages,
+      // URLs, request headers, or arbitrary values carried by an upstream error.
+      if (typeof cause.code === "string" && DIAGNOSTIC_CODES.has(cause.code)) code = cause.code;
+      if (stage === "unknown" && typeof cause.stage === "string" && DIAGNOSTIC_STAGES.has(cause.stage)) stage = cause.stage;
+      for (const value of [cause.status, cause.statusCode]) {
+        if (status === "unknown" && Number.isInteger(value) && value >= 100 && value <= 599) status = value;
+      }
+      if (cause.name === "TypeError") type = "network";
       cause = cause.cause;
     }
-    const code = String(rawCode);
-    const safeCode = /^[A-Z0-9_]{1,64}$/.test(code) ? code : "unknown";
-    console.warn(`[${key}] ${phase} failed (${error?.name === "TypeError" ? "network" : "upstream"}, ${safeCode})`);
+    console.warn(`[${key}] ${phase} failed (type=${type}, code=${code}, stage=${stage}, status=${status})`);
   }
 
   async function refresh(redis, force = false) {
@@ -173,7 +201,7 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
         if (result.payload?.live === false) reason = "market-closed";
         else {
           const candidate = entry(result.payload, now());
-          if (!candidate || !full(candidate)) throw new Error("主行情快照的结构或时间异常");
+          if (!candidate || !full(candidate)) throw snapshotError("主行情快照的结构或时间异常", "PRIMARY_SNAPSHOT_INVALID", "snapshot-validation");
           fresh = candidate;
           lastGood = candidate;
           const previousBackup = await readFallback(redis);
@@ -208,9 +236,9 @@ export function createMarketSnapshotCache({ key, freshMs, staleMs, load, loadFal
         try {
           const result = unpack(await loadFallback());
           const candidate = entry({...result.payload, partial: true}, now());
-          if (!candidate) throw new Error("备用行情快照的结构或时间异常");
+          if (!candidate) throw snapshotError("备用行情快照的结构或时间异常", "FALLBACK_SNAPSHOT_INVALID", "snapshot-validation");
           const best = bestAvailable(previous, cachedBackup);
-          if (best && compareQuotes(candidate, best) < 0) throw new Error("备用行情时间早于已有快照");
+          if (best && compareQuotes(candidate, best) < 0) throw snapshotError("备用行情时间早于已有快照", "FALLBACK_QUOTE_OLDER", "quote-comparison");
           fallback = candidate;
           activeProvider = "fallback";
           if (onFull) { try { await onFull({...result, payload: candidate.payload}, redis); } catch { /* Aggregate fallback remains valid. */ } }

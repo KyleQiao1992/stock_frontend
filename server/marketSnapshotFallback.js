@@ -57,7 +57,7 @@ export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSna
         down: quoted.filter((row) => row.pct < 0).length, flat: quoted.filter((row) => row.pct === 0).length,
         suspended: stocks.length - quoted.length, industries,
         quoteCoverage: {quoted: quoted.length, total: stocks.length, unavailable: stocks.length - quoted.length},
-        notice: "东方财富行情暂不可用，显示新浪备用行情；行业分类不同，未能分类的股票归入未分类。旧日期或缺失报价不计入当日涨跌和成交额。",
+        notice: `东方财富行情暂不可用，显示${result.metadata.quoteSource === "tencent" ? "腾讯报价（新浪名单与市值）" : "新浪备用行情"}；行业分类不同，未能分类的股票归入未分类。旧日期或缺失报价不计入当日涨跌和成交额。`,
       };
       return {payload, snapshot: {stocks, at: Date.parse(payload.updatedAt)}};
     },
@@ -70,7 +70,7 @@ export function createMarketSnapshotFallbacks({ loadSnapshot = loadSinaMarketSna
         ...result.metadata, ...panels, live: true, mode: "snapshot", partial: true,
         heat: null, strong: null, consecutive: null, premium: null, history: [],
         quoteCoverage: {quoted: stocks.length, total: result.stocks.length, unavailable: result.stocks.length - stocks.length},
-        notice: "东方财富盘面数据暂不可用，显示新浪最新交易日的涨跌统计和市值分档。涨停、跌停、炸板及连板等依赖池数据的指标暂不可用；旧日期和缺失报价不计入当日统计。",
+        notice: `东方财富盘面数据暂不可用，显示${result.metadata.quoteSource === "tencent" ? "腾讯报价（新浪名单与市值）" : "新浪行情"}的涨跌统计和市值分档。涨停、跌停、炸板及连板等依赖池数据的指标暂不可用；旧日期和缺失报价不计入当日统计。`,
       };
     },
   };

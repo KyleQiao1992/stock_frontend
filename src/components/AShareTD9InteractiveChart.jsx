@@ -6930,7 +6930,7 @@ function TodayMarketPanel() {
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-xs text-slate-400">数据日期 {p.date}  ·  行情覆盖 {p.breadth.total} 只  ·  {p.source === "sina" ? "新浪行情" : "东方财富口径"}（获取 {new Date(p.updatedAt).toLocaleTimeString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" })} 北京时间）</div>
+        <div className="text-xs text-slate-400">数据日期 {p.date}  ·  行情覆盖 {p.breadth.total} 只  ·  {p.source === "sina-tencent" ? "腾讯行情 / 新浪名单与市值" : p.source === "sina" ? "新浪行情" : "东方财富口径"}（获取 {new Date(p.updatedAt).toLocaleTimeString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" })} 北京时间）</div>
         <button type="button" disabled={loading} onClick={() => setReloadKey((k) => k + 1)} className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-50">
           {loading ? "刷新中…" : "刷新"}
         </button>
@@ -7536,8 +7536,8 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
       {!historical && (payload?.notice || payload?.stale || error && payload) && <div role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-600">
         {error ? "刷新失败，继续展示已有快照；行情时间见上方。" : payload.notice || "当前展示缓存快照，请留意行情时间。"}
       </div>}
-      {!historical && payload?.source === "sina" && <div className="text-xs text-slate-500">
-        备用数据源：新浪行情 · {payload.classification || "新浪行业"}，与东方财富行业分类不同。
+      {!historical && (payload?.source === "sina" || payload?.source === "sina-tencent") && <div className="text-xs text-slate-500">
+        备用数据源：{payload.source === "sina-tencent" ? "腾讯报价 / 新浪名单与市值" : "新浪行情"} · {payload.classification || "新浪行业"}，与东方财富行业分类不同。
         {payload.classificationCoverage && <> 已分类 {payload.classificationCoverage.classified} / {payload.classificationCoverage.total} 只，未分类 {payload.classificationCoverage.unclassified} 只。</>}
         {payload.quoteCoverage && <> 当前交易日有效报价 {payload.quoteCoverage.quoted} / {payload.quoteCoverage.total} 只。</>}
       </div>}

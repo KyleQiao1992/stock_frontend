@@ -3,8 +3,13 @@
 const API = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.";
 const DIRECTORY = "https://vip.stock.finance.sina.com.cn/q/view/newSinaHy.php";
 const HEADERS = { "User-Agent": "Mozilla/5.0", Referer: "https://finance.sina.com.cn/" };
+const TENCENT_HEADERS = { "User-Agent": "Mozilla/5.0", Referer: "https://finance.qq.com/" };
 const PAGE = 100;
 const INDUSTRY_CACHE_MS = 6 * 60 * 60 * 1000;
+
+function sourceError(message, { code, stage, status, cause } = {}) {
+  return Object.assign(new Error(message, { cause }), { code, stage, ...(status == null ? {} : { status }) });
+}
 
 function numeric(value) {
   if (typeof value !== "number" && typeof value !== "string") return null;
@@ -54,26 +59,36 @@ async function pool(items, worker) {
 
 export function createSinaMarketSnapshotProvider({ request = fetch, now = Date.now, budgetMs = 25000 } = {}) {
   let industryCache = null;
+  let preferredQuoteSource = "sina";
 
   return async function loadSnapshot({ withIndustries = false, signal } = {}) {
     const deadline = now() + budgetMs;
-    async function response(url) {
+    async function response(url, stage, provider = "sina") {
       if (signal?.aborted) throw signal.reason || new Error("新浪快照查询已取消");
       const remaining = deadline - now();
-      if (remaining <= 0) throw new Error("新浪全A快照查询超时");
+      const prefix = provider === "tencent" ? "TENCENT" : "SINA";
+      if (remaining <= 0) throw sourceError("新浪全A快照查询超时", { code: `${prefix}_TIMEOUT`, stage });
       const timeout = AbortSignal.timeout(Math.max(1, Math.floor(Math.min(8000, remaining))));
-      const result = await request(url, { headers: HEADERS, signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
-      if (!result.ok) throw new Error(`新浪快照 HTTP ${result.status}`);
+      let result;
+      try {
+        result = await request(url, { headers: provider === "tencent" ? TENCENT_HEADERS : HEADERS,
+          signal: signal ? AbortSignal.any([signal, timeout]) : timeout });
+      } catch (cause) {
+        throw sourceError(`行情请求失败：${cause?.message || "连接失败"}`, { code: `${prefix}_NETWORK_ERROR`, stage, cause });
+      }
+      if (!result.ok) throw sourceError(`${provider === "tencent" ? "腾讯" : "新浪"}快照 HTTP ${result.status}`,
+        { code: `${prefix}_HTTP_ERROR`, stage, status: result.status });
       return result;
     }
     async function nodePage(node, page) {
-      const result = await response(`${API}getHQNodeData?page=${page}&num=${PAGE}&sort=symbol&asc=1&node=${encodeURIComponent(node)}`);
+      const result = await response(`${API}getHQNodeData?page=${page}&num=${PAGE}&sort=symbol&asc=1&node=${encodeURIComponent(node)}`,
+        node === "hs_a" ? "universe-page" : "industry-page");
       const rows = await result.json();
       if (!Array.isArray(rows)) throw new Error(`新浪 ${node} 第${page}页格式无效`);
       return rows;
     }
 
-    const expected = positiveCount(await (await response(`${API}getHQNodeStockCount?node=hs_a`)).json());
+    const expected = positiveCount(await (await response(`${API}getHQNodeStockCount?node=hs_a`, "universe-count")).json());
     const pageCount = Math.ceil(expected / PAGE);
     const pages = await pool(Array.from({ length: pageCount }, (_, index) => index + 1), async (page) => {
       const rows = await nodePage("hs_a", page);
@@ -89,38 +104,75 @@ export function createSinaMarketSnapshotProvider({ request = fetch, now = Date.n
     }
     if (bySymbol.size !== expected) throw new Error(`新浪全A去重后覆盖不完整（${bySymbol.size}/${expected}）`);
 
-    // node 快照的 ticktime 没有日期。逐股 hq 字段30/31才是该报价实际日期/时间，
-    // 不能用抓取日期给停牌、节假日或旧报价补日期。
+    // node 的 ticktime 没有日期。报价必须同时提供实际日期、价格与成交额；
+    // 新浪 HQ 在某些服务器返回403时，整份报价切到腾讯，不能拼接两源量价。
     const symbols = [...bySymbol.keys()];
     const batches = Array.from({ length: Math.ceil(symbols.length / PAGE) }, (_, index) => symbols.slice(index * PAGE, (index + 1) * PAGE));
-    const dates = new Map();
-    await pool(batches, async (batch) => {
-      const result = await response(`https://hq.sinajs.cn/list=${batch.join(",")}`);
-      const text = new TextDecoder("gbk").decode(await result.arrayBuffer());
-      const returned = new Set();
-      for (const match of text.matchAll(/var hq_str_((?:sh|sz|bj)\d{6})="([^"]*)";/g)) {
-        if (!batch.includes(match[1])) continue;
-        returned.add(match[1]);
-        const values = match[2].split(",");
-        const parsedAt = quoteTimestamp(values[30], values[31]);
-        const quoteAt = parsedAt !== null && parsedAt <= now() / 1000 + 300 ? parsedAt : null;
-        dates.set(match[1], {
-          quoteAt,
-          date: quoteAt === null ? null : values[30],
-          open: numeric(values[1]),
-          previousClose: numeric(values[2]),
-          close: numeric(values[3]),
-          amount: numeric(values[9]),
-        });
+    async function readQuotes(provider) {
+      const quotes = new Map();
+      const tencent = provider === "tencent";
+      const prefix = tencent ? "TENCENT" : "SINA";
+      async function batchQuotes(batch) {
+        const url = tencent ? `https://qt.gtimg.cn/q=${batch.join(",")}` : `https://hq.sinajs.cn/list=${batch.join(",")}`;
+        const result = await response(url, "quotes", provider);
+        const text = new TextDecoder("gbk").decode(await result.arrayBuffer());
+        const returned = new Set();
+        const pattern = tencent ? /v_((?:sh|sz|bj)\d{6})="([^"]*)";/g : /var hq_str_((?:sh|sz|bj)\d{6})="([^"]*)";/g;
+        for (const match of text.matchAll(pattern)) {
+          if (!batch.includes(match[1])) continue;
+          returned.add(match[1]);
+          const values = match[2].split(tencent ? "~" : ",");
+          if (tencent && match[2] && (values[2] !== match[1].slice(2) || values.length < 38)) {
+            throw sourceError("腾讯股票报价身份或格式无效", { code: "TENCENT_RESPONSE_INVALID", stage: "quotes" });
+          }
+          const rawDate = tencent && /^\d{14}$/.test(values[30] || "") ? values[30] : "";
+          const date = tencent ? rawDate && `${rawDate.slice(0, 4)}-${rawDate.slice(4, 6)}-${rawDate.slice(6, 8)}` : values[30];
+          const time = tencent ? rawDate && `${rawDate.slice(8, 10)}:${rawDate.slice(10, 12)}:${rawDate.slice(12, 14)}` : values[31];
+          const parsedAt = quoteTimestamp(date, time);
+          const quoteAt = parsedAt !== null && parsedAt <= now() / 1000 + 300 ? parsedAt : null;
+          let amount = numeric(values[tencent ? 37 : 9]);
+          if (tencent) {
+            amount = amount === null ? null : numeric(amount * 10000);
+            const total = (values[35] || "").split("/").map(numeric);
+            // 35为现价/累计成交量/累计成交额(元)，37万元在沪深会四舍五入。
+            // 核对本行现价和成交量后保留元精度，不取其他股票或源的量价。
+            if (total.length === 3 && total.every(Number.isFinite) && total[2] >= 0
+              && total[0] === numeric(values[3]) && total[1] === numeric(values[6])) amount = total[2];
+          }
+          quotes.set(match[1], {
+            quoteAt, date: quoteAt === null ? null : date,
+            open: numeric(values[tencent ? 5 : 1]),
+            previousClose: numeric(values[tencent ? 4 : 2]), close: numeric(values[3]),
+            amount,
+          });
+        }
+        if (returned.size !== batch.length) throw sourceError(`行情日期批次不完整（${returned.size}/${batch.length}）`,
+          { code: `${prefix}_COVERAGE_INCOMPLETE`, stage: "quotes" });
       }
-      if (returned.size !== batch.length) throw new Error(`新浪行情日期批次不完整（${returned.size}/${batch.length}）`);
-    });
+      // 先探测一批，拒绝连接时不用同时发六个注定失败的请求。
+      await batchQuotes(batches[0]);
+      await pool(batches.slice(1), batchQuotes);
+      const latest = Math.max(...[...quotes.values()].map((row) => row.quoteAt || 0));
+      if (!latest) throw sourceError("全A没有真实行情日期", { code: `${prefix}_RESPONSE_INVALID`, stage: "quotes" });
+      if (now() / 1000 - latest > 14 * 86400) throw sourceError("全A行情日期过旧", { code: `${prefix}_RESPONSE_INVALID`, stage: "quotes" });
+      return quotes;
+    }
+    let quoteSource = preferredQuoteSource;
+    let dates;
+    try {
+      dates = await readQuotes(quoteSource);
+    } catch (error) {
+      if (signal?.aborted || now() >= deadline) throw error;
+      quoteSource = quoteSource === "sina" ? "tencent" : "sina";
+      dates = await readQuotes(quoteSource);
+    }
+    preferredQuoteSource = quoteSource;
 
     let mapping = null;
     if (withIndustries) {
       if (industryCache && now() - industryCache.at < INDUSTRY_CACHE_MS) mapping = industryCache.mapping;
       else {
-        const result = await response(DIRECTORY);
+        const result = await response(DIRECTORY, "industry-directory");
         const text = new TextDecoder("gbk").decode(await result.arrayBuffer());
         const directories = new Map();
         for (const match of text.matchAll(/"(new_[A-Za-z0-9]+)":"[^,]+,([^,]+),(\d+),/g)) {
@@ -185,17 +237,18 @@ export function createSinaMarketSnapshotProvider({ request = fetch, now = Date.n
         market: symbol.startsWith("sh") ? 1 : 0,
         exchange: symbol.slice(0, 2),
         name: String(row.name).trim(),
-        // 量价与日期都来自同一条 HQ 行，不能把 node 旧日期的涨幅拼到新报价时间上。
+        // 量价与日期都来自同一条报价，不能把 node 旧涨幅拼到新报价时间上。
         close,
         open: timestamp?.open ?? null,
         pct: close > 0 && previousClose > 0 ? (close / previousClose - 1) * 100 : null,
-        amount: timestamp?.amount ?? null, // 新浪 HQ amount: 元。
+        amount: timestamp?.amount ?? null, // 已按报价源统一为元。
         cap: cap === null ? null : numeric(cap * 10000), // node mktcap/nmc: 万元 -> 元。
         floatCap: floatCap === null ? null : numeric(floatCap * 10000),
         mainInflow: null, // 当前接口不提供主力净额，不能补0。
         industry,
         quoteAt: timestamp?.quoteAt ?? null,
         quoteDate: timestamp?.date ?? null,
+        quoteSource,
       };
     });
     const quoteDates = Object.keys(quoteDateCounts).sort();
@@ -204,7 +257,8 @@ export function createSinaMarketSnapshotProvider({ request = fetch, now = Date.n
     // 个别停牌旧报价仍保留，但整个市场不能反复把数月前行情包装成新快照。
     if (now() / 1000 - latestQuoteAt > 14 * 86400) throw new Error("新浪全A行情日期过旧");
     const metadata = {
-      source: "sina",
+      source: quoteSource === "tencent" ? "sina-tencent" : "sina",
+      quoteSource, universeSource: "sina", capitalSource: "sina",
       classification: withIndustries ? "新浪行业" : null,
       classificationCoverage: { classified, total: stocks.length, unclassified: stocks.length - classified, conflicts },
       date: quoteDates.at(-1),

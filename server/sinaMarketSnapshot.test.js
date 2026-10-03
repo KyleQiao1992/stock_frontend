@@ -26,18 +26,23 @@ function source({ rows = fixture, dates = {}, industries = [], fail, count = row
       const bytes = new TextEncoder().encode(`var directory = ${JSON.stringify(directory)};`);
       return { ok: true, arrayBuffer: async () => bytes.buffer };
     }
-    if (parsed.hostname === "hq.sinajs.cn") {
-      const symbols = parsed.pathname.slice("/list=".length).split(",");
+    if (parsed.hostname === "hq.sinajs.cn" || parsed.hostname === "qt.gtimg.cn") {
+      const tencent = parsed.hostname === "qt.gtimg.cn";
+      const symbols = parsed.pathname.slice(tencent ? "/q=".length : "/list=".length).split(",");
       const text = symbols.map((symbol) => {
-        const values = new Array(32).fill("");
+        const values = new Array(tencent ? 38 : 32).fill("");
         const row = { ...rows.find((item) => item.symbol === symbol), ...hqRows[symbol] };
-        values[1] = row?.open ?? "";
-        values[2] = row?.settlement ?? "";
+        if (tencent) values[2] = symbol.slice(2);
+        values[tencent ? 5 : 1] = row?.open ?? "";
+        values[tencent ? 4 : 2] = row?.settlement ?? "";
         values[3] = row?.trade ?? "";
-        values[9] = row?.amount ?? "";
+        values[tencent ? 37 : 9] = row?.amount == null || row.amount === "" ? "" : tencent ? row.amount / 10000 : row.amount;
         const date = dates[symbol] === undefined ? ["2026-09-30", "15:30:00"] : dates[symbol];
-        if (date) [values[30], values[31]] = date;
-        return `var hq_str_${symbol}="${values.join(",")}";`;
+        if (date) {
+          if (tencent) values[30] = date.join("").replaceAll(/[-:]/g, "");
+          else [values[30], values[31]] = date;
+        }
+        return tencent ? `v_${symbol}="${values.join("~")}";` : `var hq_str_${symbol}="${values.join(",")}";`;
       }).join("\n");
       return { ok: true, arrayBuffer: async () => new TextEncoder().encode(text).buffer };
     }
