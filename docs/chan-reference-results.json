@@ -1,6 +1,6 @@
 {
   "capturedAt": "2026-10-06",
-  "currentChartMatched": 0,
+  "currentChartMatched": 13,
   "total": 13,
   "results": [
     {
@@ -9,54 +9,33 @@
       "period": "5m",
       "bars": 884,
       "source": "http://118.178.134.161:8000/api/chart?symbol=00700&market=hk&period=5m&limit=1200&source=auto&track=1",
-      "currentDefinition": "strict-old-bi-feature-sequence-v1",
-      "matches": false,
+      "currentDefinition": "reference-incremental-bi-sliding-zs-v1",
+      "matches": true,
       "checks": {
+        "candles": {
+          "expectedCount": 884,
+          "actualCount": 884,
+          "difference": null
+        },
         "fx": {
           "expectedCount": 223,
-          "actualCount": 224,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1789539600,
-              433.4,
-              "D"
-            ],
-            "actual": [
-              1789538400,
-              435.4,
-              "G"
-            ]
-          }
+          "actualCount": 223,
+          "difference": null
         },
         "bi": {
           "expectedCount": 52,
-          "actualCount": 21,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1789538700,
-              435.4
-            ],
-            "actual": [
-              1790045700,
-              463.4
-            ]
-          }
+          "actualCount": 52,
+          "difference": null
         },
         "zs": {
           "expectedCount": 13,
-          "actualCount": 0,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1789538700,
-              1789708800,
-              429,
-              425.4
-            ],
-            "actual": null
-          }
+          "actualCount": 13,
+          "difference": null
+        },
+        "endpoints": {
+          "expectedCount": 51,
+          "actualCount": 51,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -68,54 +47,33 @@
       "period": "day",
       "bars": 298,
       "source": "http://118.178.134.161:8000/api/chart?symbol=00700&market=hk&period=day&limit=300&source=auto&track=0",
-      "currentDefinition": "strict-old-bi-feature-sequence-v1",
-      "matches": false,
+      "currentDefinition": "reference-incremental-bi-sliding-zs-v1",
+      "matches": true,
       "checks": {
+        "candles": {
+          "expectedCount": 298,
+          "actualCount": 298,
+          "difference": null
+        },
         "fx": {
           "expectedCount": 105,
-          "actualCount": 106,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1753372800,
-              540.7,
-              "D"
-            ],
-            "actual": [
-              1753286400,
-              554.7,
-              "G"
-            ]
-          }
+          "actualCount": 105,
+          "difference": null
         },
         "bi": {
           "expectedCount": 27,
-          "actualCount": 14,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1753286400,
-              554.7
-            ],
-            "actual": [
-              1759334400,
-              677.7
-            ]
-          }
+          "actualCount": 27,
+          "difference": null
         },
         "zs": {
           "expectedCount": 7,
-          "actualCount": 0,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1753804800,
-              1768233600,
-              658.7,
-              597.2
-            ],
-            "actual": null
-          }
+          "actualCount": 7,
+          "difference": null
+        },
+        "endpoints": {
+          "expectedCount": 26,
+          "actualCount": 26,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -127,59 +85,33 @@
       "period": "day",
       "bars": 268,
       "source": "http://118.178.134.161:8000/api/chart?symbol=000001&market=sh&period=day&limit=300&source=auto&track=1",
-      "currentDefinition": "strict-old-bi-feature-sequence-v1",
-      "matches": false,
+      "currentDefinition": "reference-incremental-bi-sliding-zs-v1",
+      "matches": true,
       "checks": {
+        "candles": {
+          "expectedCount": 268,
+          "actualCount": 268,
+          "difference": null
+        },
         "fx": {
           "expectedCount": 101,
-          "actualCount": 102,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1756310400,
-              3761.42,
-              "D"
-            ],
-            "actual": [
-              1756137600,
-              3888.6,
-              "G"
-            ]
-          }
+          "actualCount": 101,
+          "difference": null
         },
         "bi": {
           "expectedCount": 23,
-          "actualCount": 18,
-          "difference": {
-            "index": 6,
-            "expected": [
-              1764518400,
-              3914.46
-            ],
-            "actual": [
-              1765123200,
-              3936.31
-            ]
-          }
+          "actualCount": 23,
+          "difference": null
         },
         "zs": {
           "expectedCount": 6,
-          "actualCount": 1,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1756915200,
-              1763913600,
-              4025.7,
-              3922.58
-            ],
-            "actual": [
-              1756915200,
-              1778688000,
-              4034.08,
-              3815.84
-            ]
-          }
+          "actualCount": 6,
+          "difference": null
+        },
+        "endpoints": {
+          "expectedCount": 22,
+          "actualCount": 22,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -191,54 +123,33 @@
       "period": "day",
       "bars": 287,
       "source": "http://118.178.134.161:8000/api/chart?symbol=510300&market=sh&period=day&limit=300&source=auto&track=0",
-      "currentDefinition": "strict-old-bi-feature-sequence-v1",
-      "matches": false,
+      "currentDefinition": "reference-incremental-bi-sliding-zs-v1",
+      "matches": true,
       "checks": {
+        "candles": {
+          "expectedCount": 287,
+          "actualCount": 287,
+          "difference": null
+        },
         "fx": {
           "expectedCount": 121,
-          "actualCount": 122,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1754236800,
-              3.994,
-              "D"
-            ],
-            "actual": [
-              1753804800,
-              4.142,
-              "G"
-            ]
-          }
+          "actualCount": 121,
+          "difference": null
         },
         "bi": {
           "expectedCount": 27,
-          "actualCount": 16,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1753804800,
-              4.142
-            ],
-            "actual": [
-              1761753600,
-              4.751
-            ]
-          }
+          "actualCount": 27,
+          "difference": null
         },
         "zs": {
           "expectedCount": 8,
-          "actualCount": 0,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1754236800,
-              1770652800,
-              4.692,
-              4.545
-            ],
-            "actual": null
-          }
+          "actualCount": 8,
+          "difference": null
+        },
+        "endpoints": {
+          "expectedCount": 26,
+          "actualCount": 26,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -250,54 +161,33 @@
       "period": "week",
       "bars": 260,
       "source": "http://118.178.134.161:8000/api/chart?symbol=510300&market=sh&period=week&limit=260&source=auto&track=1",
-      "currentDefinition": "strict-old-bi-feature-sequence-v1",
-      "matches": false,
+      "currentDefinition": "reference-incremental-bi-sliding-zs-v1",
+      "matches": true,
       "checks": {
+        "candles": {
+          "expectedCount": 260,
+          "actualCount": 260,
+          "difference": null
+        },
         "fx": {
           "expectedCount": 94,
-          "actualCount": 95,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1632412800,
-              4.433,
-              "D"
-            ],
-            "actual": [
-              1631203200,
-              4.708,
-              "G"
-            ]
-          }
+          "actualCount": 94,
+          "difference": null
         },
         "bi": {
           "expectedCount": 24,
-          "actualCount": 16,
-          "difference": {
-            "index": 7,
-            "expected": [
-              1686240000,
-              3.503
-            ],
-            "actual": [
-              1706803200,
-              2.891
-            ]
-          }
+          "actualCount": 24,
+          "difference": null
         },
         "zs": {
           "expectedCount": 5,
-          "actualCount": 0,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1631203200,
-              1651161600,
-              4.708,
-              4.407
-            ],
-            "actual": null
-          }
+          "actualCount": 5,
+          "difference": null
+        },
+        "endpoints": {
+          "expectedCount": 23,
+          "actualCount": 23,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -309,54 +199,33 @@
       "period": "day",
       "bars": 291,
       "source": "http://118.178.134.161:8000/api/chart?symbol=600519&market=sh&period=day&limit=300&source=auto&track=1",
-      "currentDefinition": "strict-old-bi-feature-sequence-v1",
-      "matches": false,
+      "currentDefinition": "reference-incremental-bi-sliding-zs-v1",
+      "matches": true,
       "checks": {
+        "candles": {
+          "expectedCount": 291,
+          "actualCount": 291,
+          "difference": null
+        },
         "fx": {
           "expectedCount": 97,
-          "actualCount": 98,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1753718400,
-              1383.029,
-              "D"
-            ],
-            "actual": [
-              1753286400,
-              1447.019,
-              "G"
-            ]
-          }
+          "actualCount": 97,
+          "difference": null
         },
         "bi": {
           "expectedCount": 17,
-          "actualCount": 14,
-          "difference": {
-            "index": 1,
-            "expected": [
-              1754236800,
-              1362.019
-            ],
-            "actual": [
-              1753977600,
-              1362.019
-            ]
-          }
+          "actualCount": 17,
+          "difference": null
         },
         "zs": {
           "expectedCount": 4,
-          "actualCount": 0,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1753286400,
-              1782662400,
-              1447.019,
-              1362.019
-            ],
-            "actual": null
-          }
+          "actualCount": 4,
+          "difference": null
+        },
+        "endpoints": {
+          "expectedCount": 16,
+          "actualCount": 16,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -368,54 +237,33 @@
       "period": "15m",
       "bars": 783,
       "source": "http://118.178.134.161:8000/api/chart?symbol=603818&market=sh&period=15m&limit=800&source=auto&track=0",
-      "currentDefinition": "strict-old-bi-feature-sequence-v1",
-      "matches": false,
+      "currentDefinition": "reference-incremental-bi-sliding-zs-v1",
+      "matches": true,
       "checks": {
+        "candles": {
+          "expectedCount": 783,
+          "actualCount": 783,
+          "difference": null
+        },
         "fx": {
           "expectedCount": 182,
-          "actualCount": 183,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1784775600,
-              3.07,
-              "D"
-            ],
-            "actual": [
-              1784772900,
-              3.22,
-              "G"
-            ]
-          }
+          "actualCount": 182,
+          "difference": null
         },
         "bi": {
           "expectedCount": 36,
-          "actualCount": 21,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1784772900,
-              3.22
-            ],
-            "actual": [
-              1785203100,
-              3.37
-            ]
-          }
+          "actualCount": 36,
+          "difference": null
         },
         "zs": {
           "expectedCount": 8,
-          "actualCount": 0,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1784772900,
-              1785807900,
-              3.22,
-              3.07
-            ],
-            "actual": null
-          }
+          "actualCount": 8,
+          "difference": null
+        },
+        "endpoints": {
+          "expectedCount": 35,
+          "actualCount": 35,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -427,54 +275,33 @@
       "period": "30m",
       "bars": 293,
       "source": "http://118.178.134.161:8000/api/chart?symbol=603818&market=sh&period=30m&limit=300&source=auto&track=0",
-      "currentDefinition": "strict-old-bi-feature-sequence-v1",
-      "matches": false,
+      "currentDefinition": "reference-incremental-bi-sliding-zs-v1",
+      "matches": true,
       "checks": {
+        "candles": {
+          "expectedCount": 293,
+          "actualCount": 293,
+          "difference": null
+        },
         "fx": {
           "expectedCount": 74,
-          "actualCount": 75,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1786413600,
-              3.57,
-              "D"
-            ],
-            "actual": [
-              1786339800,
-              3.73,
-              "G"
-            ]
-          }
+          "actualCount": 74,
+          "difference": null
         },
         "bi": {
           "expectedCount": 20,
-          "actualCount": 13,
-          "difference": {
-            "index": 2,
-            "expected": [
-              1786590000,
-              3.64
-            ],
-            "actual": [
-              1787104800,
-              3.85
-            ]
-          }
+          "actualCount": 20,
+          "difference": null
         },
         "zs": {
           "expectedCount": 6,
-          "actualCount": 0,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1786339800,
-              1787295600,
-              3.64,
-              3.54
-            ],
-            "actual": null
-          }
+          "actualCount": 6,
+          "difference": null
+        },
+        "endpoints": {
+          "expectedCount": 19,
+          "actualCount": 19,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -486,54 +313,33 @@
       "period": "5m",
       "bars": 308,
       "source": "http://118.178.134.161:8000/api/chart?symbol=603818&market=sh&period=5m&limit=1200&source=auto&track=0",
-      "currentDefinition": "strict-old-bi-feature-sequence-v1",
-      "matches": false,
+      "currentDefinition": "reference-incremental-bi-sliding-zs-v1",
+      "matches": true,
       "checks": {
+        "candles": {
+          "expectedCount": 308,
+          "actualCount": 308,
+          "difference": null
+        },
         "fx": {
           "expectedCount": 65,
-          "actualCount": 66,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1789970400,
-              4.04,
-              "G"
-            ],
-            "actual": [
-              1789968600,
-              3.96,
-              "D"
-            ]
-          }
+          "actualCount": 65,
+          "difference": null
         },
         "bi": {
           "expectedCount": 13,
-          "actualCount": 12,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1789968900,
-              3.96
-            ],
-            "actual": [
-              1789968600,
-              3.96
-            ]
-          }
+          "actualCount": 13,
+          "difference": null
         },
         "zs": {
           "expectedCount": 3,
-          "actualCount": 0,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1789968900,
-              1790213700,
-              4.06,
-              3.98
-            ],
-            "actual": null
-          }
+          "actualCount": 3,
+          "difference": null
+        },
+        "endpoints": {
+          "expectedCount": 12,
+          "actualCount": 12,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -545,54 +351,33 @@
       "period": "60m",
       "bars": 285,
       "source": "http://118.178.134.161:8000/api/chart?symbol=603818&market=sh&period=60m&limit=300&source=auto&track=0",
-      "currentDefinition": "strict-old-bi-feature-sequence-v1",
-      "matches": false,
+      "currentDefinition": "reference-incremental-bi-sliding-zs-v1",
+      "matches": true,
       "checks": {
+        "candles": {
+          "expectedCount": 285,
+          "actualCount": 285,
+          "difference": null
+        },
         "fx": {
           "expectedCount": 65,
-          "actualCount": 66,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1782271800,
-              2.92,
-              "D"
-            ],
-            "actual": [
-              1782181800,
-              3.16,
-              "G"
-            ]
-          }
+          "actualCount": 65,
+          "difference": null
         },
         "bi": {
           "expectedCount": 19,
-          "actualCount": 16,
-          "difference": {
-            "index": 7,
-            "expected": [
-              1784604600,
-              2.66
-            ],
-            "actual": [
-              1784601000,
-              2.66
-            ]
-          }
+          "actualCount": 19,
+          "difference": null
         },
         "zs": {
           "expectedCount": 5,
-          "actualCount": 0,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1782181800,
-              1785391200,
-              3.16,
-              3.1
-            ],
-            "actual": null
-          }
+          "actualCount": 5,
+          "difference": null
+        },
+        "endpoints": {
+          "expectedCount": 18,
+          "actualCount": 18,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -604,54 +389,33 @@
       "period": "day",
       "bars": 286,
       "source": "http://118.178.134.161:8000/api/chart?symbol=603818&market=sh&period=day&limit=300&source=auto&track=1",
-      "currentDefinition": "strict-old-bi-feature-sequence-v1",
-      "matches": false,
+      "currentDefinition": "reference-incremental-bi-sliding-zs-v1",
+      "matches": true,
       "checks": {
+        "candles": {
+          "expectedCount": 286,
+          "actualCount": 286,
+          "difference": null
+        },
         "fx": {
           "expectedCount": 90,
-          "actualCount": 91,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1755100800,
-              5.26,
-              "G"
-            ],
-            "actual": [
-              1754236800,
-              4.26,
-              "D"
-            ]
-          }
+          "actualCount": 90,
+          "difference": null
         },
         "bi": {
           "expectedCount": 25,
-          "actualCount": 16,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1754236800,
-              4.26
-            ],
-            "actual": [
-              1756828800,
-              3.91
-            ]
-          }
+          "actualCount": 25,
+          "difference": null
         },
         "zs": {
           "expectedCount": 10,
-          "actualCount": 0,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1754236800,
-              1765728000,
-              4.33,
-              4.26
-            ],
-            "actual": null
-          }
+          "actualCount": 10,
+          "difference": null
+        },
+        "endpoints": {
+          "expectedCount": 24,
+          "actualCount": 24,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -663,54 +427,33 @@
       "period": "week",
       "bars": 259,
       "source": "http://118.178.134.161:8000/api/chart?symbol=603818&market=sh&period=week&limit=260&source=auto&track=0",
-      "currentDefinition": "strict-old-bi-feature-sequence-v1",
-      "matches": false,
+      "currentDefinition": "reference-incremental-bi-sliding-zs-v1",
+      "matches": true,
       "checks": {
+        "candles": {
+          "expectedCount": 259,
+          "actualCount": 259,
+          "difference": null
+        },
         "fx": {
           "expectedCount": 83,
-          "actualCount": 84,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1632931200,
-              8.93,
-              "D"
-            ],
-            "actual": [
-              1631808000,
-              10.13,
-              "G"
-            ]
-          }
+          "actualCount": 83,
+          "difference": null
         },
         "bi": {
           "expectedCount": 27,
-          "actualCount": 25,
-          "difference": {
-            "index": 4,
-            "expected": [
-              1670515200,
-              7.17
-            ],
-            "actual": [
-              1676563200,
-              7.84
-            ]
-          }
+          "actualCount": 27,
+          "difference": null
         },
         "zs": {
           "expectedCount": 7,
-          "actualCount": 0,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1631808000,
-              1667491200,
-              10.13,
-              7.94
-            ],
-            "actual": null
-          }
+          "actualCount": 7,
+          "difference": null
+        },
+        "endpoints": {
+          "expectedCount": 26,
+          "actualCount": 26,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -722,54 +465,33 @@
       "period": "day",
       "bars": 285,
       "source": "http://118.178.134.161:8000/api/chart?symbol=000001&market=sz&period=day&limit=300&source=auto&track=1",
-      "currentDefinition": "strict-old-bi-feature-sequence-v1",
-      "matches": false,
+      "currentDefinition": "reference-incremental-bi-sliding-zs-v1",
+      "matches": true,
       "checks": {
+        "candles": {
+          "expectedCount": 285,
+          "actualCount": 285,
+          "difference": null
+        },
         "fx": {
           "expectedCount": 88,
-          "actualCount": 89,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1754582400,
-              11.685,
-              "G"
-            ],
-            "actual": [
-              1753977600,
-              11.305,
-              "D"
-            ]
-          }
+          "actualCount": 88,
+          "difference": null
         },
         "bi": {
           "expectedCount": 26,
-          "actualCount": 17,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1753977600,
-              11.305
-            ],
-            "actual": [
-              1759075200,
-              10.425
-            ]
-          }
+          "actualCount": 26,
+          "difference": null
         },
         "zs": {
           "expectedCount": 7,
-          "actualCount": 0,
-          "difference": {
-            "index": 0,
-            "expected": [
-              1753977600,
-              1759939200,
-              11.685,
-              11.305
-            ],
-            "actual": null
-          }
+          "actualCount": 7,
+          "difference": null
+        },
+        "endpoints": {
+          "expectedCount": 25,
+          "actualCount": 25,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,

@@ -3725,7 +3725,7 @@ function KlinePatternPopover({ selected, onClose }) {
   );
 }
 
-function Chart({
+export function Chart({
   rows,
   fullRows = rows,
   visibleGaps,
@@ -9121,7 +9121,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showPatterns, setShowPatterns] = useState(false);
-  const [chanOptions, setChanOptions] = useState({ enabled: true, bi: true, segment: true, zs: true, fx: true });
+  const [chanOptions, setChanOptions] = useState({ enabled: true, bi: true, zs: true, fx: true });
   const [analysisTab, setAnalysisTab] = useState("financial");
   const chanData = useMemo(() => analyzeChan(rawRows, period), [rawRows, period]);
 
@@ -9139,7 +9139,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   }
 
   const fullRowsWithTD = useMemo(() => calcTD9(rawRows, tdMode), [rawRows, tdMode]);
-  const displayStartIndex = Math.max(0, fullRowsWithTD.length - displayCount);
+  const displayStartIndex = Math.max(0, fullRowsWithTD.length - displayCount,
+    chanOptions.enabled ? chanData.historyOffset : 0);
   const rows = useMemo(() => fullRowsWithTD.slice(displayStartIndex), [fullRowsWithTD, displayStartIndex]);
   const visibleGaps = useMemo(() => {
     const displayEndIndex = fullRowsWithTD.length - 1;

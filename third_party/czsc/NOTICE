@@ -1,0 +1,10 @@
+CZSC incremental Chan analysis
+Copyright 2025 zengbin93
+Apache License 2.0
+
+Source: https://github.com/waditu/czsc/blob/v0.9.69/czsc/analyze.py
+Source license: https://github.com/waditu/czsc/blob/v0.9.69/LICENSE
+
+src/lib/chan/referenceEngine.js is a modified JavaScript port of the incremental
+inclusion, fractal and stroke analysis. It uses ordinal chart coordinates,
+deduplicates drawable fractals, and returns the reference chart's developing tail.

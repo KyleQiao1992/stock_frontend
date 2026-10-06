@@ -16,8 +16,8 @@ function barTag(time, price) {
   return `${fmtDay(time)} @ ${fmtP(price)}`
 }
 
-function zsRangeText(zs) {
-  if (!zs) return '尚未形成三个连续完成线段重叠的中枢'
+function zsRangeText(zs, reference = false) {
+  if (!zs) return reference ? '尚无参考笔中枢' : '尚未形成三个连续完成线段重叠的中枢'
   const status = zs.status === 'closed' ? '最近已结束的' : '最近确认的'
   return `${status}${zs.label || '线段中枢（本图最小级别）'} ` +
     `${fmtDay(zs.sdt)} ~ ${fmtDay(zs.edt)}（ZG ${fmtP(zs.zg)} / ZD ${fmtP(zs.zd)}）`
@@ -55,13 +55,16 @@ export function buildTrades(biPoints = []) {
  * 完整走势类型、趋势背驰及跨级别证据尚未计算，因此不确认买卖点。
  * 定义依据：缠中说禅《教你炒股票》第 17、20、21 课。
  */
-export function buildOutlook({ candles = [], biPoints = [], zsList = [], segments = [], pendingBi = [], close, period = 'day' }) {
+export function buildOutlook({ candles = [], biPoints = [], zsList = [], segments = [], pendingBi = [], close, period = 'day', zoneMode = 'segments' }) {
   const n = biPoints.length
   if (n < 2 || !candles.length) {
     return { ok: false, asof: candles.length ? candles[candles.length - 1].time : 0, period }
   }
 
-  const referenceZs = zsList.length ? zsList[zsList.length - 1] : null
+  const reference = zoneMode === 'sliding_bi'
+  const referenceZs = reference
+    ? zsList.reduce((latest, z) => !latest || z.edt > latest.edt ? z : latest, null)
+    : zsList.at(-1) ?? null
   const lastA = biPoints[n - 2]
   const lastB = biPoints[n - 1]
   const lastDir = lastB.price > lastA.price ? 'up' : 'down'
@@ -73,18 +76,23 @@ export function buildOutlook({ candles = [], biPoints = [], zsList = [], segment
   const segmentFact = lastSegment
     ? `已确认线段 ${completedSegments.length} 段，最新一段${lastSegment.direction === 'up' ? '向上' : '向下'}（${fmtDay(lastSegment.start.time)} ~ ${fmtDay(lastSegment.end.time)}）`
     : '尚无已确认线段'
-  const pendingFact = pendingBi.length >= 2 ? '；当前虚线笔尚未完成，不参与已完成结构' : ''
+  const pendingFact = pendingBi.length >= 2
+    ? reference ? '；实线末端为动态极值，不参与笔端参考和中枢' : '；当前虚线笔尚未完成，不参与已完成结构'
+    : ''
   const pos = positionVsZs(close, referenceZs)
-  const zsText = zsRangeText(referenceZs)
-  const vsLabel = referenceZs ? `${pos.label}（${zsText}）` : '无已确认线段中枢'
+  const zsText = zsRangeText(referenceZs, reference)
+  const vsLabel = referenceZs ? `${pos.label}（${zsText}）` : reference ? '无参考笔中枢' : '无已确认线段中枢'
   const structureFact =
-    `最新完成笔方向：${lastDirCn}；${segmentFact}${pendingFact}。` +
+    `最新完成笔方向：${lastDirCn}${reference ? '' : `；${segmentFact}`}${pendingFact}。` +
     `现价 ${fmtP(close)}，${vsLabel}。`
   const evidenceLimit =
     '一类买卖点需要相应级别趋势背驰及次级别证据；二类买卖点依赖已确认的一类买卖点及其后首次次级别回调或反抽；' +
     '三类买点需要次级别走势类型向上离开中枢后，首次次级别回试完成且低点不跌破 ZG；三类卖点对称地要求向下离开后首次次级别回抽完成且高点不升破 ZD。' +
     '本实现未计算这些走势类型、背驰和跨级别证据，不确认一、二、三类买卖点。'
-  const observation = referenceZs
+  const observation = reference ? referenceZs
+    ? `${zsText}由前三笔的重叠区间确定，最多延伸九笔，延伸保持初始 ZG/ZD。`
+    : '当前没有三笔的有效重叠区间。'
+    : referenceZs
     ? `${zsText}由三个连续完成线段的重叠区间确定，后续延伸保持初始 ZG/ZD。现价位于中枢${pos.vs === 'above' ? '上方' : pos.vs === 'below' ? '下方' : '内部'}只描述位置。`
     : '完成线段不足或三个连续完成线段没有有效重叠，当前不绘制中枢；完成笔端仅作结构定位。'
   const biasNote = '中性结构记录；完成笔方向和现价相对中枢的位置不构成买卖点确认。'
@@ -104,10 +112,12 @@ export function buildOutlook({ candles = [], biPoints = [], zsList = [], segment
       bias_note: biasNote,
       structure_fact: structureFact,
       observation,
-      observation_basis: '仅依据完成笔、已确认线段及本图最小级别线段中枢记录结构事实。',
+      observation_basis: reference ? '依据参考站口径的笔端和滑动笔中枢记录结构事实。'
+        : '仅依据完成笔、已确认线段及本图最小级别线段中枢记录结构事实。',
       trigger_condition: evidenceLimit,
       action_hint: evidenceLimit,
-      invalidation: '现价穿越 ZG/ZD 只改变相对位置；中枢延伸或结束由后续完成线段判定，未完成笔不用于确认。',
+      invalidation: reference ? '新K线可能使近端笔回退重算；中枢依据笔端重新计算，动态末端不参与构枢。'
+        : '现价穿越 ZG/ZD 只改变相对位置；中枢延伸或结束由后续完成线段判定，未完成笔不用于确认。',
       confirmed_signal: null,
       latest_signal: null,
       summary: `${structureFact} ${evidenceLimit}`
@@ -129,6 +139,7 @@ export function buildOutlook({ candles = [], biPoints = [], zsList = [], segment
       active_zs_id: referenceZs?.id ?? null,
       zs_algorithm: referenceZs?.algorithm ?? null,
       zs_segment_count: referenceZs?.segment_count ?? null,
+      zs_bi_count: referenceZs?.bi_count ?? null,
       zs_level: referenceZs?.level ?? null,
       zs_status: referenceZs?.status ?? null,
       zs_zg_bar: referenceZs ? barTag(referenceZs.zg_time, referenceZs.zg) : null,
@@ -139,6 +150,7 @@ export function buildOutlook({ candles = [], biPoints = [], zsList = [], segment
       bias: '中性',
       bias_note: biasNote
     },
-    disclaimer: '本图仅计算完成笔、已确认线段与本图最小级别的线段中枢，未递归计算各级别走势类型、背驰及一二三类买卖点。'
+    disclaimer: reference ? '本图采用参考站的笔与滑动笔中枢口径，未递归计算走势级别、背驰和一二三类买卖点。'
+      : '本图仅计算完成笔、已确认线段与本图最小级别的线段中枢，未递归计算各级别走势类型、背驰及一二三类买卖点。'
   }
 }

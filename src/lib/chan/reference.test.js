@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { referenceFractals } from './referenceFractal.js';
 import { buildZs } from './referenceZs.js';
-import { firstDifference } from './referenceParity.js';
+import { compareReference, firstDifference } from './referenceParity.js';
+import { analyzeChan, visibleOffset } from './index.js';
+import { analyzeReferenceCandles, referenceHistoryLimit } from './referenceEngine.js';
 
 const directory = new URL('./fixtures/reference/', import.meta.url);
 const fixtures = readdirSync(directory).filter((name) => name.endsWith('.json')).sort()
@@ -45,6 +47,13 @@ for (const { name, data } of fixtures) {
   test(`website zone candidate ${name}: oracle pens reproduce every zone boundary and member count`, () => {
     assert.deepEqual(buildZs(data.trades), data.zs);
   });
+
+  test(`active chart pipeline ${name}: candles, fractals, pens, zones and references match the API`, () => {
+    const report = compareReference(data);
+    for (const [key, check] of Object.entries(report.checks)) assert.equal(check.difference, null, `${key}: ${JSON.stringify(check.difference)}`);
+    assert.equal(report.matches, true);
+    assert.equal(report.currentDefinition, 'reference-incremental-bi-sliding-zs-v1');
+  });
 }
 
 test('parity compares point locations and prices, including trailing points', () => {
@@ -62,4 +71,37 @@ test('603818 day oracle preserves 23 strokes, ten sliding zones and the actual d
   assert.equal(fixture.bi.at(-1).time, fixture.candles.at(-1).time);
   assert.equal(fixture.bi.at(-1).price, 3.75);
   assert.equal(fixture.candles.at(-1).close, 4.05);
+});
+
+test('300 original Tencent bars trim to the reference 286 bars with every plotted structure identical', () => {
+  const input = JSON.parse(readFileSync(new URL('./fixtures/input/sh603818-day-300.json', import.meta.url), 'utf8'));
+  const fixture = fixtures.find(({ name }) => name === 'sh603818-day.json').data;
+  const report = compareReference(fixture, input.candles);
+  for (const check of Object.values(report.checks)) assert.equal(check.difference, null, JSON.stringify(check));
+  const rows = input.candles.map(({ time, vol, ...c }) => ({ ...c, date: String(time), volume: vol }));
+  const result = analyzeChan(rows, '101');
+  assert.equal(result.historyOffset, 14);
+  assert.equal(result.definition.historyBars, 286);
+  assert.deepEqual(result.biLine.slice(-2).map((p) => p.price), [4.24, 3.75]);
+  assert.equal(result.biLine.at(-1).time, 300);
+  assert.equal(result.bi.at(-1).time, 294);
+  assert.equal(visibleOffset(result, rows.slice(-80)), 220);
+  assert.equal(result.outlook.levels.zs_zg, 3.68);
+  assert.equal(result.outlook.levels.zs_zd, 3.25);
+});
+
+test('reference history request length is independent of chart zoom and uses the real period mapping', () => {
+  for (const [period, count] of [['day',300],['101',300],['week',260],['102',260],['60m',300],['30m',300],['15m',800],['5m',1200]]) {
+    assert.equal(referenceHistoryLimit(period), count);
+  }
+});
+
+test('incremental engine does not mutate input candles, and empty history cannot invent endpoints', () => {
+  const fixture = fixtures.find(({ name }) => name === 'sh603818-day.json').data;
+  const input = fixture.candles.map((c) => Object.freeze({ ...c }));
+  assert.doesNotThrow(() => analyzeReferenceCandles(Object.freeze(input)));
+  const empty = analyzeChan([]);
+  assert.deepEqual(empty.biLine, []);
+  assert.deepEqual(empty.zs, []);
+  assert.equal(empty.outlook.ok, false);
 });

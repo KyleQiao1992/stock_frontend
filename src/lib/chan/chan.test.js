@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeChan, visibleOffset } from './index.js';
+// Retain the previous strict pipeline's tests independently of the active reference mode.
+import { analyzeChan, visibleOffset } from './strictAnalysis.js';
 import { buildBi, isStrictBi } from './bi.js';
 import { mergeCandles } from './fractal.js';
 import { buildSegments } from './segment.js';
