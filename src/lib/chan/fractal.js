@@ -1,68 +1,56 @@
-/** 缠论第一步：K 线包含关系处理 + 分型识别 */
+/** 缠论第62、65课：先顺序处理包含关系，再识别三根K线分型。 */
+
+export function hasInclusion(a, b) {
+  return (a.high >= b.high && a.low <= b.low) ||
+    (b.high >= a.high && b.low <= a.low)
+}
 
 /**
- * 包含关系处理：相邻两根 K 线互相包含时合并为一根。
- * 向上处理取 max(high)/max(low)，向下处理取 min(high)/min(low)。
- * 返回合并后的 K 线，每根带 from/to 指向原始 K 线下标区间。
+ * 包含方向须由前一对非包含K线确定，向上取 max/max，向下取 min/min。
+ * 截取历史开头若是包含链，缺少这个前提，舍弃无法定向的前缀；
+ * 从第一对非包含K线开始，不用未来方向反推，也不默认上涨。
+ * from/to 记录原始区间，highIdx/lowIdx 分别记录真实极值所在原K线。
+ * 同价极值保留最早的原K线，这是绘图定位的确定性约定。
  */
 export function mergeCandles(candles) {
+  if (!candles.length) return []
+  let start = 0
+  while (start + 1 < candles.length && hasInclusion(candles[start], candles[start + 1])) start++
+  if (start + 1 === candles.length && start > 0) return []
+
   const merged = []
-  for (let i = 0; i < candles.length; i++) {
+  for (let i = start; i < candles.length; i++) {
     const c = candles[i]
     const cur = {
-      high: c.high,
-      low: c.low,
-      time: c.time,
-      idx: i,
-      from: i,
-      to: i,
-      // 极值所在的原始下标，笔端定位要用真实 K 线
-      highIdx: i,
-      lowIdx: i
+      high: c.high, low: c.low, time: c.time, idx: i,
+      from: i, to: i, highIdx: i, lowIdx: i
     }
-    if (merged.length < 2) {
+    const prev = merged.at(-1)
+    if (!prev || !hasInclusion(prev, cur)) {
       merged.push(cur)
       continue
     }
-    const prev = merged[merged.length - 1]
-    const contains =
-      (prev.high >= cur.high && prev.low <= cur.low) ||
-      (cur.high >= prev.high && cur.low <= prev.low)
-    if (!contains) {
-      merged.push(cur)
-      continue
-    }
-    // 方向由前两根决定
-    const prev2 = merged[merged.length - 2]
-    const up = prev.high > prev2.high || prev.low > prev2.low
+
+    // 开头已经确定了非包含对；之后的方向来自最后两个已处理K线。
+    const prev2 = merged.at(-2)
+    const up = prev.high > prev2.high
     if (up) {
-      if (cur.high > prev.high) {
-        prev.high = cur.high
-        prev.highIdx = cur.highIdx
-      }
-      if (cur.low > prev.low) {
-        prev.low = cur.low
-        prev.lowIdx = cur.lowIdx
-      }
+      if (cur.high > prev.high) { prev.high = cur.high; prev.highIdx = i }
+      if (cur.low > prev.low) { prev.low = cur.low; prev.lowIdx = i }
     } else {
-      if (cur.high < prev.high) {
-        prev.high = cur.high
-        prev.highIdx = cur.highIdx
-      }
-      if (cur.low < prev.low) {
-        prev.low = cur.low
-        prev.lowIdx = cur.lowIdx
-      }
+      if (cur.high < prev.high) { prev.high = cur.high; prev.highIdx = i }
+      if (cur.low < prev.low) { prev.low = cur.low; prev.lowIdx = i }
     }
     prev.to = i
-    prev.time = candles[up ? prev.highIdx : prev.lowIdx].time
+    prev.idx = up ? prev.highIdx : prev.lowIdx
+    prev.time = candles[prev.idx].time
   }
   return merged
 }
 
 /**
- * 分型：连续三根合并 K 线，中间最高 → 顶分型(G)，中间最低 → 底分型(D)。
- * price/idx 取原始 K 线上的真实极值点，便于绘图与定位。
+ * 中间K线的高、低均严格高于两邻线为顶，均严格低于两邻线为底。
+ * 所有标记都是原始三K分型候选；能否成为笔端，另按严格笔条件筛选。
  */
 export function findFractals(candles, merged) {
   const out = []
@@ -70,25 +58,19 @@ export function findFractals(candles, merged) {
     const a = merged[i - 1]
     const b = merged[i]
     const c = merged[i + 1]
-    if (b.high > a.high && b.high > c.high && b.low > a.low && b.low > c.low) {
-      const oi = b.highIdx
-      out.push({
-        mark: 'G',
-        mi: i,
-        idx: oi,
-        time: candles[oi].time,
-        price: candles[oi].high
-      })
-    } else if (b.low < a.low && b.low < c.low && b.high < a.high && b.high < c.high) {
-      const oi = b.lowIdx
-      out.push({
-        mark: 'D',
-        mi: i,
-        idx: oi,
-        time: candles[oi].time,
-        price: candles[oi].low
-      })
-    }
+    let mark
+    if (b.high > a.high && b.high > c.high && b.low > a.low && b.low > c.low) mark = 'G'
+    else if (b.low < a.low && b.low < c.low && b.high < a.high && b.high < c.high) mark = 'D'
+    if (!mark) continue
+    const idx = mark === 'G' ? b.highIdx : b.lowIdx
+    out.push({
+      mark, mi: i, idx, time: candles[idx].time,
+      price: mark === 'G' ? b.high : b.low,
+      high: b.high, low: b.low,
+      leftMi: i - 1, rightMi: i + 1,
+      from: a.from, to: c.to,
+      confirmedAt: candles[c.to].time
+    })
   }
   return out
 }

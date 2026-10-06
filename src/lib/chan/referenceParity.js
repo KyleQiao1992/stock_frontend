@@ -1,0 +1,43 @@
+import { analyzeChan } from './index.js';
+import { referenceFractals } from './referenceFractal.js';
+import { buildZs } from './referenceZs.js';
+
+// Compare date + price + order, rather than just structure counts.
+export function firstDifference(expected, actual) {
+  for (let i = 0; i < Math.max(expected.length, actual.length); i++) {
+    if (JSON.stringify(expected[i]) !== JSON.stringify(actual[i])) {
+      return { index: i, expected: expected[i] ?? null, actual: actual[i] ?? null };
+    }
+  }
+  return null;
+}
+
+export function compareReference(fixture) {
+  const rows = fixture.candles.map(({ time, vol, ...bar }) => ({ ...bar, date: String(time), volume: vol }));
+  const current = analyzeChan(rows, fixture.period);
+  const timeAt = (time) => fixture.candles[time - 1]?.time;
+  const point = (p) => [timeAt(p.time), p.price];
+  const expected = {
+    fx: fixture.fx.map((p) => [p.time, p.price, p.mark]),
+    bi: fixture.bi.map((p) => [p.time, p.price]),
+    zs: fixture.zs.map((z) => [z.sdt, z.edt, z.zg, z.zd]),
+  };
+  const actual = {
+    fx: current.fx.map((p) => [...point(p), p.mark]),
+    bi: [...current.bi, ...current.pending.slice(1)].map(point),
+    zs: current.zs.map((z) => [timeAt(z.sdt), timeAt(z.edt), z.zg, z.zd]),
+  };
+  const checks = Object.fromEntries(Object.keys(expected).map((key) => [key, {
+    expectedCount: expected[key].length, actualCount: actual[key].length,
+    difference: firstDifference(expected[key], actual[key]),
+  }]));
+  const candidateFx = referenceFractals(fixture.candles).fx;
+  return {
+    symbol: fixture.symbol, market: fixture.market, period: fixture.period,
+    bars: fixture.candles.length, source: fixture.source,
+    currentDefinition: current.definition.id,
+    matches: Object.values(checks).every((c) => c.difference === null), checks,
+    referenceFractalMatches: firstDifference(expected.fx, candidateFx.map((p) => [p.time, p.price, p.mark])) === null,
+    referenceZonesMatchWithOraclePens: firstDifference(fixture.zs, buildZs(fixture.trades)) === null,
+  };
+}

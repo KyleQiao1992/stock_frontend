@@ -1,0 +1,779 @@
+{
+  "capturedAt": "2026-10-06",
+  "currentChartMatched": 0,
+  "total": 13,
+  "results": [
+    {
+      "symbol": "00700",
+      "market": "hk",
+      "period": "5m",
+      "bars": 884,
+      "source": "http://118.178.134.161:8000/api/chart?symbol=00700&market=hk&period=5m&limit=1200&source=auto&track=1",
+      "currentDefinition": "strict-old-bi-feature-sequence-v1",
+      "matches": false,
+      "checks": {
+        "fx": {
+          "expectedCount": 223,
+          "actualCount": 224,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1789539600,
+              433.4,
+              "D"
+            ],
+            "actual": [
+              1789538400,
+              435.4,
+              "G"
+            ]
+          }
+        },
+        "bi": {
+          "expectedCount": 52,
+          "actualCount": 21,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1789538700,
+              435.4
+            ],
+            "actual": [
+              1790045700,
+              463.4
+            ]
+          }
+        },
+        "zs": {
+          "expectedCount": 13,
+          "actualCount": 0,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1789538700,
+              1789708800,
+              429,
+              425.4
+            ],
+            "actual": null
+          }
+        }
+      },
+      "referenceFractalMatches": true,
+      "referenceZonesMatchWithOraclePens": true
+    },
+    {
+      "symbol": "00700",
+      "market": "hk",
+      "period": "day",
+      "bars": 298,
+      "source": "http://118.178.134.161:8000/api/chart?symbol=00700&market=hk&period=day&limit=300&source=auto&track=0",
+      "currentDefinition": "strict-old-bi-feature-sequence-v1",
+      "matches": false,
+      "checks": {
+        "fx": {
+          "expectedCount": 105,
+          "actualCount": 106,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1753372800,
+              540.7,
+              "D"
+            ],
+            "actual": [
+              1753286400,
+              554.7,
+              "G"
+            ]
+          }
+        },
+        "bi": {
+          "expectedCount": 27,
+          "actualCount": 14,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1753286400,
+              554.7
+            ],
+            "actual": [
+              1759334400,
+              677.7
+            ]
+          }
+        },
+        "zs": {
+          "expectedCount": 7,
+          "actualCount": 0,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1753804800,
+              1768233600,
+              658.7,
+              597.2
+            ],
+            "actual": null
+          }
+        }
+      },
+      "referenceFractalMatches": true,
+      "referenceZonesMatchWithOraclePens": true
+    },
+    {
+      "symbol": "000001",
+      "market": "sh",
+      "period": "day",
+      "bars": 268,
+      "source": "http://118.178.134.161:8000/api/chart?symbol=000001&market=sh&period=day&limit=300&source=auto&track=1",
+      "currentDefinition": "strict-old-bi-feature-sequence-v1",
+      "matches": false,
+      "checks": {
+        "fx": {
+          "expectedCount": 101,
+          "actualCount": 102,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1756310400,
+              3761.42,
+              "D"
+            ],
+            "actual": [
+              1756137600,
+              3888.6,
+              "G"
+            ]
+          }
+        },
+        "bi": {
+          "expectedCount": 23,
+          "actualCount": 18,
+          "difference": {
+            "index": 6,
+            "expected": [
+              1764518400,
+              3914.46
+            ],
+            "actual": [
+              1765123200,
+              3936.31
+            ]
+          }
+        },
+        "zs": {
+          "expectedCount": 6,
+          "actualCount": 1,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1756915200,
+              1763913600,
+              4025.7,
+              3922.58
+            ],
+            "actual": [
+              1756915200,
+              1778688000,
+              4034.08,
+              3815.84
+            ]
+          }
+        }
+      },
+      "referenceFractalMatches": true,
+      "referenceZonesMatchWithOraclePens": true
+    },
+    {
+      "symbol": "510300",
+      "market": "sh",
+      "period": "day",
+      "bars": 287,
+      "source": "http://118.178.134.161:8000/api/chart?symbol=510300&market=sh&period=day&limit=300&source=auto&track=0",
+      "currentDefinition": "strict-old-bi-feature-sequence-v1",
+      "matches": false,
+      "checks": {
+        "fx": {
+          "expectedCount": 121,
+          "actualCount": 122,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1754236800,
+              3.994,
+              "D"
+            ],
+            "actual": [
+              1753804800,
+              4.142,
+              "G"
+            ]
+          }
+        },
+        "bi": {
+          "expectedCount": 27,
+          "actualCount": 16,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1753804800,
+              4.142
+            ],
+            "actual": [
+              1761753600,
+              4.751
+            ]
+          }
+        },
+        "zs": {
+          "expectedCount": 8,
+          "actualCount": 0,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1754236800,
+              1770652800,
+              4.692,
+              4.545
+            ],
+            "actual": null
+          }
+        }
+      },
+      "referenceFractalMatches": true,
+      "referenceZonesMatchWithOraclePens": true
+    },
+    {
+      "symbol": "510300",
+      "market": "sh",
+      "period": "week",
+      "bars": 260,
+      "source": "http://118.178.134.161:8000/api/chart?symbol=510300&market=sh&period=week&limit=260&source=auto&track=1",
+      "currentDefinition": "strict-old-bi-feature-sequence-v1",
+      "matches": false,
+      "checks": {
+        "fx": {
+          "expectedCount": 94,
+          "actualCount": 95,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1632412800,
+              4.433,
+              "D"
+            ],
+            "actual": [
+              1631203200,
+              4.708,
+              "G"
+            ]
+          }
+        },
+        "bi": {
+          "expectedCount": 24,
+          "actualCount": 16,
+          "difference": {
+            "index": 7,
+            "expected": [
+              1686240000,
+              3.503
+            ],
+            "actual": [
+              1706803200,
+              2.891
+            ]
+          }
+        },
+        "zs": {
+          "expectedCount": 5,
+          "actualCount": 0,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1631203200,
+              1651161600,
+              4.708,
+              4.407
+            ],
+            "actual": null
+          }
+        }
+      },
+      "referenceFractalMatches": true,
+      "referenceZonesMatchWithOraclePens": true
+    },
+    {
+      "symbol": "600519",
+      "market": "sh",
+      "period": "day",
+      "bars": 291,
+      "source": "http://118.178.134.161:8000/api/chart?symbol=600519&market=sh&period=day&limit=300&source=auto&track=1",
+      "currentDefinition": "strict-old-bi-feature-sequence-v1",
+      "matches": false,
+      "checks": {
+        "fx": {
+          "expectedCount": 97,
+          "actualCount": 98,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1753718400,
+              1383.029,
+              "D"
+            ],
+            "actual": [
+              1753286400,
+              1447.019,
+              "G"
+            ]
+          }
+        },
+        "bi": {
+          "expectedCount": 17,
+          "actualCount": 14,
+          "difference": {
+            "index": 1,
+            "expected": [
+              1754236800,
+              1362.019
+            ],
+            "actual": [
+              1753977600,
+              1362.019
+            ]
+          }
+        },
+        "zs": {
+          "expectedCount": 4,
+          "actualCount": 0,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1753286400,
+              1782662400,
+              1447.019,
+              1362.019
+            ],
+            "actual": null
+          }
+        }
+      },
+      "referenceFractalMatches": true,
+      "referenceZonesMatchWithOraclePens": true
+    },
+    {
+      "symbol": "603818",
+      "market": "sh",
+      "period": "15m",
+      "bars": 783,
+      "source": "http://118.178.134.161:8000/api/chart?symbol=603818&market=sh&period=15m&limit=800&source=auto&track=0",
+      "currentDefinition": "strict-old-bi-feature-sequence-v1",
+      "matches": false,
+      "checks": {
+        "fx": {
+          "expectedCount": 182,
+          "actualCount": 183,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1784775600,
+              3.07,
+              "D"
+            ],
+            "actual": [
+              1784772900,
+              3.22,
+              "G"
+            ]
+          }
+        },
+        "bi": {
+          "expectedCount": 36,
+          "actualCount": 21,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1784772900,
+              3.22
+            ],
+            "actual": [
+              1785203100,
+              3.37
+            ]
+          }
+        },
+        "zs": {
+          "expectedCount": 8,
+          "actualCount": 0,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1784772900,
+              1785807900,
+              3.22,
+              3.07
+            ],
+            "actual": null
+          }
+        }
+      },
+      "referenceFractalMatches": true,
+      "referenceZonesMatchWithOraclePens": true
+    },
+    {
+      "symbol": "603818",
+      "market": "sh",
+      "period": "30m",
+      "bars": 293,
+      "source": "http://118.178.134.161:8000/api/chart?symbol=603818&market=sh&period=30m&limit=300&source=auto&track=0",
+      "currentDefinition": "strict-old-bi-feature-sequence-v1",
+      "matches": false,
+      "checks": {
+        "fx": {
+          "expectedCount": 74,
+          "actualCount": 75,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1786413600,
+              3.57,
+              "D"
+            ],
+            "actual": [
+              1786339800,
+              3.73,
+              "G"
+            ]
+          }
+        },
+        "bi": {
+          "expectedCount": 20,
+          "actualCount": 13,
+          "difference": {
+            "index": 2,
+            "expected": [
+              1786590000,
+              3.64
+            ],
+            "actual": [
+              1787104800,
+              3.85
+            ]
+          }
+        },
+        "zs": {
+          "expectedCount": 6,
+          "actualCount": 0,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1786339800,
+              1787295600,
+              3.64,
+              3.54
+            ],
+            "actual": null
+          }
+        }
+      },
+      "referenceFractalMatches": true,
+      "referenceZonesMatchWithOraclePens": true
+    },
+    {
+      "symbol": "603818",
+      "market": "sh",
+      "period": "5m",
+      "bars": 308,
+      "source": "http://118.178.134.161:8000/api/chart?symbol=603818&market=sh&period=5m&limit=1200&source=auto&track=0",
+      "currentDefinition": "strict-old-bi-feature-sequence-v1",
+      "matches": false,
+      "checks": {
+        "fx": {
+          "expectedCount": 65,
+          "actualCount": 66,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1789970400,
+              4.04,
+              "G"
+            ],
+            "actual": [
+              1789968600,
+              3.96,
+              "D"
+            ]
+          }
+        },
+        "bi": {
+          "expectedCount": 13,
+          "actualCount": 12,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1789968900,
+              3.96
+            ],
+            "actual": [
+              1789968600,
+              3.96
+            ]
+          }
+        },
+        "zs": {
+          "expectedCount": 3,
+          "actualCount": 0,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1789968900,
+              1790213700,
+              4.06,
+              3.98
+            ],
+            "actual": null
+          }
+        }
+      },
+      "referenceFractalMatches": true,
+      "referenceZonesMatchWithOraclePens": true
+    },
+    {
+      "symbol": "603818",
+      "market": "sh",
+      "period": "60m",
+      "bars": 285,
+      "source": "http://118.178.134.161:8000/api/chart?symbol=603818&market=sh&period=60m&limit=300&source=auto&track=0",
+      "currentDefinition": "strict-old-bi-feature-sequence-v1",
+      "matches": false,
+      "checks": {
+        "fx": {
+          "expectedCount": 65,
+          "actualCount": 66,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1782271800,
+              2.92,
+              "D"
+            ],
+            "actual": [
+              1782181800,
+              3.16,
+              "G"
+            ]
+          }
+        },
+        "bi": {
+          "expectedCount": 19,
+          "actualCount": 16,
+          "difference": {
+            "index": 7,
+            "expected": [
+              1784604600,
+              2.66
+            ],
+            "actual": [
+              1784601000,
+              2.66
+            ]
+          }
+        },
+        "zs": {
+          "expectedCount": 5,
+          "actualCount": 0,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1782181800,
+              1785391200,
+              3.16,
+              3.1
+            ],
+            "actual": null
+          }
+        }
+      },
+      "referenceFractalMatches": true,
+      "referenceZonesMatchWithOraclePens": true
+    },
+    {
+      "symbol": "603818",
+      "market": "sh",
+      "period": "day",
+      "bars": 286,
+      "source": "http://118.178.134.161:8000/api/chart?symbol=603818&market=sh&period=day&limit=300&source=auto&track=1",
+      "currentDefinition": "strict-old-bi-feature-sequence-v1",
+      "matches": false,
+      "checks": {
+        "fx": {
+          "expectedCount": 90,
+          "actualCount": 91,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1755100800,
+              5.26,
+              "G"
+            ],
+            "actual": [
+              1754236800,
+              4.26,
+              "D"
+            ]
+          }
+        },
+        "bi": {
+          "expectedCount": 25,
+          "actualCount": 16,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1754236800,
+              4.26
+            ],
+            "actual": [
+              1756828800,
+              3.91
+            ]
+          }
+        },
+        "zs": {
+          "expectedCount": 10,
+          "actualCount": 0,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1754236800,
+              1765728000,
+              4.33,
+              4.26
+            ],
+            "actual": null
+          }
+        }
+      },
+      "referenceFractalMatches": true,
+      "referenceZonesMatchWithOraclePens": true
+    },
+    {
+      "symbol": "603818",
+      "market": "sh",
+      "period": "week",
+      "bars": 259,
+      "source": "http://118.178.134.161:8000/api/chart?symbol=603818&market=sh&period=week&limit=260&source=auto&track=0",
+      "currentDefinition": "strict-old-bi-feature-sequence-v1",
+      "matches": false,
+      "checks": {
+        "fx": {
+          "expectedCount": 83,
+          "actualCount": 84,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1632931200,
+              8.93,
+              "D"
+            ],
+            "actual": [
+              1631808000,
+              10.13,
+              "G"
+            ]
+          }
+        },
+        "bi": {
+          "expectedCount": 27,
+          "actualCount": 25,
+          "difference": {
+            "index": 4,
+            "expected": [
+              1670515200,
+              7.17
+            ],
+            "actual": [
+              1676563200,
+              7.84
+            ]
+          }
+        },
+        "zs": {
+          "expectedCount": 7,
+          "actualCount": 0,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1631808000,
+              1667491200,
+              10.13,
+              7.94
+            ],
+            "actual": null
+          }
+        }
+      },
+      "referenceFractalMatches": true,
+      "referenceZonesMatchWithOraclePens": true
+    },
+    {
+      "symbol": "000001",
+      "market": "sz",
+      "period": "day",
+      "bars": 285,
+      "source": "http://118.178.134.161:8000/api/chart?symbol=000001&market=sz&period=day&limit=300&source=auto&track=1",
+      "currentDefinition": "strict-old-bi-feature-sequence-v1",
+      "matches": false,
+      "checks": {
+        "fx": {
+          "expectedCount": 88,
+          "actualCount": 89,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1754582400,
+              11.685,
+              "G"
+            ],
+            "actual": [
+              1753977600,
+              11.305,
+              "D"
+            ]
+          }
+        },
+        "bi": {
+          "expectedCount": 26,
+          "actualCount": 17,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1753977600,
+              11.305
+            ],
+            "actual": [
+              1759075200,
+              10.425
+            ]
+          }
+        },
+        "zs": {
+          "expectedCount": 7,
+          "actualCount": 0,
+          "difference": {
+            "index": 0,
+            "expected": [
+              1753977600,
+              1759939200,
+              11.685,
+              11.305
+            ],
+            "actual": null
+          }
+        }
+      },
+      "referenceFractalMatches": true,
+      "referenceZonesMatchWithOraclePens": true
+    }
+  ]
+}

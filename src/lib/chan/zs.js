@@ -1,66 +1,161 @@
-/** 缠论第三步：中枢（滑动窗口口径） */
-
-import { biRange } from './bi.js'
-
-/** 中枢最多延伸的笔数 */
-export const ZS_MAX_BI = 9
-/** 构成中枢的最少笔数 */
-export const ZS_MIN_BI = 3
-
 /**
- * 中枢：连续至少 3 笔的重叠区间。
- * ZG/ZD 由前 3 笔固定（ZG = 三笔高点的最小值，ZD = 三笔低点的最大值，要求 ZG > ZD），
- * 随后只要后一笔与 [ZD, ZG] 仍有重叠就并入，最多 9 笔。
- * 每个起点独立尝试成枢（相邻中枢可重叠），最后丢弃被其他中枢完全包含的。
- *
- * 注意：传入的笔端点不应包含「当前未完成笔」的动态端点。
+ * 本图最小分析级别：三个连续完成线段的实际区间重合。
+ * 核心区间固定于前三段；按时间顺序延伸，离开和首次回试另行确认。
+ * 第 17 / 20 课的递归走势中枢不能直接等同于某个 K 线周期的三笔重合。
+ * 第 78 课：线段内部极值可不在端点，构枢使用实际全段区间。
  */
-export function buildZs(biPoints, { minBi = ZS_MIN_BI, maxBi = ZS_MAX_BI } = {}) {
-  const segs = []
-  for (let i = 0; i + 1 < biPoints.length; i++) {
-    const a = biPoints[i]
-    const b = biPoints[i + 1]
-    segs.push({ ...biRange(a, b), sdt: a.time, edt: b.time })
-  }
-  if (segs.length < minBi) return []
 
-  const cands = []
-  for (let s = 0; s + minBi <= segs.length; s++) {
-    const head = segs.slice(s, s + minBi)
-    const zg = Math.min(...head.map((x) => x.high))
-    const zd = Math.max(...head.map((x) => x.low))
-    if (zg <= zd) continue
-    // 延伸：后续笔只要与 [zd, zg] 有重叠就并入，区间本身不再收缩
-    let end = s + minBi - 1
-    while (end + 1 < segs.length && end + 1 - s + 1 <= maxBi) {
-      const nx = segs[end + 1]
-      if (nx.high < zd || nx.low > zg) break
-      end++
-    }
-    cands.push({ s, end, zg, zd })
-  }
+export const ZS_MIN_SEGMENTS = 3;
 
-  // 丢弃被其他候选完全包含的
-  const kept = cands.filter(
-    (c) => !cands.some((o) => o !== c && o.s <= c.s && o.end >= c.end && (o.s < c.s || o.end > c.end))
-  )
+const overlaps = (segment, zd, zg) => segment.high >= zd && segment.low <= zg;
 
-  return kept.map((c) => ({
-    id: `zs-${segs[c.s].sdt}-${segs[c.end].edt}`,
-    sdt: segs[c.s].sdt,
-    edt: segs[c.end].edt,
-    zg: c.zg,
-    zd: c.zd,
-    zz: (c.zg + c.zd) / 2,
-    bi_count: c.end - c.s + 1,
-    algorithm: 'sliding_window'
-  }))
+function validSegment(segment) {
+  return segment?.confirmed === true && segment.start && segment.end
+    && Number.isFinite(segment.high) && Number.isFinite(segment.low)
+    && segment.high > segment.low
+    && (segment.direction === 'up' || segment.direction === 'down');
 }
 
-/** 现价相对中枢的位置 */
+function connected(a, b) {
+  return a.end.time === b.start.time && a.direction !== b.direction;
+}
+
+function departureSide(segment, zd, zg) {
+  if (segment.direction === 'up' && segment.end.price > zg) return 'up';
+  if (segment.direction === 'down' && segment.end.price < zd) return 'down';
+  return null;
+}
+
+/** 只确认完成线段之间的离开 / 首次回试几何关系，不冒充跨周期递归级别买卖点。 */
+function thirdPoint(departure, retracement, zone) {
+  if (!retracement || !connected(departure, retracement)) return null;
+  const side = departureSide(departure, zone.zd, zone.zg);
+  const outside = side === 'up' ? retracement.low >= zone.zg
+    : side === 'down' && retracement.high <= zone.zd;
+  if (!outside || !overlaps(departure, zone.zd, zone.zg)) return null;
+  const point = side === 'up' ? retracement.low_point : retracement.high_point;
+  return {
+    kind: side === 'up' ? 'up_departure_retest' : 'down_departure_retest',
+    label: side === 'up' ? '向上离开回试结构' : '向下离开回试结构',
+    level: 'segment', scope: 'segment_geometry', status: 'confirmed',
+    time: point?.time ?? (side === 'up' ? retracement.low_time : retracement.high_time),
+    price: side === 'up' ? retracement.low : retracement.high,
+    confirmed_time: retracement.confirmed_time,
+    zone_id: zone.id, departure_id: departure.id, retracement_id: retracement.id,
+    departure, retracement,
+    basis: '完成线段离开后首次完成反向线段回试，不越过中枢边界；仅为本图线段级几何确认',
+  };
+}
+
+function makeZone(segments, start) {
+  const first = segments.slice(start, start + ZS_MIN_SEGMENTS);
+  const upper = first.reduce((a, b) => b.high < a.high ? b : a);
+  const lower = first.reduce((a, b) => b.low > a.low ? b : a);
+  return {
+    id: `zs-${first[0].start.time}-${first[2].end.time}`,
+    sdt: first[0].start.time, edt: first[2].end.time,
+    formation_edt: first[2].end.time,
+    zg: upper.high, zd: lower.low, zz: (upper.high + lower.low) / 2,
+    zg_time: upper.high_time, zd_time: lower.low_time,
+    zg_point: upper.high_point, zd_point: lower.low_point,
+    formation_direction: first[0].direction,
+    startIndex: start, endIndex: start + 2,
+    segment_count: 3, level: 'segment', label: '线段中枢（本图最小级别）',
+    algorithm: 'confirmed_segment_sequence', confirmed: true,
+    status: 'active', phase: 'extending', departure: null, thirdSignal: null,
+  };
+}
+
+function finishRange(zone, segments) {
+  const members = segments.slice(zone.startIndex, zone.endIndex + 1);
+  const zSegments = members.filter((segment) => segment.direction === zone.formation_direction);
+  zone.segment_count = members.length;
+  zone.segment_ids = members.map((segment) => segment.id);
+  zone.edt = members.at(-1).end.time;
+  zone.gg = Math.max(...zSegments.map((segment) => segment.high));
+  zone.dd = Math.min(...zSegments.map((segment) => segment.low));
+  zone.range_high = Math.max(...members.map((segment) => segment.high));
+  zone.range_low = Math.min(...members.map((segment) => segment.low));
+}
+
+/**
+ * 输入必须为完成线段对象。笔端点 / 未确认线段不参与中枢。
+ * 完成一个中枢后从离开 / 回试后的新位置继续查找，取消相邻三笔滑窗与九笔截断。
+ */
+export function buildZs(inputSegments) {
+  const segments = [];
+  for (const segment of inputSegments) {
+    if (!validSegment(segment)) break;
+    if (segments.length && !connected(segments.at(-1), segment)) break;
+    segments.push(segment);
+  }
+  const zones = [];
+  let start = 0;
+  while (start + ZS_MIN_SEGMENTS <= segments.length) {
+    const head = segments.slice(start, start + ZS_MIN_SEGMENTS);
+    const zg = Math.min(...head.map((segment) => segment.high));
+    const zd = Math.max(...head.map((segment) => segment.low));
+    if (zg <= zd) { start++; continue; }
+    const zone = makeZone(segments, start);
+    let nextStart = segments.length;
+    // 构成中枢的第三段也可能同时是离开段；其后的首次回试必须纳入检查。
+    for (let index = start + ZS_MIN_SEGMENTS - 1; index < segments.length; index++) {
+      const segment = segments[index];
+      const next = segments[index + 1];
+      const side = departureSide(segment, zd, zg);
+      const signal = side ? thirdPoint(segment, next, zone) : null;
+      if (signal) {
+        zone.status = 'closed';
+        zone.phase = 'completed';
+        // 第 20 课的 Z 段只要触枢仍属于延伸。离开段若与成枢方向一致也须计入。
+        if (segment.direction === zone.formation_direction) zone.endIndex = index;
+        zone.departure = segment;
+        zone.thirdSignal = signal;
+        nextStart = index + 1;
+        break;
+      }
+      if (index >= start + ZS_MIN_SEGMENTS && side && !next && overlaps(segment, zd, zg)) {
+        zone.phase = 'leaving';
+        zone.departure = segment;
+        if (segment.direction === zone.formation_direction) zone.endIndex = index;
+        break;
+      }
+      if (!overlaps(segment, zd, zg)) {
+        // 单个离枢段尚不等于三买卖。Z 段不触枢，或连续两段不触枢，延伸停止。
+        const zDirection = segment.direction === zone.formation_direction;
+        if (zDirection || (next && !overlaps(next, zd, zg))) {
+          zone.status = 'closed';
+          zone.phase = 'departed';
+          zone.departure = segment;
+          nextStart = index;
+          break;
+        }
+        if (!next) {
+          zone.phase = 'leaving';
+          zone.departure = segment;
+          break;
+        }
+      }
+      zone.endIndex = index;
+    }
+    finishRange(zone, segments);
+    const previous = zones.at(-1);
+    if (previous) {
+      zone.relation = zone.dd > previous.gg ? 'up_separated'
+        : zone.gg < previous.dd ? 'down_separated'
+          : 'overlapping_fluctuations';
+      zone.requires_recursive_level = zone.relation === 'overlapping_fluctuations';
+    }
+    zones.push(zone);
+    start = Math.max(start + ZS_MIN_SEGMENTS, nextStart);
+  }
+  return zones;
+}
+
+/** 现价相对本图最小级别线段中枢的位置。 */
 export function positionVsZs(price, zs) {
-  if (!zs) return { vs: 'none', label: '无参考中枢' }
-  if (price > zs.zg) return { vs: 'above', label: '中枢上方' }
-  if (price < zs.zd) return { vs: 'below', label: '中枢下方' }
-  return { vs: 'inside', label: '中枢内部' }
+  if (!zs) return { vs: 'none', label: '无已确认线段中枢' };
+  if (price > zs.zg) return { vs: 'above', label: '中枢上方' };
+  if (price < zs.zd) return { vs: 'below', label: '中枢下方' };
+  return { vs: 'inside', label: '中枢内部' };
 }

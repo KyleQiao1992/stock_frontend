@@ -3,6 +3,7 @@ import UserAdminPanel from "./UserAdminPanel";
 import AccountPanel from "./AccountPanel";
 import StockAnalysisPanel from "./StockAnalysisPanel";
 import ChanOverlay from "./ChanOverlay";
+import ChanLegend from "./ChanLegend";
 import ChanControls from "./ChanControls";
 import { analyzeChan } from "../lib/chan/index.js";
 import { isCurrentMarketSnapshot, marketSnapshotSourceLabel, formatMarketSnapshotTime } from "../lib/marketSnapshotQuality.js";
@@ -4812,6 +4813,7 @@ function Chart({
           {showMacdSignals ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
         </button>
       </div>
+      <ChanLegend data={chanData} options={chanOptions} />
     </div>
   );
 }
@@ -9119,7 +9121,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showPatterns, setShowPatterns] = useState(false);
-  const [chanOptions, setChanOptions] = useState({ enabled: true, bi: true, zs: true, fx: true });
+  const [chanOptions, setChanOptions] = useState({ enabled: true, bi: true, segment: true, zs: true, fx: true });
   const [analysisTab, setAnalysisTab] = useState("financial");
   const chanData = useMemo(() => analyzeChan(rawRows, period), [rawRows, period]);
 
@@ -10061,8 +10063,14 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
               <Search className="h-4 w-4 text-slate-400" />
               <input
                 value={currentCode}
+                maxLength={30}
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
                 onChange={(e) => {
-                  const value = market === "ashare" || market === "hk" ? e.target.value.slice(0, 30) : normalizeCodeForMarket(e.target.value, market);
+                  // Keep the browser's editing value intact. Uppercasing during IME
+                  // composition cancels its marked range and can duplicate the commit.
+                  const value = e.target.value;
                   setMarketCodes((prev) => ({ ...prev, [market]: value }));
                   if (market === "ashare") setAshareSuggestOpen(Boolean(e.target.value.trim()));
                   if (market === "hk") setHkSuggestOpen(Boolean(e.target.value.trim()));
@@ -10088,6 +10096,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                   }
                 }}
                 onKeyDown={(e) => {
+                  // Enter may confirm an IME candidate rather than submit a query.
+                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                   if (market === "ashare" && ashareSuggestOpen && ashareSuggestions.length) {
                     if (e.key === "ArrowDown") {
                       e.preventDefault();

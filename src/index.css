@@ -160,6 +160,7 @@ body {
 /* Chan structure overlays: theme-aware and independent of candle colors. */
 :root {
   --chan-bi: #b78200;
+  --chan-segment: #8854c3;
   --chan-top: #e66b62;
   --chan-bottom: #169c6b;
   --chan-active: #397edb;
@@ -171,6 +172,7 @@ body {
 }
 .dark {
   --chan-bi: #ffd54f;
+  --chan-segment: #ce9dff;
   --chan-top: #ff8a80;
   --chan-bottom: #69f0ae;
   --chan-active: #7eb6ff;
