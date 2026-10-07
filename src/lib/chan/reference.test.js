@@ -48,13 +48,39 @@ for (const { name, data } of fixtures) {
     assert.deepEqual(buildZs(data.trades), data.zs);
   });
 
-  test(`active chart pipeline ${name}: candles, fractals, pens, zones and references match the API`, () => {
+  test(`active chart pipeline ${name}: all structures and the complete outlook match the API`, () => {
     const report = compareReference(data);
     for (const [key, check] of Object.entries(report.checks)) assert.equal(check.difference, null, `${key}: ${JSON.stringify(check.difference)}`);
     assert.equal(report.matches, true);
     assert.equal(report.currentDefinition, 'reference-incremental-bi-sliding-zs-v1');
   });
+
+  test(`actual calendar input ${name}: displayed price/time labels and the complete outlook match the API`, () => {
+    const rows = data.candles.map(({ time, vol, ...bar }) => ({ ...bar,
+      date: new Date((time + 8 * 3600) * 1000).toISOString()
+        .slice(0, data.period.endsWith('m') ? 16 : 10).replace('T', ' '), volume: vol }));
+    const result = analyzeChan(rows, { day: '101', week: '102' }[data.period] || data.period);
+    assert.deepEqual(result.outlook, data.outlook);
+    assert.equal(result.outlook.conclusion.confirmed_signal, null);
+  });
 }
+
+test('outlook parity fails when the actual classification, boundary timestamp, condition or scenario score differs', () => {
+  const source = fixtures.find(({ name }) => name === 'sh603818-day.json').data;
+  for (const change of [
+    (outlook) => { outlook.conclusion.kind_hint = 'B3'; },
+    (outlook) => { outlook.levels.zs_zg_bar = '2026-04-01 @ 3.68'; },
+    (outlook) => { outlook.conclusion.trigger_condition = '替换条件'; },
+    (outlook) => { outlook.scenarios[0].score = 8; },
+  ]) {
+    const fixture = structuredClone(source);
+    change(fixture.outlook);
+    const report = compareReference(fixture);
+    assert.equal(report.matches, false);
+    assert.notEqual(report.checks.outlook.difference, null);
+    assert.equal(report.checks.bi.difference, null);
+  }
+});
 
 test('parity compares point locations and prices, including trailing points', () => {
   assert.equal(firstDifference([[1, 2]], [[1, 2]]), null);

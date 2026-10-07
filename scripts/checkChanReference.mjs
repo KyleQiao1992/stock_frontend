@@ -14,6 +14,7 @@ console.table(results.map((r) => ({
   fx: `${r.checks.fx.actualCount}/${r.checks.fx.expectedCount}`,
   biLinePoints: `${r.checks.bi.actualCount}/${r.checks.bi.expectedCount}`,
   zs: `${r.checks.zs.actualCount}/${r.checks.zs.expectedCount}`,
+  outlook: r.checks.outlook.difference === null,
   exactMatch: r.matches, candidateFx: r.referenceFractalMatches,
   candidateZsFromOraclePens: r.referenceZonesMatchWithOraclePens,
 })));

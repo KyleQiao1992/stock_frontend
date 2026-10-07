@@ -36,6 +36,11 @@
           "expectedCount": 51,
           "actualCount": 51,
           "difference": null
+        },
+        "outlook": {
+          "expectedCount": 1,
+          "actualCount": 1,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -73,6 +78,11 @@
         "endpoints": {
           "expectedCount": 26,
           "actualCount": 26,
+          "difference": null
+        },
+        "outlook": {
+          "expectedCount": 1,
+          "actualCount": 1,
           "difference": null
         }
       },
@@ -112,6 +122,11 @@
           "expectedCount": 22,
           "actualCount": 22,
           "difference": null
+        },
+        "outlook": {
+          "expectedCount": 1,
+          "actualCount": 1,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -149,6 +164,11 @@
         "endpoints": {
           "expectedCount": 26,
           "actualCount": 26,
+          "difference": null
+        },
+        "outlook": {
+          "expectedCount": 1,
+          "actualCount": 1,
           "difference": null
         }
       },
@@ -188,6 +208,11 @@
           "expectedCount": 23,
           "actualCount": 23,
           "difference": null
+        },
+        "outlook": {
+          "expectedCount": 1,
+          "actualCount": 1,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -225,6 +250,11 @@
         "endpoints": {
           "expectedCount": 16,
           "actualCount": 16,
+          "difference": null
+        },
+        "outlook": {
+          "expectedCount": 1,
+          "actualCount": 1,
           "difference": null
         }
       },
@@ -264,6 +294,11 @@
           "expectedCount": 35,
           "actualCount": 35,
           "difference": null
+        },
+        "outlook": {
+          "expectedCount": 1,
+          "actualCount": 1,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -301,6 +336,11 @@
         "endpoints": {
           "expectedCount": 19,
           "actualCount": 19,
+          "difference": null
+        },
+        "outlook": {
+          "expectedCount": 1,
+          "actualCount": 1,
           "difference": null
         }
       },
@@ -340,6 +380,11 @@
           "expectedCount": 12,
           "actualCount": 12,
           "difference": null
+        },
+        "outlook": {
+          "expectedCount": 1,
+          "actualCount": 1,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -377,6 +422,11 @@
         "endpoints": {
           "expectedCount": 18,
           "actualCount": 18,
+          "difference": null
+        },
+        "outlook": {
+          "expectedCount": 1,
+          "actualCount": 1,
           "difference": null
         }
       },
@@ -416,6 +466,11 @@
           "expectedCount": 24,
           "actualCount": 24,
           "difference": null
+        },
+        "outlook": {
+          "expectedCount": 1,
+          "actualCount": 1,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -454,6 +509,11 @@
           "expectedCount": 26,
           "actualCount": 26,
           "difference": null
+        },
+        "outlook": {
+          "expectedCount": 1,
+          "actualCount": 1,
+          "difference": null
         }
       },
       "referenceFractalMatches": true,
@@ -491,6 +551,11 @@
         "endpoints": {
           "expectedCount": 25,
           "actualCount": 25,
+          "difference": null
+        },
+        "outlook": {
+          "expectedCount": 1,
+          "actualCount": 1,
           "difference": null
         }
       },

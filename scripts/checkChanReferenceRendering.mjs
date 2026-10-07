@@ -12,8 +12,10 @@ const server = await createServer({ configFile: false, plugins: [react()],
   resolve: { alias: { '@': new URL('../src', import.meta.url).pathname } },
   server: { middlewareMode: true, hmr: false }, appType: 'custom' });
 let count = 0;
+let outlookCount = 0;
 try {
   const { default: ChanOverlay } = await server.ssrLoadModule('/src/components/ChanOverlay.jsx');
+  const { default: StockAnalysisPanel } = await server.ssrLoadModule('/src/components/StockAnalysisPanel.jsx');
   const directory = new URL('../src/lib/chan/fixtures/reference/', import.meta.url);
   const names = (await readdir(directory)).filter((name) => name.endsWith('.json')).sort();
   const attrs = (tag) => Object.fromEntries([...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map((m) => [m[1], m[2]]));
@@ -21,6 +23,28 @@ try {
     const fixture = JSON.parse(await readFile(new URL(name, directory), 'utf8'));
     const allRows = fixture.candles.map(({ time, vol, ...bar }) => ({ ...bar, date: String(time), volume: vol }));
     const data = analyzeChan(allRows, fixture.period);
+    const panel = renderToStaticMarkup(React.createElement(StockAnalysisPanel, {
+      data, enabled: true, tab: 'outlook', onTabChange: () => {}, code: fixture.symbol, period: fixture.period,
+    }));
+    const escaped = (text) => String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#x27;');
+    const { conclusion, levels, scenarios } = fixture.outlook;
+    const texts = [conclusion.title, `${conclusion.kind_hint} · 观察`, conclusion.status_label,
+      conclusion.structure_fact, conclusion.observation, conclusion.observation_basis,
+      conclusion.trigger_condition, conclusion.invalidation, conclusion.action_hint,
+      levels.last_bi_high_bar, levels.last_bi_low_bar, levels.zs_zg_bar, levels.zs_zd_bar,
+      levels.vs_zs_label, levels.zs_range, levels.active_zs_id, fixture.outlook.disclaimer,
+      '已确认信号：近期无一二三类触发', '观察依据（非确认信号）',
+      '1 · 结构事实', '2 · 已确认信号', '3 · 观察条件', '4 · 失效与操作参考'];
+    for (const scenario of scenarios) {
+      texts.push(scenario.name, `评分 ${scenario.score}/${scenario.score_max} · ${scenario.bias}`,
+        scenario.explain, scenario.condition, scenario.path, scenario.invalid);
+      for (const point of scenario.next_points) texts.push(`若触发 ${point.kind}`, point.title, point.trigger, point.action);
+    }
+    for (const text of texts) assert.ok(panel.includes(escaped(text)), `${name}: actual outlook panel missing ${text}`);
+    assert.equal(panel.includes('缠论结构 · 结构观察'), false);
+    assert.ok(panel.indexOf(escaped(conclusion.title)) < panel.indexOf('参考站划线口径'));
+    outlookCount++;
     for (const visible of [80, 120, allRows.length]) {
       const rows = allRows.slice(-visible);
       const offset = allRows.length - rows.length;
@@ -57,6 +81,7 @@ try {
     }
   }
   console.log(`Actual ChanOverlay SVG matches reference geometry: ${count}/${count} (13 cases × 3 viewports).`);
+  console.log(`Actual StockAnalysisPanel renders reference classification, facts, conditions, levels and all scenarios: ${outlookCount}/${outlookCount}.`);
 } finally {
   await server.close();
 }

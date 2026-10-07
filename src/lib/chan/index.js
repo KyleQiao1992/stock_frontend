@@ -1,6 +1,7 @@
 import { analyzeReferenceCandles, referenceHistoryLimit } from './referenceEngine.js';
 import { buildZs } from './referenceZs.js';
-import { buildOutlook, buildTrades } from './outlook.js';
+import { buildTrades } from './outlook.js';
+import { buildReferenceOutlook } from './referenceOutlook.js';
 
 export function analyzeChan(rows, period = 'day') {
   const bars = rows.filter((r) => [r.open, r.high, r.low, r.close, r.volume].every(Number.isFinite));
@@ -20,12 +21,17 @@ export function analyzeChan(rows, period = 'day') {
   });
   const dateAt = (time) => bars[time - 1]?.date;
   const datedPoint = (p) => ({ ...p, time: dateAt(p.time) });
-  const datedZones = zs.map((z) => ({ ...z, sdt: dateAt(z.sdt), edt: dateAt(z.edt),
-    zg_time: dateAt(z.zg_time), zd_time: dateAt(z.zd_time) }));
+  const datedZones = zs.map((z) => {
+    const inZone = result.candles.filter((c) => c.time >= z.sdt && c.time <= z.edt);
+    // The reference labels the first raw K touching a boundary, not its later pen endpoint.
+    return { ...z, sdt: dateAt(z.sdt), edt: dateAt(z.edt),
+      zg_time: dateAt(inZone.find((c) => c.high === z.zg)?.time ?? z.zg_time),
+      zd_time: dateAt(inZone.find((c) => c.low === z.zd)?.time ?? z.zd_time) };
+  });
   const datedBi = bi.map(datedPoint);
-  const outlook = buildOutlook({ candles: result.candles.map((c) => ({ ...c, time: c.date })),
+  const outlook = buildReferenceOutlook({ candles: result.candles.map((c) => ({ ...c, time: c.date })),
     biPoints: datedBi, pendingBi: pending.map(datedPoint), zsList: datedZones,
-    close: candles.at(-1)?.close, period, zoneMode: 'sliding_bi' });
+    close: candles.at(-1)?.close, period });
   const historyOffset = result.candles[0]?.time - 1 || 0;
   return {
     dates: bars.map((r) => r.date), historyOffset, historyDates: result.candles.map((c) => c.date),
