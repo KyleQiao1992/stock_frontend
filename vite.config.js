@@ -6,6 +6,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { loadServerEnv } from "./server/env.js";
 import { createAshareFinanceHandler } from "./server/ashareFinance.js";
 import { createAshareFundFlowHandler } from "./server/ashareFundFlow.js";
+import { createAshareTradeSideHistoryHandler, startTradeSideHistoryCollection } from "./server/ashareTradeSideHistory.js";
 import { createAshareProfileHandler } from "./server/ashareProfile.js";
 import { createAshareSearchHandler } from "./server/ashareSearch.js";
 import { createFavoritesHandler, createFavoriteGroupsHandler } from "./server/favoritesHandlers.js";
@@ -46,6 +47,7 @@ function usKlinePlugin() {
     const suspensionAlertHandler = createSuspensionAlertHandler();
     const ashareFinanceHandler = createAshareFinanceHandler();
     const ashareFundFlowHandler = createAshareFundFlowHandler();
+    const ashareTradeSideHistoryHandler = createAshareTradeSideHistoryHandler();
     const ashareProfileHandler = createAshareProfileHandler();
     const ashareSearchHandler = createAshareSearchHandler();
     const redisRecommendationsHandler = createRedisRecommendationsHandler();
@@ -74,6 +76,7 @@ function usKlinePlugin() {
     middlewares.use("/api/suspension-alert", suspensionAlertHandler);
     middlewares.use("/api/ashare-finance", ashareFinanceHandler);
     middlewares.use("/api/ashare-fund-flow", ashareFundFlowHandler);
+    middlewares.use("/api/ashare-trade-side-history", ashareTradeSideHistoryHandler);
     middlewares.use("/api/ashare-profile", ashareProfileHandler);
     middlewares.use("/api/ashare-search", ashareSearchHandler);
     middlewares.use("/api/recommendations", redisRecommendationsHandler);
@@ -91,9 +94,11 @@ function usKlinePlugin() {
     name: "local-us-kline-api",
     configureServer(server) {
       register(server.middlewares);
+      server.httpServer?.once("close", startTradeSideHistoryCollection());
     },
     configurePreviewServer(server) {
       register(server.middlewares);
+      server.httpServer?.once("close", startTradeSideHistoryCollection());
     },
   };
 }

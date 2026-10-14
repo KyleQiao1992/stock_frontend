@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { loadServerEnv } from "./env.js";
 import { createAshareFinanceHandler } from "./ashareFinance.js";
 import { createAshareFundFlowHandler } from "./ashareFundFlow.js";
+import { createAshareTradeSideHistoryHandler, startTradeSideHistoryCollection } from "./ashareTradeSideHistory.js";
 import { createAshareProfileHandler } from "./ashareProfile.js";
 import { createAshareSearchHandler } from "./ashareSearch.js";
 import { createFavoritesHandler, createFavoriteGroupsHandler } from "./favoritesHandlers.js";
@@ -61,6 +62,7 @@ app.get("/api/factor-returns", createMacdFactorReturnsHandler());
 app.get("/api/factor-detail", createMacdFactorDetailHandler());
 app.get("/api/ashare-finance", createAshareFinanceHandler());
 app.get("/api/ashare-fund-flow", createAshareFundFlowHandler());
+app.get("/api/ashare-trade-side-history", createAshareTradeSideHistoryHandler());
 app.get("/api/ashare-profile", createAshareProfileHandler());
 app.get("/api/ashare-search", createAshareSearchHandler());
 app.get("/api/recommendations", createRedisRecommendationsHandler());
@@ -81,6 +83,9 @@ app.use((_req, res) => {
   res.sendFile(path.join(distDir, "index.html"));
 });
 
-app.listen(port, "0.0.0.0", () => {
+const stopTradeSideCollection = startTradeSideHistoryCollection();
+const server = app.listen(port, "0.0.0.0", () => {
   console.log(`Server listening on http://0.0.0.0:${port}`);
 });
+
+server.on("close", stopTradeSideCollection);

@@ -96,12 +96,12 @@ function ChanEndpoints({ data }) {
     </div>
   </div>;
 }
-export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, code, name, period, market = 'ashare', showFinancial, financialReportContent, showNews, showFundFlow, fundFlowContent }) {
+export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, code, name, period, market = 'ashare', showFinancial, financialReportContent, showNews, showTradeSideHistory, tradeSideHistoryContent }) {
   const tabs = [
     ...(showFinancial ? [['financial','财报']] : []),
     ...(enabled ? [['outlook','缠论研判'],['endpoints','笔端参考']] : []),
     ...(showNews ? [['news','资讯']] : []),
-    ...(showFundFlow ? [['fundFlow','资金动向']] : []),
+    ...(showTradeSideHistory ? [['tradeSideHistory','内外盘历史']] : []),
   ];
   const active = tabs.some(([key]) => key === tab) ? tab : tabs[0]?.[0];
   return <Card className="min-w-0 rounded-2xl" >
@@ -113,7 +113,7 @@ export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, co
           </div>
           <span className="text-xs text-slate-500">{name} {code}</span>
         </div>
-        {active === 'financial' ? financialReportContent : active === 'news' ? <div className="flex h-[520px] min-h-0 overflow-hidden"><StockNewsPanel code={code} market={market} /></div> : active === 'fundFlow' ? fundFlowContent : <>
+        {active === 'financial' ? financialReportContent : active === 'news' ? <div className="flex h-[520px] min-h-0 overflow-hidden"><StockNewsPanel code={code} market={market} /></div> : active === 'tradeSideHistory' ? tradeSideHistoryContent : <>
           <p className="mb-4 text-xs leading-5 text-slate-500">{({'101':'日K','102':'周K','103':'月K'})[period] || period} · {data.definition.historyBars} 根历史计算 · 截至 {data.historyDates.at(-1) || '—'}；缩放不改变计算起点。</p>
           {active === 'outlook' ? <ChanOutlook data={data} /> : <ChanEndpoints data={data} />}
           <details className="mb-4 rounded-xl border border-slate-200 p-3 text-xs leading-5 text-slate-500">

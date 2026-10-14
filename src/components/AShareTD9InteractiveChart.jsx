@@ -2,6 +2,8 @@ import { authFetch as apiFetch } from "../lib/authClient.js";
 import UserAdminPanel from "./UserAdminPanel";
 import AccountPanel from "./AccountPanel";
 import StockAnalysisPanel from "./StockAnalysisPanel";
+import TradeSideHistoryPanel from "./TradeSideHistoryPanel";
+import { fetchTradeSideHistory, formatTradeQuoteTime } from "../lib/tradeSideHistory.js";
 import ChanOverlay from "./ChanOverlay";
 import ChanLegend from "./ChanLegend";
 import ChanControls from "./ChanControls";
@@ -475,8 +477,11 @@ function extractTencentQuoteMeta(res, code) {
   if (!Array.isArray(qt)) return { marketCap: null, floatMarketCap: null, peRatio: null, turnoverRate: null, volumeRatio: null, outerVol: null, innerVol: null };
 
   // Tencent quote fields: 7 = 外盘 (主动买，手), 8 = 内盘 (主动卖，手), 38 = turnover rate %, 39 = PE, 44 = float market cap in 100M CNY, 45 = total market cap in 100M CNY, 49 = volume ratio.
-  const outerVol = Number(qt[7]);
-  const innerVol = Number(qt[8]);
+  const sideVolume = value => value != null && String(value).trim() !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
+  const outerVol = sideVolume(qt[7]);
+  const innerVol = sideVolume(qt[8]);
+  const timestamp = String(qt[30] || '');
+  const quoteTime = /^\d{14}$/.test(timestamp) ? `${timestamp.slice(0, 4)}-${timestamp.slice(4, 6)}-${timestamp.slice(6, 8)}T${timestamp.slice(8, 10)}:${timestamp.slice(10, 12)}:${timestamp.slice(12, 14)}+08:00` : '';
   const turnoverRate = Number(qt[38]);
   const peRatio = Number(qt[39]);
   const floatMarketCapYi = Number(qt[44]);
@@ -488,8 +493,10 @@ function extractTencentQuoteMeta(res, code) {
     peRatio: Number.isFinite(peRatio) ? peRatio : null,
     turnoverRate: Number.isFinite(turnoverRate) ? turnoverRate : null,
     volumeRatio: Number.isFinite(volumeRatio) ? volumeRatio : null,
-    outerVol: Number.isFinite(outerVol) ? outerVol : null,
-    innerVol: Number.isFinite(innerVol) ? innerVol : null,
+    outerVol,
+    innerVol,
+    quoteTime,
+    tradeSideVolumeSource: outerVol !== null && innerVol !== null ? 'tencent' : 'unavailable',
   };
 }
 
@@ -1420,16 +1427,6 @@ function formatMillionValue(value) {
 function formatPercentValue(value) {
   if (!Number.isFinite(value)) return "-";
   return `${value.toFixed(2)}%`;
-}
-
-function fundFlowColor(value) {
-  if (!Number.isFinite(value) || value === 0) return "text-slate-700";
-  return value > 0 ? "text-red-600" : "text-green-700";
-}
-
-function formatFundFlowAmount(value) {
-  if (!Number.isFinite(value)) return "-";
-  return `${value > 0 ? "+" : ""}${formatNumber(value)}`;
 }
 
 // 收藏夹为空时的默认随机池（大盘流动性较好的标的）。
@@ -2641,318 +2638,6 @@ function FinancialReportPanel({ financialInfo, loading, error, market, embedded 
         </div>
       ) : (
         <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">暂无财报数据。</div>
-      )}
-    </div>
-  );
-}
-
-function FundFlowTrendChart({ rows, isDdxFallback }) {
-  const [hoverIndex, setHoverIndex] = useState(null);
-  const svgRef = useRef(null);
-  const series = (Array.isArray(rows) ? rows : [])
-    .slice(-30)
-    .map((row) => ({
-      date: row.date,
-      value: Number.isFinite(row.retailIndex)
-        ? row.retailIndex
-        : Number.isFinite(row.dde?.retailCount)
-          ? row.dde.retailCount
-          : isDdxFallback
-            ? null
-            : row.smallNetRatio,
-      exact: Number.isFinite(row.retailIndex) || Number.isFinite(row.dde?.retailCount),
-    }))
-    .filter((row) => row.date && Number.isFinite(row.value));
-
-  if (series.length < 2) {
-    return (
-      <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-4 py-6 text-center">
-        <div className="text-xs font-medium text-slate-600">散户数量趋势</div>
-        <div className="mt-2 text-[11px] leading-5 text-slate-400">
-          {isDdxFallback
-            ? "备用源没有返回可比的散户数量序列。"
-            : `当前仅取得 ${series.length} 个交易日的数据，至少需要 2 日才能绘制柱状图。`}
-        </div>
-      </div>
-    );
-  }
-
-  const width = 760;
-  const height = 230;
-  const margin = { top: 18, right: 48, bottom: 32, left: 18 };
-  const plotWidth = width - margin.left - margin.right;
-  const plotHeight = height - margin.top - margin.bottom;
-  const rawMax = Math.max(...series.map((row) => Math.abs(row.value)), 0.1);
-  const scaleMagnitude = 10 ** Math.floor(Math.log10(rawMax));
-  const maxAbs = Math.ceil(rawMax / scaleMagnitude) * scaleMagnitude;
-  const bandWidth = plotWidth / series.length;
-  const barWidth = Math.max(3, Math.min(18, bandWidth * 0.62));
-  const xAt = (index) => margin.left + bandWidth * (index + 0.5);
-  const yAt = (value) => margin.top + ((maxAbs - value) / (maxAbs * 2)) * plotHeight;
-  const zeroY = yAt(0);
-  const activeIndex = hoverIndex == null ? series.length - 1 : Math.min(hoverIndex, series.length - 1);
-  const active = series[activeIndex];
-  const hasExactDde = series.every((row) => row.exact);
-  const metricLabel = hasExactDde ? "DDE 散户指数" : "小单净占比（散户代理）";
-  const unit = hasExactDde ? "" : "%";
-
-  function handlePointerMove(event) {
-    const bounds = svgRef.current?.getBoundingClientRect();
-    if (!bounds?.width) return;
-    const svgX = ((event.clientX - bounds.left) / bounds.width) * width;
-    const index = Math.floor((svgX - margin.left) / bandWidth);
-    setHoverIndex(Math.max(0, Math.min(series.length - 1, index)));
-  }
-
-  return (
-    <div className="mt-3 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
-      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <div className="text-sm font-semibold text-slate-700">散户数量趋势</div>
-          <div className="mt-0.5 text-[11px] text-slate-400">{active.date}</div>
-        </div>
-        <div className="text-right">
-          <div className={`text-base font-semibold ${fundFlowColor(active.value)}`}>
-            {metricLabel}：{active.value.toFixed(2)}{unit}
-          </div>
-          <div className="mt-1 flex items-center justify-end gap-3 text-[11px] text-slate-500">
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-sm bg-red-500" />
-              流入
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="h-2 w-2 rounded-sm bg-green-600" />
-              流出
-            </span>
-          </div>
-        </div>
-      </div>
-      <svg
-        ref={svgRef}
-        viewBox={`0 0 ${width} ${height}`}
-        className="block w-full touch-none"
-        role="img"
-        aria-label={`${metricLabel}近${series.length}个交易日柱状图`}
-        onMouseMove={handlePointerMove}
-        onMouseLeave={() => setHoverIndex(null)}
-        onTouchMove={(event) => {
-          const touch = event.touches?.[0];
-          if (touch) handlePointerMove(touch);
-        }}
-      >
-        {[maxAbs, maxAbs / 2, 0, -maxAbs / 2, -maxAbs].map((value) => {
-          const y = yAt(value);
-          return (
-            <g key={value}>
-              <line
-                x1={margin.left}
-                y1={y}
-                x2={width - margin.right}
-                y2={y}
-                stroke={value === 0 ? "var(--chart-muted)" : "var(--chart-grid)"}
-                strokeWidth={value === 0 ? 1.2 : 1}
-              />
-              <text x={width - margin.right + 7} y={y + 4} textAnchor="start" fontSize="10" fill="var(--chart-muted)">
-                {value.toFixed(1)}{unit}
-              </text>
-            </g>
-          );
-        })}
-        {series.map((row, index) => {
-          const valueY = yAt(row.value);
-          const top = Math.min(valueY, zeroY);
-          const barHeight = Math.max(1.5, Math.abs(valueY - zeroY));
-          return (
-            <rect
-              key={row.date}
-              x={xAt(index) - barWidth / 2}
-              y={top}
-              width={barWidth}
-              height={barHeight}
-              rx="1.5"
-              fill={row.value >= 0 ? "#ef4444" : "#16a34a"}
-              opacity={hoverIndex == null || index === activeIndex ? 0.95 : 0.55}
-            >
-              <title>{`${row.date} · ${row.value.toFixed(2)}${unit}`}</title>
-            </rect>
-          );
-        })}
-        <line
-          x1={xAt(activeIndex)}
-          y1={margin.top}
-          x2={xAt(activeIndex)}
-          y2={margin.top + plotHeight}
-          stroke="var(--chart-muted)"
-          strokeWidth="1"
-          strokeDasharray="3 3"
-          opacity="0.65"
-        />
-        <text x={margin.left} y={height - 7} textAnchor="start" fontSize="10" fill="var(--chart-muted)">
-          {series[0].date.slice(5)}
-        </text>
-        <text x={margin.left + plotWidth / 2} y={height - 7} textAnchor="middle" fontSize="10" fill="var(--chart-muted)">
-          {series[Math.floor(series.length / 2)].date.slice(5)}
-        </text>
-        <text x={width - margin.right} y={height - 7} textAnchor="end" fontSize="10" fill="var(--chart-muted)">
-          {series.at(-1).date.slice(5)}
-        </text>
-        <title>
-          {`${active.date} · ${metricLabel} ${active.value.toFixed(2)}${unit}`}
-        </title>
-      </svg>
-      <div className="mt-1 text-[11px] text-slate-400">
-        {hasExactDde
-          ? "负值表示散户参与度下降、筹码可能向大资金集中；该指标不代表真实账户人数变化。"
-          : "红柱表示小单净流入，绿柱表示小单净流出；当前为免费资金流代理，并非同花顺 DDE 原值。"}
-      </div>
-    </div>
-  );
-}
-
-function FundFlowPanel({ fundFlowInfo, loading, error, market, embedded = false }) {
-  if (market !== "ashare") return null;
-
-  const rows = Array.isArray(fundFlowInfo?.rows) ? fundFlowInfo.rows.slice(-10).reverse() : [];
-  const latest = fundFlowInfo?.latest || rows[0] || null;
-  const fiveDay = fundFlowInfo?.summary?.fiveDay;
-  const isDdxFallback = fundFlowInfo?.source?.key === "stockddx";
-  const trendLabel = {
-    inflow: "小单净流入",
-    outflow: "小单净流出",
-    flat: "小单流向平衡",
-  }[fundFlowInfo?.summary?.retailTrend] || "暂无判断";
-
-  return (
-    <div className={embedded ? "min-w-0" : "rounded-2xl border bg-white p-4"}>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center text-base font-semibold text-slate-700">
-          资金动向
-          <InfoTip text="主数据按 AKShare stock_individual_fund_flow 的东方财富资金流口径获取。小单资金流只能作为散户资金倾向的代理指标，不等于真实散户账户数量。主数据失败时会尝试 DDX 查询网备用源。" />
-        </div>
-        {fundFlowInfo?.source ? (
-          <div className="flex items-center gap-1.5 text-[11px]">
-            <span className={`rounded-full px-2 py-1 ${fundFlowInfo.fallbackUsed ? "bg-amber-100 text-amber-700" : "bg-sky-100 text-sky-700"}`}>
-              {fundFlowInfo.source.name}
-            </span>
-            {fundFlowInfo.stale ? <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-500">缓存</span> : null}
-          </div>
-        ) : null}
-      </div>
-
-      {loading ? (
-        <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">资金动向加载中</div>
-      ) : error ? (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700">{error}</div>
-      ) : !latest ? (
-        <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">暂无资金动向数据。</div>
-      ) : (
-        <>
-          {fundFlowInfo?.warning ? (
-            <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700">
-              {fundFlowInfo.warning}
-            </div>
-          ) : null}
-
-          {isDdxFallback ? (
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {[
-                ["DDX", latest.dde?.ddx],
-                ["DDY", latest.dde?.ddy],
-                ["DDZ", latest.dde?.ddz],
-                ["BBD", latest.dde?.bbd],
-              ].map(([label, value]) => (
-                <div key={label} className="rounded-xl bg-slate-50 p-3">
-                  <div className="text-xs text-slate-500">{label}</div>
-                  <div className={`mt-1 font-semibold ${fundFlowColor(value)}`}>
-                    {Number.isFinite(value) ? value.toFixed(2) : "-"}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <div className="rounded-xl bg-slate-50 p-3">
-                <div className="text-xs text-slate-500">近 5 日散户代理</div>
-                <div className={`mt-1 text-sm font-semibold ${fundFlowColor(fiveDay?.smallNetAmount)}`}>{trendLabel}</div>
-              </div>
-              <div className="rounded-xl bg-slate-50 p-3">
-                <div className="text-xs text-slate-500">5 日小单净额</div>
-                <div className={`mt-1 font-semibold ${fundFlowColor(fiveDay?.smallNetAmount)}`}>
-                  {formatFundFlowAmount(fiveDay?.smallNetAmount)}
-                </div>
-              </div>
-              <div className="rounded-xl bg-slate-50 p-3">
-                <div className="text-xs text-slate-500">5 日主力净额</div>
-                <div className={`mt-1 font-semibold ${fundFlowColor(fiveDay?.mainNetAmount)}`}>
-                  {formatFundFlowAmount(fiveDay?.mainNetAmount)}
-                </div>
-              </div>
-              <div className="rounded-xl bg-slate-50 p-3">
-                <div className="text-xs text-slate-500">最新小单占比</div>
-                <div className={`mt-1 font-semibold ${fundFlowColor(latest.smallNetRatio)}`}>
-                  {formatPercentValue(latest.smallNetRatio)}
-                </div>
-              </div>
-            </div>
-          )}
-
-          <FundFlowTrendChart rows={fundFlowInfo.rows} isDdxFallback={isDdxFallback} />
-
-          <div className="mt-3 overflow-x-auto rounded-xl border border-slate-100">
-            <table className="w-full min-w-[600px] text-xs">
-              <thead className="bg-slate-50 text-left text-slate-500">
-                <tr>
-                  <th className="px-3 py-2 font-medium">日期</th>
-                  {isDdxFallback ? (
-                    <>
-                      <th className="px-3 py-2 text-right font-medium">DDX</th>
-                      <th className="px-3 py-2 text-right font-medium">DDY</th>
-                      <th className="px-3 py-2 text-right font-medium">DDZ</th>
-                    </>
-                  ) : (
-                    <>
-                      <th className="px-3 py-2 text-right font-medium">主力净额</th>
-                      <th className="px-3 py-2 text-right font-medium">大单净额</th>
-                      <th className="px-3 py-2 text-right font-medium">小单净额</th>
-                      <th className="px-3 py-2 text-right font-medium">小单占比</th>
-                    </>
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr key={row.date} className="border-t border-slate-100">
-                    <td className="whitespace-nowrap px-3 py-2 text-slate-600">{row.date}</td>
-                    {isDdxFallback ? (
-                      <>
-                        {[row.dde?.ddx, row.dde?.ddy, row.dde?.ddz].map((value, index) => (
-                          <td key={index} className={`px-3 py-2 text-right font-medium ${fundFlowColor(value)}`}>
-                            {Number.isFinite(value) ? value.toFixed(2) : "-"}
-                          </td>
-                        ))}
-                      </>
-                    ) : (
-                      <>
-                        {[row.mainNetAmount, row.largeNetAmount, row.smallNetAmount].map((value, index) => (
-                          <td key={index} className={`px-3 py-2 text-right font-medium ${fundFlowColor(value)}`}>
-                            {formatFundFlowAmount(value)}
-                          </td>
-                        ))}
-                        <td className={`px-3 py-2 text-right font-medium ${fundFlowColor(row.smallNetRatio)}`}>
-                          {formatPercentValue(row.smallNetRatio)}
-                        </td>
-                      </>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="mt-2 text-[11px] leading-5 text-slate-400">
-            {fundFlowInfo.proxyDescription}
-          </div>
-        </>
       )}
     </div>
   );
@@ -9111,9 +8796,9 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const [financialInfo, setFinancialInfo] = useState(null);
   const [financialLoading, setFinancialLoading] = useState(false);
   const [financialError, setFinancialError] = useState("");
-  const [fundFlowInfo, setFundFlowInfo] = useState(null);
-  const [fundFlowLoading, setFundFlowLoading] = useState(false);
-  const [fundFlowError, setFundFlowError] = useState("");
+  const [tradeSideInfo, setTradeSideInfo] = useState(null);
+  const [tradeSideLoading, setTradeSideLoading] = useState(false);
+  const [tradeSideError, setTradeSideError] = useState("");
   const [profileInfo, setProfileInfo] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
   const [suspensionRisk, setSuspensionRisk] = useState(null); // 停牌风险（仅 A 股），来自 /api/suspension-alert
@@ -9208,6 +8893,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const marketRef = useRef(market);
   const marketCodesRef = useRef(marketCodes);
   const loadRunRef = useRef(0);
+  const tradeSideRequestRef = useRef(0);
   const usKlineCacheRef = useRef(new Map());
   const usPreloadRunRef = useRef(0);
 
@@ -9613,6 +9299,33 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     setActiveFavoriteGroupMap((prev) => ({ ...prev, [requestedMarket]: name || "默认" }));
   }
 
+  function applyTradeSideHistory(payload) {
+    setTradeSideInfo(payload);
+    const snapshot = payload.latest;
+    if (!snapshot || (payload.realtimeSource?.key || payload.source?.key) !== 'tencent') return;
+    setMeta(previous => previous.code === payload.code && Number.isFinite(Date.parse(snapshot.quoteTime))
+      && (!previous.quoteTime || Date.parse(snapshot.quoteTime) >= Date.parse(previous.quoteTime))
+      ? { ...previous, innerVol: snapshot.innerVol, outerVol: snapshot.outerVol, quoteTime: snapshot.quoteTime, tradeSideVolumeSource: 'tencent' }
+      : previous);
+  }
+
+  async function refreshTradeSideHistory() {
+    if (market !== 'ashare' || !/^\d{6}$/.test(meta.code)) return;
+    const code = meta.code;
+    const runId = loadRunRef.current;
+    const requestId = ++tradeSideRequestRef.current;
+    setTradeSideLoading(true);
+    setTradeSideError('');
+    try {
+      const payload = await fetchTradeSideHistory(code);
+      if (runId === loadRunRef.current && requestId === tradeSideRequestRef.current) applyTradeSideHistory(payload);
+    } catch (error) {
+      if (runId === loadRunRef.current && requestId === tradeSideRequestRef.current) setTradeSideError(error.message || '内外盘历史加载失败');
+    } finally {
+      if (runId === loadRunRef.current && requestId === tradeSideRequestRef.current) setTradeSideLoading(false);
+    }
+  }
+
   async function load(overrideCode) {
     if (isStandaloneMarket) return;
     const runId = ++loadRunRef.current;
@@ -9622,8 +9335,9 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     setError("");
     setFinancialError("");
     setFinancialInfo(null);
-    setFundFlowError("");
-    setFundFlowInfo(null);
+    tradeSideRequestRef.current += 1;
+    setTradeSideError("");
+    setTradeSideInfo(null);
     setProfileError("");
     setProfileInfo(null);
     try {
@@ -9715,12 +9429,12 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
 
       if (market === "ashare") {
         setFinancialLoading(true);
-        setFundFlowLoading(true);
+        setTradeSideLoading(true);
         setProfileLoading(true);
         setSuspensionRisk({ loading: true });
         try {
           const target = result.code || currentCode;
-          const [financeResult, fundFlowResult, profileResult, suspensionResult] = await Promise.allSettled([
+          const [financeResult, tradeSideResult, profileResult, suspensionResult] = await Promise.allSettled([
             apiFetch(`/api/ashare-finance?code=${encodeURIComponent(target)}`, {
               method: "GET",
               cache: "no-store",
@@ -9729,14 +9443,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
               if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
               return payload;
             }),
-            apiFetch(`/api/ashare-fund-flow?code=${encodeURIComponent(target)}&limit=30`, {
-              method: "GET",
-              cache: "no-store",
-            }).then(async (res) => {
-              const payload = await res.json().catch(() => null);
-              if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
-              return payload;
-            }),
+            fetchTradeSideHistory(target),
             apiFetch(`/api/ashare-profile?code=${encodeURIComponent(target)}`, {
               method: "GET",
               cache: "no-store",
@@ -9763,10 +9470,10 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
             setFinancialError(financeResult.reason instanceof Error ? financeResult.reason.message : "财报数据加载失败");
           }
 
-          if (fundFlowResult.status === "fulfilled") {
-            setFundFlowInfo(fundFlowResult.value);
+          if (tradeSideResult.status === "fulfilled") {
+            applyTradeSideHistory(tradeSideResult.value);
           } else {
-            setFundFlowError(fundFlowResult.reason instanceof Error ? fundFlowResult.reason.message : "资金动向加载失败");
+            setTradeSideError(tradeSideResult.reason instanceof Error ? tradeSideResult.reason.message : "内外盘历史加载失败");
           }
 
           if (profileResult.status === "fulfilled") {
@@ -9788,13 +9495,13 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
         } finally {
           if (runId === loadRunRef.current) {
             setFinancialLoading(false);
-            setFundFlowLoading(false);
+            setTradeSideLoading(false);
             setProfileLoading(false);
           }
         }
       } else if (market === "us") {
         setFinancialLoading(false);
-        setFundFlowLoading(false);
+        setTradeSideLoading(false);
         setSuspensionRisk(null);
         setProfileLoading(true);
         try {
@@ -9816,7 +9523,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
         }
       } else {
         setFinancialLoading(false);
-        setFundFlowLoading(false);
+        setTradeSideLoading(false);
         setProfileLoading(false);
         setSuspensionRisk(null);
       }
@@ -9827,12 +9534,21 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
       setMeta({ code: targetCode, name: "" });
       setSuspensionRisk(null);
       setFinancialLoading(false);
-      setFundFlowLoading(false);
+      setTradeSideLoading(false);
       setProfileLoading(false);
     } finally {
       if (runId === loadRunRef.current) setLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (market !== 'ashare' || loading || !/^\d{6}$/.test(meta.code)) return undefined;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshTradeSideHistory();
+    }, tradeSideInfo?.history?.status === 'loading' ? 3_000 : 60_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [market, meta.code, loading, tradeSideInfo?.history?.status]);
 
   useEffect(() => {
     // 当前市场还没有选中标的时（首屏 / 首次进入该市场），交给 loadDefaultWatchlist 选第一只；
@@ -10352,10 +10068,10 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                       </span>
                       <span className="text-red-600">{Number.isFinite(meta.outerVol) ? formatNumber(meta.outerVol) : market === "ashare" ? "-" : <span className="text-xs text-slate-400">源未提供</span>}</span>
                     </div>
-                    {market !== "ashare" && (meta.volumeRatioSource === "tencent" || meta.sessionVwapSource === "tencent") ? (
+                    {(market === "ashare" ? meta.tradeSideVolumeSource === "tencent" && meta.quoteTime : meta.volumeRatioSource === "tencent" || meta.sessionVwapSource === "tencent") ? (
                       <div className="quote-metric-wide text-xs text-slate-400">
-                        腾讯快照 · {meta.indicatorsQuoteTime || meta.quoteTime}
-                        {market === "hk" ? " 香港时间" : " 美东时间"}
+                        腾讯快照 · {market === "ashare" ? formatTradeQuoteTime(meta.quoteTime) : meta.indicatorsQuoteTime || meta.quoteTime}
+                        {market === "ashare" ? " 北京时间" : market === "hk" ? " 香港时间" : " 美东时间"}
                       </div>
                     ) : null}
                     <div className="quote-metric quote-metric-wide flex justify-between">
@@ -10579,13 +10295,13 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                     embedded
                   />}
                   showNews={market === "ashare" || market === "hk"}
-                  showFundFlow={market === "ashare"}
-                  fundFlowContent={<FundFlowPanel
-                    fundFlowInfo={fundFlowInfo}
-                    loading={fundFlowLoading}
-                    error={fundFlowError}
-                    market={market}
-                    embedded
+                  showTradeSideHistory={market === "ashare"}
+                  tradeSideHistoryContent={<TradeSideHistoryPanel
+                    key={meta.code || currentCode}
+                    info={tradeSideInfo}
+                    loading={tradeSideLoading || loading}
+                    error={tradeSideError}
+                    onRefresh={refreshTradeSideHistory}
                   />}
                 />}
               </div>
