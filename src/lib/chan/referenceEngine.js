@@ -46,6 +46,9 @@ function findFractals(bars) {
   return result;
 }
 
+// Audit the exact primitives used above; these exports do not change chart behavior.
+export { mergeNext as mergeReferenceBar, findFractals as findReferenceFractals };
+
 function checkBi(bars) {
   const fx = findFractals(bars);
   if (fx.length < 2) return { remaining: bars };

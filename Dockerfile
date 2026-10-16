@@ -19,6 +19,7 @@ RUN npm ci --omit=dev
 
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/server ./server
+COPY --from=build /app/src/lib/tencentAshareVolume.js ./src/lib/tencentAshareVolume.js
 
 EXPOSE 80
 

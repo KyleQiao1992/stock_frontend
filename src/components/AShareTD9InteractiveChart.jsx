@@ -4,6 +4,7 @@ import AccountPanel from "./AccountPanel";
 import StockAnalysisPanel from "./StockAnalysisPanel";
 import TradeSideHistoryPanel from "./TradeSideHistoryPanel";
 import { fetchTradeSideHistory, formatTradeQuoteTime } from "../lib/tradeSideHistory.js";
+import { tencentAshareVolumeToLots } from "../lib/tencentAshareVolume.js";
 import ChanOverlay from "./ChanOverlay";
 import ChanLegend from "./ChanLegend";
 import ChanControls from "./ChanControls";
@@ -416,7 +417,7 @@ function parseTencentKlineResponse(res, { code, period, adjust }) {
       const close = Number(item[2]);
       const high = Number(item[3]);
       const low = Number(item[4]);
-      const volume = Number(item[5]);
+      const volume = tencentAshareVolumeToLots(item[5], code);
       const change = Number.isFinite(prevClose) ? close - prevClose : 0;
       const pct = Number.isFinite(prevClose) && prevClose !== 0 ? (change / prevClose) * 100 : 0;
       prevClose = close;
@@ -476,8 +477,11 @@ function extractTencentQuoteMeta(res, code) {
   const qt = node?.qt?.[symbol] || node?.qt?.[code];
   if (!Array.isArray(qt)) return { marketCap: null, floatMarketCap: null, peRatio: null, turnoverRate: null, volumeRatio: null, outerVol: null, innerVol: null };
 
-  // Tencent quote fields: 7 = 外盘 (主动买，手), 8 = 内盘 (主动卖，手), 38 = turnover rate %, 39 = PE, 44 = float market cap in 100M CNY, 45 = total market cap in 100M CNY, 49 = volume ratio.
-  const sideVolume = value => value != null && String(value).trim() !== '' && Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
+  // Tencent quote fields: 7 = 外盘 (主动买), 8 = 内盘 (主动卖), 38 = turnover rate %, 39 = PE, 44 = float market cap in 100M CNY, 45 = total market cap in 100M CNY, 49 = volume ratio. STAR Market source volumes use shares; normalize to lots.
+  const sideVolume = value => {
+    const volume = tencentAshareVolumeToLots(value, code);
+    return Number.isFinite(volume) ? volume : null;
+  };
   const outerVol = sideVolume(qt[7]);
   const innerVol = sideVolume(qt[8]);
   const timestamp = String(qt[30] || '');

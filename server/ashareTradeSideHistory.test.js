@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { parseTencentTradeSideQuote, fetchTencentTradeSideQuotes, createTradeSideHistoryService,
+  createTradeSideSnapshotService, createTradeSideHistoryApiService, tradeSideHistoryService,
   createAshareTradeSideHistoryHandler, toTradeSideSymbol, TRADE_SIDE_TRACKED_KEY,
   UPSERT_TRADE_SIDE_SCRIPT, isTradeSideCollectionWindow } from "./ashareTradeSideHistory.js";
 
@@ -58,6 +59,50 @@ test("real Tencent side counters remain in hands and differ from cash flows", ()
   assert.equal(toTradeSideSymbol("920099"), "bj920099");
 });
 
+test("STAR Market quote counters preserve exact share remainders when converted to lots", () => {
+  const fields = quote(undefined, { 1: "埃科光电", 2: "688610", 6: "1763046", 7: "792210", 8: "970836" });
+  const row = parseTencentTradeSideQuote("sh688610", fields, NOW);
+  assert.equal(row.totalVol, 17630.46);
+  assert.equal(row.innerVol, 9708.36);
+  assert.equal(row.outerVol, 7922.1);
+  assert.equal(row.netVol, -1786.26);
+  assert.equal(row.netRatio, (792210 - 970836) / 1763046 * 100);
+  assert.equal(row.volumeUnit, "lot");
+  assert.equal(row.sourceVolumeUnit, "share");
+  assert.deepEqual(row.sourceVolumes, { innerVol: 970836, outerVol: 792210, totalVol: 1763046 });
+});
+
+test("legacy STAR Market snapshots normalize on read even when the same timestamp prevents replacement", async () => {
+  const redis = redisDouble();
+  const corrected = parseTencentTradeSideQuote("sh688610", quote(undefined,
+    { 1: "埃科光电", 2: "688610", 6: "1763046", 7: "792210", 8: "970836" }), NOW);
+  const legacy = { ...corrected, innerVol: 970836, outerVol: 792210, totalVol: 1763046 };
+  delete legacy.volumeUnit;
+  delete legacy.sourceVolumeUnit;
+  delete legacy.sourceVolumes;
+  const key = "ashare-trade-side:v1:daily:sh688610";
+  redis.hashes.set(key, new Map([[legacy.date, JSON.stringify(legacy)]]));
+  const service = serviceFor(redis, () => corrected);
+  const result = await service.get("688610");
+  assert.equal(result.latest.totalVol, 17630.46);
+  assert.equal(result.latest.innerVol, 9708.36);
+  assert.equal(result.latest.outerVol, 7922.1);
+  assert.equal(result.latest.netVol, -1786.26);
+  assert.equal(JSON.parse(redis.hashes.get(key).get(legacy.date)).innerVol, 970836);
+  const restart = serviceFor(redis, () => corrected);
+  assert.equal((await restart.get("688610")).latest.innerVol, 9708.36);
+});
+
+test("normalized STAR Market snapshots are not converted a second time after restart", async () => {
+  const redis = redisDouble();
+  const row = parseTencentTradeSideQuote("sh689009", quote(undefined,
+    { 1: "九号公司", 2: "689009", 6: "1763046", 7: "792210", 8: "970836" }), NOW);
+  await serviceFor(redis, () => row).get("689009");
+  const result = await serviceFor(redis, () => row).get("689009");
+  assert.equal(result.latest.innerVol, 9708.36);
+  assert.equal(result.latest.totalVol, 17630.46);
+});
+
 test("after-close or next-day collection cannot promote a real intraday quote", () => {
   assert.equal(snapshot("20261013145959").complete, false);
   assert.equal(snapshot("20261013150000").complete, true);
@@ -84,6 +129,62 @@ test("one invalid provider symbol does not discard valid quotes in its batch", a
   });
   assert.equal(rows.get("sh603818").innerVol, 163292);
   assert.match(rows.get("sz000001").error, /格式无效/);
+});
+
+test("live snapshot requests Tencent directly and preserves STAR Market share precision", async () => {
+  const requests = [];
+  const fields = quote(undefined, { 1: "埃科光电", 2: "688610", 6: "1763046", 7: "792210", 8: "970836" });
+  const service = createTradeSideSnapshotService({ now: () => NOW,
+    request: async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, arrayBuffer: async () => new TextEncoder().encode(`v_sh688610="${fields.join("~")}";`).buffer };
+    } });
+  const result = await service.get("688610");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://qt.gtimg.cn/q=sh688610");
+  assert.equal(requests[0].options.cache, "no-store");
+  assert.equal(result.latest.innerVol, 9708.36);
+  assert.equal(result.latest.outerVol, 7922.1);
+  assert.equal(result.latest.netVol, -1786.26);
+  assert.equal(result.latest.quoteTime, "2026-10-13T16:14:56+08:00");
+  assert.equal(result.source.key, "tencent");
+  assert.equal(Object.hasOwn(result, "rows"), false);
+  assert.equal(Object.hasOwn(result, "collection"), false);
+});
+
+test("default API realtime bypasses the Redis collector and creates no saved snapshot history", async (t) => {
+  let redisCollectorCalls = 0;
+  let quoteRequests = 0;
+  t.mock.method(tradeSideHistoryService, "get", async () => {
+    redisCollectorCalls += 1;
+    throw new Error("Redis must not be used for a live quote");
+  });
+  t.mock.method(globalThis, "fetch", async (url) => {
+    quoteRequests += 1;
+    assert.equal(url, "https://qt.gtimg.cn/q=sh603818");
+    return { ok: true, arrayBuffer: async () => new TextEncoder().encode(`v_sh603818="${quote().join("~")}";`).buffer };
+  });
+  const historicalRows = [{ code: "603818", date: "2026-10-12", innerVol: 200, outerVol: 300, complete: true }];
+  const api = createTradeSideHistoryApiService({ archive: {
+    query: async () => ({ code: "603818", rows: historicalRows, history: { status: "complete" } }),
+  } });
+  const result = await api.get("603818");
+  assert.equal(redisCollectorCalls, 0);
+  assert.equal(quoteRequests, 1);
+  assert.equal(result.latest.innerVol, 163292);
+  assert.equal(result.latest.source, "tencent");
+  assert.deepEqual(result.rows, historicalRows);
+  assert.deepEqual(result.snapshotHistory.rows, []);
+  assert.equal(result.snapshotHistory.collection, null);
+});
+
+test("live snapshots report missing or invalid upstream quotes without inventing records", async () => {
+  for (const quoteRows of [new Map(), new Map([["sh603818", { error: "腾讯报价时间无效。" }]])]) {
+    const service = createTradeSideSnapshotService({ fetchQuotes: async () => quoteRows });
+    await assert.rejects(service.get("603818"), /报价返回不完整|报价时间无效/);
+  }
+  const unavailable = createTradeSideSnapshotService({ request: async () => ({ ok: false, status: 503 }) });
+  await assert.rejects(unavailable.get("603818"), /HTTP 503/);
 });
 
 test("daily archive only contains actual collected dates and survives service restart", async () => {

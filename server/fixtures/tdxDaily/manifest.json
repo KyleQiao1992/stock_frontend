@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-13",
+  "sourceUrl": "https://www.tdx.com.cn/products/data/data/g4day/20261013.zip",
+  "description": "Original 150-byte COD rows and 512-byte MD1 blocks, extracted without changing bytes. Tests remap the sequence only when assembling compact ZIP fixtures.",
+  "rows": [
+    {
+      "code": "603818",
+      "originalSequence": 26707,
+      "totalShares": 31419300,
+      "innerShares": 17374650,
+      "outerShares": 14044650,
+      "close": 4.34
+    },
+    {
+      "code": "688610",
+      "originalSequence": 27400,
+      "totalShares": 1301251,
+      "innerShares": 658905,
+      "outerShares": 641759,
+      "close": 134.1
+    },
+    {
+      "code": "600519",
+      "originalSequence": 25596,
+      "totalShares": 2657276,
+      "innerShares": 1495604,
+      "outerShares": 1161672,
+      "close": 1274.89
+    }
+  ],
+  "directionCounterEvidence": {
+    "code": "603818",
+    "date": "2026-10-13",
+    "tdxHistoricalClassifiedShares": {
+      "innerShares": 16848400,
+      "outerShares": 13518400,
+      "neutralShares": 1052500
+    },
+    "md1CumulativeShares": {
+      "offset80InnerShares": 17374650,
+      "offset88OuterShares": 14044650
+    },
+    "relationship": "Native MD1 counters equal historical TDX classified side volume plus half the neutral volume on this observed stock and date. This validates the vendor field mapping, not exchange flags."
+  }
+}

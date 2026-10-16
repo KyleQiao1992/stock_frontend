@@ -148,6 +148,7 @@ export function createTradeSideHistoryArchive({ getRedis = getRedisClient,
       } catch (error) {
         job.status = "error";
         job.error = job.persistenceError || error?.message || "通达信历史分笔读取失败。";
+        job.errorCode = error?.code;
       } finally {
         job.finishedAt = now();
         if (!disposed && job.requestedLimit > job.limit) {
@@ -182,6 +183,7 @@ export function createTradeSideHistoryArchive({ getRedis = getRedisClient,
       processed: job.processed ?? 0, missingDates: [...job.missingDates],
       firstDate: allRows[0]?.date ?? null,
       ...(job.error ? { error: job.error } : {}),
+      ...(job.errorCode ? { errorCode: job.errorCode } : {}),
       ...(Object.keys(job.errors || {}).length ? { errors: { ...job.errors } } : {}) };
     return { code, source: TDX_HISTORY_SOURCE, verification: tdxHistoryVerification(),
       unit: "手", rows: allRows.slice(-limit), history,
@@ -189,7 +191,8 @@ export function createTradeSideHistoryArchive({ getRedis = getRedisClient,
         days: allRows.length, completedDays: allRows.length,
         lastCollectedAt: allRows.at(-1)?.collectedAt ?? null,
         intervalSeconds: INTERVAL_MS / 1000,
-        notice: "历史已核对常规成交总量和收盘价，并完成分页检查；这些检查不能证明买卖方向与交易所一致。",
+        notice: allRows.length ? "已保存的历史核对过常规成交总量和收盘价，并完成分页检查；这些检查不能证明买卖方向与交易所一致。"
+          : "尚无通过完整性核验的历史记录。",
         ...(registrationError ? { error: registrationError } : {}) },
       ...(job.error ? { warning: job.error } : {}) };
   }

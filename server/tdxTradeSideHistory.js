@@ -1,6 +1,7 @@
 import net from "node:net";
 import { createHash } from "node:crypto";
 import { inflateSync } from "node:zlib";
+import { tencentAshareVolumeToLots, tencentAshareVolumeUnit } from "../src/lib/tencentAshareVolume.js";
 
 // Protocol layout reference (independent Node implementation):
 // https://github.com/rainx/pytdx/blob/master/pytdx/parser/get_history_transaction_data.py
@@ -22,7 +23,16 @@ const PAGE_SIZE = 2000;
 const MAX_POSITION = 65535;
 const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
 
-function fail(message) { throw new Error(`通达信历史成交：${message}`); }
+function fail(message, code) {
+  const error = new Error(`通达信历史成交：${message}`);
+  if (code) error.code = code;
+  throw error;
+}
+function assertExactVolumeAvailable(code) {
+  if (tencentAshareVolumeUnit(code) === "share") {
+    fail(`${code} 科创板成交量按股计，含不足一手的零股；当前通达信历史分笔仅返回整数手，不能还原精确内外盘股数。需要保留逐笔股数的历史数据源。`, "TDX_SHARE_PRECISION_UNAVAILABLE");
+  }
+}
 function checkAbort(signal) {
   if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("历史成交查询已取消。");
 }
@@ -180,6 +190,7 @@ export async function connectTdxHistory(host, { timeoutMs = 5000, signal } = {})
 }
 
 export async function readTdxTradeSideDay(connection, { code, market, date, expectedTotalVol, close }, { now = Date.now, signal } = {}) {
+  assertExactVolumeAvailable(code);
   if (!Number.isSafeInteger(expectedTotalVol) || expectedTotalVol <= 0 || !Number.isFinite(close) || close <= 0)
     fail("日线成交量或收盘价无效，不能验证完整历史。");
   const totals = { innerVol: 0, outerVol: 0, neutralVol: 0, unknownVol: 0, totalVol: 0, regularVol: 0, afterHoursVol: 0 };
@@ -258,13 +269,16 @@ export function parseTradeSideDailyPlan(payload, code, { limit = 120, now = Date
   for (const bar of bars) {
     const date = bar?.[0];
     const close = Number(bar?.[2]);
-    const expectedTotalVol = Number(bar?.[5]);
+    const rawVolume = Number(bar?.[5]);
+    const expectedTotalVol = tencentAshareVolumeToLots(bar?.[5], code);
     if (!validDate(date) || date > today || (date === today && !currentDayComplete)) continue;
     if (bar?.[2] == null || String(bar[2]).trim() === '' || bar?.[5] == null || String(bar[5]).trim() === ''
-      || !Number.isFinite(close) || close <= 0 || !Number.isSafeInteger(expectedTotalVol) || expectedTotalVol < 0)
+      || !Number.isFinite(close) || close <= 0 || !Number.isSafeInteger(rawVolume) || rawVolume < 0)
       fail(`${date} 日线缺少可验证的收盘价或总成交量。`);
     if (!expectedTotalVol) continue; // A suspension is not a recorded trading day.
-    byDate.set(date, { code, market: code[0] === "6" ? 1 : 0, date, close, expectedTotalVol });
+    byDate.set(date, { code, market: code[0] === "6" ? 1 : 0, date, close, expectedTotalVol,
+      sourceVolumeUnit: tencentAshareVolumeUnit(code),
+      expectedTotalShares: tencentAshareVolumeUnit(code) === "share" ? rawVolume : rawVolume * 100 });
   }
   const plan = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)).slice(-limit);
   if (!plan.length) fail("没有已收盘且有实际成交的交易日期。");
@@ -276,6 +290,7 @@ export async function fetchTdxTradeSideHistory({ code, limit = 120, now = Date.n
   concurrency = 3, timeoutMs = 5000 } = {}) {
   if (!/^(?:6\d{5}|0\d{5}|3\d{5})$/.test(code)) fail("暂只支持沪深 A 股历史成交。");
   if (!Number.isInteger(limit) || limit < 1 || limit > 120 || !hosts.length) fail("历史查询范围或服务器无效。");
+  assertExactVolumeAvailable(code);
   const planStartedAt = now();
   signal = signal ? AbortSignal.any([signal, AbortSignal.timeout(180000)]) : AbortSignal.timeout(180000);
   checkAbort(signal);

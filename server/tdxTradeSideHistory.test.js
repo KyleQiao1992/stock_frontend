@@ -115,6 +115,24 @@ test('trading dates come from real daily bars and unfinished current sessions ar
   assert.equal(parseTradeSideDailyPlan(dailyPayload([bar('2026-10-12','0'),bar('2026-10-13')]),'603818',{now:()=>NOW}).length,1);
 });
 
+test('STAR Market daily plans preserve exact shares and do not compare shares with integer lots', () => {
+  const payload = {code:0,data:{sh688610:{day:[['2026-10-13','130','126.13','135.01','124.32','1763046']]}}};
+  const plan = parseTradeSideDailyPlan(payload, '688610', {now:()=>NOW});
+  assert.equal(plan[0].expectedTotalVol,17630.46);
+  assert.equal(plan[0].expectedTotalShares,1763046);
+  assert.equal(plan[0].sourceVolumeUnit,'share');
+});
+
+test('an integer-lot historical feed cannot claim precise STAR Market volume even if totals happen to match', async () => {
+  for (const code of ['688610','689009']) {
+    const options = {code,limit:3,request:async()=>{throw new Error('Precision failure must precede network work');}};
+    await assert.rejects(fetchTdxTradeSideHistory(options), error =>
+      error.code === 'TDX_SHARE_PRECISION_UNAVAILABLE' && /零股/.test(error.message));
+    await assert.rejects(readTdxTradeSideDay({request:async()=>{throw new Error('No precision');}},day({code})),
+      error=>error.code==='TDX_SHARE_PRECISION_UNAVAILABLE');
+  }
+});
+
 test('history skips already archived dates, freezes the starting session and reports gaps', async () => {
   let clock=Date.parse('2026-10-13T06:59:00Z');
   let persisted=0;

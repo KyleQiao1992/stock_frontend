@@ -1,0 +1,884 @@
+{
+  "auditedAt": "2026-10-15",
+  "entry": "src/lib/chan/index.js → referenceEngine.js → ChanOverlay.jsx",
+  "scope": "顶底分型与包含处理。未改生产判定、绘图、笔或中枢规则；不把网站一致性当原典严谨性。",
+  "sources": [
+    {
+      "lesson": 62,
+      "url": "https://blog.sina.com.cn/s/blog_486e105c01000bf2.html"
+    },
+    {
+      "lesson": 65,
+      "url": "https://blog.sina.com.cn/s/blog_486e105c01000bpo.html"
+    },
+    {
+      "lesson": 82,
+      "url": "https://blog.sina.com.cn/s/blog_486e105c01000cq4.html"
+    }
+  ],
+  "correction": "旧版18/21将3项全量显示假设计入定义失败，归类不成立。现保留3项实际差异，独立报告；未修改生产算法。",
+  "passed": 20,
+  "total": 20,
+  "matchesAllDefinitionChecks": true,
+  "results": [
+    {
+      "id": "top",
+      "scope": "local-definition",
+      "description": "标准顶：中间高、低同时最高",
+      "input": [
+        [
+          7,
+          3
+        ],
+        [
+          9,
+          5
+        ],
+        [
+          8,
+          4
+        ]
+      ],
+      "expected": [
+        [
+          "G",
+          2,
+          9
+        ]
+      ],
+      "actual": [
+        [
+          "G",
+          2,
+          9
+        ]
+      ],
+      "matches": true
+    },
+    {
+      "id": "bottom",
+      "scope": "local-definition",
+      "description": "标准底：中间高、低同时最低",
+      "input": [
+        [
+          9,
+          5
+        ],
+        [
+          7,
+          3
+        ],
+        [
+          8,
+          4
+        ]
+      ],
+      "expected": [
+        [
+          "D",
+          2,
+          3
+        ]
+      ],
+      "actual": [
+        [
+          "D",
+          2,
+          3
+        ]
+      ],
+      "matches": true
+    },
+    {
+      "id": "up",
+      "scope": "local-definition",
+      "description": "连续上升不是分型",
+      "input": [
+        [
+          5,
+          1
+        ],
+        [
+          6,
+          2
+        ],
+        [
+          7,
+          3
+        ]
+      ],
+      "expected": [],
+      "actual": [],
+      "matches": true
+    },
+    {
+      "id": "down",
+      "scope": "local-definition",
+      "description": "连续下降不是分型",
+      "input": [
+        [
+          7,
+          3
+        ],
+        [
+          6,
+          2
+        ],
+        [
+          5,
+          1
+        ]
+      ],
+      "expected": [],
+      "actual": [],
+      "matches": true
+    },
+    {
+      "id": "only-high",
+      "scope": "local-definition",
+      "description": "只满足中间最高价最高不够（单独检查判定谓词）",
+      "input": [
+        [
+          7,
+          3
+        ],
+        [
+          9,
+          2
+        ],
+        [
+          8,
+          4
+        ]
+      ],
+      "expected": [],
+      "actual": [],
+      "matches": true
+    },
+    {
+      "id": "only-low",
+      "scope": "local-definition",
+      "description": "只满足中间最低价最低不够（单独检查判定谓词）",
+      "input": [
+        [
+          9,
+          3
+        ],
+        [
+          10,
+          2
+        ],
+        [
+          8,
+          4
+        ]
+      ],
+      "expected": [],
+      "actual": [],
+      "matches": true
+    },
+    {
+      "id": "equal-high",
+      "scope": "local-definition",
+      "description": "等高不能直接作为严格三K顶，须先处理包含",
+      "input": [
+        [
+          8,
+          3
+        ],
+        [
+          8,
+          5
+        ],
+        [
+          7,
+          4
+        ]
+      ],
+      "expected": [],
+      "actual": [],
+      "matches": true
+    },
+    {
+      "id": "equal-low",
+      "scope": "local-definition",
+      "description": "等低不能直接作为严格三K底，须先处理包含",
+      "input": [
+        [
+          9,
+          3
+        ],
+        [
+          7,
+          3
+        ],
+        [
+          8,
+          4
+        ]
+      ],
+      "expected": [],
+      "actual": [],
+      "matches": true
+    },
+    {
+      "id": "no-right",
+      "scope": "local-definition",
+      "description": "两根K线不生成分型",
+      "input": [
+        [
+          7,
+          3
+        ],
+        [
+          9,
+          5
+        ]
+      ],
+      "expected": [],
+      "actual": [],
+      "matches": true
+    },
+    {
+      "id": "no-left",
+      "scope": "local-definition",
+      "description": "一根K线不生成分型",
+      "input": [
+        [
+          7,
+          3
+        ]
+      ],
+      "expected": [],
+      "actual": [],
+      "matches": true
+    },
+    {
+      "id": "gap-top",
+      "scope": "local-definition",
+      "description": "跳空不排除几何顶分型",
+      "input": [
+        [
+          4,
+          1
+        ],
+        [
+          10,
+          8
+        ],
+        [
+          6,
+          5
+        ]
+      ],
+      "expected": [
+        [
+          "G",
+          2,
+          10
+        ]
+      ],
+      "actual": [
+        [
+          "G",
+          2,
+          10
+        ]
+      ],
+      "matches": true
+    },
+    {
+      "id": "gap-bottom",
+      "scope": "local-definition",
+      "description": "跳空不排除几何底分型",
+      "input": [
+        [
+          10,
+          8
+        ],
+        [
+          4,
+          1
+        ],
+        [
+          6,
+          5
+        ]
+      ],
+      "expected": [
+        [
+          "D",
+          2,
+          1
+        ]
+      ],
+      "actual": [
+        [
+          "D",
+          2,
+          1
+        ]
+      ],
+      "matches": true
+    },
+    {
+      "id": "up-inner",
+      "scope": "directional-inclusion",
+      "description": "有明确前趋势的包含处理；同价极值时间采用参考站取右侧约定",
+      "input": [
+        [
+          7,
+          3
+        ],
+        [
+          9,
+          5
+        ],
+        [
+          8,
+          6
+        ]
+      ],
+      "expected": [
+        9,
+        6,
+        2
+      ],
+      "actual": [
+        9,
+        6,
+        2
+      ],
+      "matches": true
+    },
+    {
+      "id": "up-outer",
+      "scope": "directional-inclusion",
+      "description": "有明确前趋势的包含处理；同价极值时间采用参考站取右侧约定",
+      "input": [
+        [
+          7,
+          3
+        ],
+        [
+          9,
+          5
+        ],
+        [
+          10,
+          4
+        ]
+      ],
+      "expected": [
+        10,
+        5,
+        3
+      ],
+      "actual": [
+        10,
+        5,
+        3
+      ],
+      "matches": true
+    },
+    {
+      "id": "down-inner",
+      "scope": "directional-inclusion",
+      "description": "有明确前趋势的包含处理；同价极值时间采用参考站取右侧约定",
+      "input": [
+        [
+          9,
+          5
+        ],
+        [
+          7,
+          3
+        ],
+        [
+          6,
+          4
+        ]
+      ],
+      "expected": [
+        6,
+        3,
+        2
+      ],
+      "actual": [
+        6,
+        3,
+        2
+      ],
+      "matches": true
+    },
+    {
+      "id": "down-outer",
+      "scope": "directional-inclusion",
+      "description": "有明确前趋势的包含处理；同价极值时间采用参考站取右侧约定",
+      "input": [
+        [
+          9,
+          5
+        ],
+        [
+          7,
+          3
+        ],
+        [
+          8,
+          2
+        ]
+      ],
+      "expected": [
+        7,
+        2,
+        3
+      ],
+      "actual": [
+        7,
+        2,
+        3
+      ],
+      "matches": true
+    },
+    {
+      "id": "up-equal-high",
+      "scope": "directional-inclusion",
+      "description": "有明确前趋势的包含处理；同价极值时间采用参考站取右侧约定",
+      "input": [
+        [
+          7,
+          3
+        ],
+        [
+          9,
+          5
+        ],
+        [
+          9,
+          6
+        ]
+      ],
+      "expected": [
+        9,
+        6,
+        3
+      ],
+      "actual": [
+        9,
+        6,
+        3
+      ],
+      "matches": true
+    },
+    {
+      "id": "down-equal-low",
+      "scope": "directional-inclusion",
+      "description": "有明确前趋势的包含处理；同价极值时间采用参考站取右侧约定",
+      "input": [
+        [
+          9,
+          5
+        ],
+        [
+          7,
+          3
+        ],
+        [
+          6,
+          3
+        ]
+      ],
+      "expected": [
+        6,
+        3,
+        3
+      ],
+      "actual": [
+        6,
+        3,
+        3
+      ],
+      "matches": true
+    },
+    {
+      "id": "merged-top-mapping",
+      "scope": "analysis-and-raw-chart-mapping",
+      "description": "原始三K扫描无分型；包含处理后成立，标在真实极值原K时间",
+      "input": [
+        [
+          8,
+          4
+        ],
+        [
+          10,
+          6
+        ],
+        [
+          11,
+          5
+        ],
+        [
+          9,
+          4
+        ]
+      ],
+      "expected": [
+        [
+          "G",
+          3,
+          11
+        ]
+      ],
+      "actual": [
+        [
+          "G",
+          3,
+          11
+        ]
+      ],
+      "matches": true
+    },
+    {
+      "id": "merged-bottom-mapping",
+      "scope": "analysis-and-raw-chart-mapping",
+      "description": "原始三K扫描无分型；包含处理后成立，标在真实极值原K时间",
+      "input": [
+        [
+          16,
+          12
+        ],
+        [
+          14,
+          10
+        ],
+        [
+          15,
+          9
+        ],
+        [
+          16,
+          11
+        ]
+      ],
+      "expected": [
+        [
+          "D",
+          3,
+          9
+        ]
+      ],
+      "actual": [
+        [
+          "D",
+          3,
+          9
+        ]
+      ],
+      "matches": true
+    }
+  ],
+  "completeOutputDiagnostics": [
+    {
+      "id": "first-bottom",
+      "input": [
+        [
+          3,
+          2
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          3,
+          2
+        ],
+        [
+          4,
+          3
+        ],
+        [
+          5,
+          4
+        ],
+        [
+          4,
+          3
+        ]
+      ],
+      "allGeometricFractals": [
+        [
+          "D",
+          2,
+          1
+        ],
+        [
+          "G",
+          5,
+          5
+        ]
+      ],
+      "displayedFractals": [
+        [
+          "G",
+          5,
+          5
+        ]
+      ],
+      "penEndpoints": [
+        [
+          "D",
+          2,
+          1
+        ],
+        [
+          "G",
+          5,
+          5
+        ]
+      ],
+      "displaysAll": false,
+      "assessment": "全量几何分型与主图筛选输出不同；此项本身不判定算法错误，也不证明笔规则正确。"
+    },
+    {
+      "id": "first-top",
+      "input": [
+        [
+          8,
+          7
+        ],
+        [
+          9,
+          8
+        ],
+        [
+          8,
+          7
+        ],
+        [
+          7,
+          6
+        ],
+        [
+          6,
+          5
+        ],
+        [
+          7,
+          6
+        ]
+      ],
+      "allGeometricFractals": [
+        [
+          "G",
+          2,
+          9
+        ],
+        [
+          "D",
+          5,
+          5
+        ]
+      ],
+      "displayedFractals": [
+        [
+          "D",
+          5,
+          5
+        ]
+      ],
+      "penEndpoints": [
+        [
+          "G",
+          2,
+          9
+        ],
+        [
+          "D",
+          5,
+          5
+        ]
+      ],
+      "displaysAll": false,
+      "assessment": "全量几何分型与主图筛选输出不同；此项本身不判定算法错误，也不证明笔规则正确。"
+    },
+    {
+      "id": "pre-stroke-turns",
+      "input": [
+        [
+          2,
+          1
+        ],
+        [
+          4,
+          3
+        ],
+        [
+          3,
+          2
+        ],
+        [
+          5,
+          4
+        ],
+        [
+          4,
+          3
+        ]
+      ],
+      "allGeometricFractals": [
+        [
+          "G",
+          2,
+          4
+        ],
+        [
+          "D",
+          3,
+          2
+        ],
+        [
+          "G",
+          4,
+          5
+        ]
+      ],
+      "displayedFractals": [
+        [
+          "G",
+          4,
+          5
+        ]
+      ],
+      "penEndpoints": [],
+      "displaysAll": false,
+      "assessment": "全量几何分型与主图筛选输出不同；此项本身不判定算法错误，也不证明笔规则正确。"
+    }
+  ],
+  "finiteDomain": {
+    "description": "0 <= low <= high <= 5，包括一字K；三根K组合共21³组。",
+    "threeBarPredicate": {
+      "total": 9261,
+      "mismatched": 0
+    },
+    "knownDirectionMerge": {
+      "total": 4410,
+      "mismatched": 0
+    }
+  },
+  "symmetry": {
+    "knownInitialDirection": {
+      "total": 22500,
+      "mismatched": 0
+    },
+    "ambiguousInitialDirection": {
+      "total": 28125,
+      "mismatched": 2546
+    }
+  },
+  "limitations": [
+    {
+      "id": "startup-direction",
+      "assessment": "边界约定未解决，不武断指定向上或向下",
+      "input": [
+        [
+          1,
+          0
+        ],
+        [
+          2,
+          0
+        ],
+        [
+          2,
+          1
+        ],
+        [
+          1,
+          0
+        ]
+      ],
+      "actual": [
+        [
+          "G",
+          3,
+          2
+        ]
+      ],
+      "mirroredInput": [
+        [
+          10,
+          9
+        ],
+        [
+          10,
+          8
+        ],
+        [
+          9,
+          8
+        ],
+        [
+          10,
+          9
+        ]
+      ],
+      "mirroredActual": [],
+      "reason": "起始两根直接保留，前两根等高时跳过合并；原典方向定义需要更早的非包含对。已知方向与未知方向的穷举分别报告。"
+    },
+    {
+      "id": "live-right-bar",
+      "assessment": "未收盘快照允许变化；输出没有单独的收盘确认状态，不能据此判算法错误",
+      "input": [
+        [
+          2,
+          1
+        ],
+        [
+          3,
+          2
+        ],
+        [
+          2.5,
+          1.5
+        ]
+      ],
+      "actual": [
+        [
+          "G",
+          2,
+          3
+        ]
+      ],
+      "updatedInput": [
+        [
+          2,
+          1
+        ],
+        [
+          3,
+          2
+        ],
+        [
+          3.5,
+          1.5
+        ]
+      ],
+      "updatedActual": [],
+      "reason": "同一右侧K线盘中扩大高低区间后分型可消失；当前fx没有confirmed/confirmedAt，不能声称已验证收盘确认。"
+    },
+    {
+      "id": "strength",
+      "assessment": "主图分型未实现强弱分类",
+      "reason": "几何成立与力度分开。第82课还涉及实体、影线、收盘位置等，不能仅凭成立条件声称已验证强弱。"
+    },
+    {
+      "id": "equal-extreme-time",
+      "assessment": "参考站取最后一次同价极值，非原典唯一定位要求",
+      "reason": "保留的旧fractal.js取较早极值；它的单元测试不能替代主图生产路径测试。"
+    }
+  ],
+  "verifiedCoreChecksPassed": true,
+  "fullAuditPassed": false
+}

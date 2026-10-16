@@ -1,5 +1,6 @@
 import { getRedisClient } from "./redisClient.js";
-import { tradeSideHistoryArchive } from "./tradeSideHistoryArchive.js";
+import { tencentAshareVolumeToLots, tencentAshareVolumeUnit } from "../src/lib/tencentAshareVolume.js";
+import { directTradeSideHistoryService } from "./directTradeSideHistory.js";
 
 const PREFIX = "ashare-trade-side:v1";
 export const TRADE_SIDE_TRACKED_KEY = `${PREFIX}:tracked`;
@@ -54,19 +55,22 @@ export function parseTencentTradeSideQuote(symbol, fields, collectedAt = Date.no
     || timestamp.slice(12, 14) > "59" || Date.parse(quoteTime) > collectedAt + 300000) {
     throw new Error("腾讯内外盘报价日期或时间无效。");
   }
-  const outerVol = numericVolume(fields[7]);
-  const innerVol = numericVolume(fields[8]);
-  const totalVol = numericVolume(fields[6]);
-  if ([outerVol, innerVol, totalVol].some((value) => value === null)) {
+  const sourceVolumes = { outerVol: numericVolume(fields[7]), innerVol: numericVolume(fields[8]), totalVol: numericVolume(fields[6]) };
+  if (Object.values(sourceVolumes).some((value) => value === null)) {
     throw new Error("腾讯报价未提供完整的内盘、外盘和成交量。");
   }
-  const sideVolume = innerVol + outerVol;
-  const netVol = outerVol - innerVol;
+  const outerVol = tencentAshareVolumeToLots(sourceVolumes.outerVol, symbol);
+  const innerVol = tencentAshareVolumeToLots(sourceVolumes.innerVol, symbol);
+  const totalVol = tencentAshareVolumeToLots(sourceVolumes.totalVol, symbol);
+  const sideVolume = sourceVolumes.innerVol + sourceVolumes.outerVol;
+  const sourceNetVol = sourceVolumes.outerVol - sourceVolumes.innerVol;
+  const netVol = sourceNetVol / (tencentAshareVolumeUnit(symbol) === "share" ? 100 : 1);
   return {
     code: symbol.slice(2), name: fields[1].trim(), date, quoteTime,
     innerVol, outerVol, totalVol, netVol,
-    netRatio: sideVolume > 0 ? netVol / sideVolume * 100 : null,
-    outerRatio: sideVolume > 0 ? outerVol / sideVolume * 100 : null,
+    volumeUnit: "lot", sourceVolumeUnit: tencentAshareVolumeUnit(symbol), sourceVolumes,
+    netRatio: sideVolume > 0 ? sourceNetVol / sideVolume * 100 : null,
+    outerRatio: sideVolume > 0 ? sourceVolumes.outerVol / sideVolume * 100 : null,
     // Collection time does not prove a closing quote. An old intraday quote
     // remains incomplete even when fetched on a later day or after the close.
     complete: clock >= "15:00:00",
@@ -95,6 +99,23 @@ export async function fetchTencentTradeSideQuotes(symbols, { request = fetch, no
   return rows;
 }
 
+export function createTradeSideSnapshotService({ fetchQuotes = fetchTencentTradeSideQuotes,
+  request, now = Date.now } = {}) {
+  return {
+    async get(input) {
+      const code = normalizeTradeSideCode(input);
+      const symbol = toTradeSideSymbol(code);
+      const quotes = await fetchQuotes([symbol], { request, now });
+      const latest = quotes.get(symbol);
+      if (!latest || latest.error) throw new Error(latest?.error || "腾讯即时内外盘报价返回不完整。");
+      return { code, name: latest.name, source: { key: "tencent", name: "腾讯即时行情" },
+        unit: "手", latest };
+    },
+  };
+}
+
+export const tradeSideSnapshotService = createTradeSideSnapshotService();
+
 export function isTradeSideCollectionWindow(at) {
   const shanghai = new Date(at + 8 * 3600000);
   const day = shanghai.getUTCDay();
@@ -105,21 +126,38 @@ export function isTradeSideCollectionWindow(at) {
 }
 
 function storedRow(value, code) {
-  const row = JSON.parse(value);
+  let row = JSON.parse(value);
   if (row?.code !== code || !validDate(row.date) || typeof row.quoteTime !== "string"
     || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00$/.test(row.quoteTime)
     || !row.quoteTime.startsWith(`${row.date}T`) || !Number.isFinite(Date.parse(row.quoteTime))
     || typeof row.complete !== "boolean" || typeof row.name !== "string"
     || row.complete !== (row.quoteTime.slice(11, 19) >= "15:00:00")
     || !Number.isFinite(Date.parse(row.collectedAt))
-    || [row.innerVol, row.outerVol, row.totalVol].some((volume) => !Number.isFinite(volume) || volume < 0)) {
+    || [row.innerVol, row.outerVol, row.totalVol].some((volume) => !Number.isFinite(volume) || volume < 0)
+    || (row.volumeUnit != null && row.volumeUnit !== "lot")) {
     throw new Error("已保存的内外盘历史记录格式无效。");
+  }
+  // v1 records without a unit contain Tencent's source counters, including
+  // shares for STAR Market stocks. Normalize on read even when the unchanged
+  // quote timestamp correctly prevents the collector from rewriting the row.
+  if (row.volumeUnit == null) {
+    const sourceVolumes = { innerVol: row.innerVol, outerVol: row.outerVol, totalVol: row.totalVol };
+    row = { ...row, volumeUnit: "lot", sourceVolumeUnit: tencentAshareVolumeUnit(code), sourceVolumes,
+      innerVol: tencentAshareVolumeToLots(row.innerVol, code),
+      outerVol: tencentAshareVolumeToLots(row.outerVol, code),
+      totalVol: tencentAshareVolumeToLots(row.totalVol, code) };
   }
   // Derive ratios from the actual archived counters, retaining the original
   // total separately (rounding/auction volume can differ from the side sum).
   const sideVolume = row.innerVol + row.outerVol;
-  return { ...row, netVol: row.outerVol - row.innerVol,
-    netRatio: sideVolume > 0 ? (row.outerVol - row.innerVol) / sideVolume * 100 : null,
+  const source = row.sourceVolumes;
+  const hasMatchingSource = source
+    && tencentAshareVolumeToLots(source.innerVol, code) === row.innerVol
+    && tencentAshareVolumeToLots(source.outerVol, code) === row.outerVol;
+  const netVol = hasMatchingSource ? (source.outerVol - source.innerVol)
+    / (tencentAshareVolumeUnit(code) === "share" ? 100 : 1) : row.outerVol - row.innerVol;
+  return { ...row, netVol,
+    netRatio: sideVolume > 0 ? netVol / sideVolume * 100 : null,
     outerRatio: sideVolume > 0 ? row.outerVol / sideVolume * 100 : null };
 }
 
@@ -234,21 +272,18 @@ export function createTradeSideHistoryService({ getRedis = getRedisClient,
 }
 
 export const tradeSideHistoryService = createTradeSideHistoryService();
-export const startTradeSideHistoryCollection = () => {
-  const stopQuotes = tradeSideHistoryService.start();
-  const stopHistory = tradeSideHistoryArchive.start();
-  return () => { stopQuotes(); stopHistory(); };
-};
+// Kept as the server lifecycle hook. This panel now reads provider history and
+// current quotes directly; neither Redis collector is started for it.
+export const startTradeSideHistoryCollection = () => () => directTradeSideHistoryService.dispose();
 
-export function createTradeSideHistoryApiService({ realtime = tradeSideHistoryService,
-  archive = tradeSideHistoryArchive } = {}) {
+export function createTradeSideHistoryApiService({ realtime = tradeSideSnapshotService,
+  archive = directTradeSideHistoryService } = {}) {
   return {
     async get(code, limit = 120) {
-      // Historical work is queued by the archive and does not block this
-      // response. Tencent is kept as a separate latest quote, never a daily
-      // replacement for a missing historical transaction record.
+      // Both defaults read their providers independently of Redis. A current
+      // quote is not added to the historical rows or treated as a saved day.
       const [current, historical] = await Promise.allSettled([
-        realtime.get(code, 1), archive.query(code, limit),
+        realtime.get(code, limit), archive.query(code, limit),
       ]);
       if (historical.status === "rejected") throw historical.reason;
       const payload = historical.value;
@@ -258,6 +293,10 @@ export function createTradeSideHistoryApiService({ realtime = tradeSideHistorySe
       const warning = [payload.warning, currentWarning].filter(Boolean).join(" ");
       return { ...payload, name: latest?.name || payload.rows.at(-1)?.name || code,
         latest, realtimeSource: { key: "tencent", name: "腾讯即时行情" },
+        snapshotHistory: { source: { key: "tencent", name: "腾讯采集记录" }, unit: "手",
+          rows: current.status === "fulfilled" && Array.isArray(current.value.rows)
+            ? [...current.value.rows] : [],
+          collection: current.status === "fulfilled" ? current.value.collection ?? null : null },
         ...(warning ? { warning } : {}) };
     },
   };

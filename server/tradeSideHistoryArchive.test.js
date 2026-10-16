@@ -156,6 +156,22 @@ test("missing trading dates stay missing while real saved dates remain visible",
   archive.dispose();
 });
 
+test("unsupported share precision returns a specific cause instead of 120 indistinguishable daily errors", async () => {
+  const archive = service(redisDouble(), async () => {
+    const error = new Error("当前历史分笔仅返回整数手，不能还原零股。");
+    error.code = "TDX_SHARE_PRECISION_UNAVAILABLE";
+    throw error;
+  });
+  await archive.query("688610",120);
+  const result = await settled(archive,"688610",120);
+  assert.equal(result.history.status,"error");
+  assert.equal(result.history.errorCode,"TDX_SHARE_PRECISION_UNAVAILABLE");
+  assert.match(result.warning,/零股/);
+  assert.deepEqual(result.rows,[]);
+  assert.equal(result.collection.notice,"尚无通过完整性核验的历史记录。");
+  archive.dispose();
+});
+
 test("an unverified or intraday transaction row cannot become complete after the server clock advances", async () => {
   for (const changes of [{ validated: false }, { complete: false }, { quoteTime: "2026-10-12T15:00:00+08:00" }]) {
     const archive = service(redisDouble(), async ({ onDay }) => {
@@ -232,7 +248,43 @@ test("history remains usable when the independent realtime provider fails", asyn
   const result = await api.get("603818", 30);
   assert.equal(result.rows.length, 1);
   assert.equal(result.latest, null);
+  assert.deepEqual(result.snapshotHistory, {
+    source: { key: "tencent", name: "腾讯采集记录" }, unit: "手", rows: [], collection: null,
+  });
   assert.match(result.warning, /当前报价不可用/);
+});
+
+test("API exposes the requested saved snapshot range separately from transaction history", async () => {
+  const snapshotRows = [
+    { ...day("2026-10-09"), source: "tencent", quoteTime: "2026-10-09T15:00:00+08:00" },
+    { ...day("2026-10-12"), source: "tencent", quoteTime: "2026-10-12T15:00:00+08:00",
+      innerVol: 100, outerVol: 200, neutralVol: 0, unknownVol: 0 },
+  ];
+  const transactionRows = [day()];
+  const collection = { persisted: true, days: 2, firstDate: "2026-10-09" };
+  const requests = [];
+  const api = createTradeSideHistoryApiService({
+    realtime: { get: async (code, limit) => {
+      requests.push(["tencent", code, limit]);
+      return { rows: snapshotRows, latest: snapshotRows.at(-1), collection };
+    } },
+    archive: { query: async (code, limit) => {
+      requests.push(["tdx", code, limit]);
+      return { rows: transactionRows, source: { key: "tdx" }, history: { status: "complete" } };
+    } },
+  });
+  const result = await api.get("603818", 60);
+  assert.deepEqual(requests, [["tencent", "603818", 60], ["tdx", "603818", 60]]);
+  assert.deepEqual(result.rows, transactionRows);
+  assert.equal(result.source.key, "tdx");
+  assert.equal(result.latest.source, "tencent");
+  assert.deepEqual(result.snapshotHistory, {
+    source: { key: "tencent", name: "腾讯采集记录" }, unit: "手", rows: snapshotRows, collection,
+  });
+  assert.notEqual(result.snapshotHistory.rows, snapshotRows);
+  assert.equal(result.rows[0].innerVol, 120);
+  assert.equal(result.snapshotHistory.rows[1].innerVol, 100);
+  assert.deepEqual(snapshotRows.map((row) => row.source), ["tencent", "tencent"]);
 });
 
 test("background recovery uses saved requested limits and does not fetch archived dates again", async () => {
