@@ -30,8 +30,8 @@ for (const [name, ranges, expected] of [
 }
 
 for (const [name, ranges, first, last] of [
-  ['up', [[3,2],[2,1],[3,2],[4,3],[5,4],[4,3]], ['D',2,1], ['G',5,5]],
-  ['down', [[8,7],[9,8],[8,7],[7,6],[6,5],[7,6]], ['G',2,9], ['D',5,5]],
+  ['up', [[3,2],[2,1],[3,2],[4,3],[5,4],[6,5],[5,4]], ['D',2,1], ['G',6,6]],
+  ['down', [[8,7],[9,8],[8,7],[7,6],[6,5],[5,4],[6,5]], ['G',2,9], ['D',6,4]],
 ]) {
   test(`${name}: omitted first circle remains a pen endpoint in the reference output convention`, () => {
     const input = rows(ranges);
@@ -40,6 +40,9 @@ for (const [name, ranges, first, last] of [
     assert.deepEqual(points(result.fx), [last]);
     assert.deepEqual(points(result.bi), [first, last]);
     assert.deepEqual(points(result.biLine.slice(0, 2)), [first, last]);
-    // This verifies the output contract, not the general correctness of pen rules.
+    const start = result.fractalDetails.bi[first[1]], end = result.fractalDetails.bi[last[1]];
+    assert.ok(start.mergedCandles[2].to + 1 < end.mergedCandles[0].from,
+      'one original K must remain outside the two three-K endpoint groups');
+    // Circle omission is an output contract, separate from the old-rule pen gap.
   });
 }

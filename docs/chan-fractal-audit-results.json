@@ -1,7 +1,7 @@
 {
-  "auditedAt": "2026-10-15",
+  "auditedAt": "2026-10-16",
   "entry": "src/lib/chan/index.js → referenceEngine.js → ChanOverlay.jsx",
-  "scope": "顶底分型与包含处理。未改生产判定、绘图、笔或中枢规则；不把网站一致性当原典严谨性。",
+  "scope": "三K分型谓词、已知方向包含公式、合并后原K定位与四K上下对称的有限域审计。生产初始化已修复；不是全部笔/线段/中枢/买卖点的证明。",
   "sources": [
     {
       "lesson": 62,
@@ -16,7 +16,7 @@
       "url": "https://blog.sina.com.cn/s/blog_486e105c01000cq4.html"
     }
   ],
-  "correction": "旧版18/21将3项全量显示假设计入定义失败，归类不成立。现保留3项实际差异，独立报告；未修改生产算法。",
+  "correction": "保留全量圆点与笔筛选输出的差异诊断，不把二者差异本身计为定义错误。2026-10-16已修复未知初始方向的不对称；成笔和动态日期另有独立回归。",
   "passed": 20,
   "total": 20,
   "matchesAllDefinitionChecks": true,
@@ -621,13 +621,6 @@
       ],
       "displayedFractals": [
         [
-          "G",
-          5,
-          5
-        ]
-      ],
-      "penEndpoints": [
-        [
           "D",
           2,
           1
@@ -638,7 +631,8 @@
           5
         ]
       ],
-      "displaysAll": false,
+      "penEndpoints": [],
+      "displaysAll": true,
       "assessment": "全量几何分型与主图筛选输出不同；此项本身不判定算法错误，也不证明笔规则正确。"
     },
     {
@@ -683,13 +677,6 @@
       ],
       "displayedFractals": [
         [
-          "D",
-          5,
-          5
-        ]
-      ],
-      "penEndpoints": [
-        [
           "G",
           2,
           9
@@ -700,7 +687,8 @@
           5
         ]
       ],
-      "displaysAll": false,
+      "penEndpoints": [],
+      "displaysAll": true,
       "assessment": "全量几何分型与主图筛选输出不同；此项本身不判定算法错误，也不证明笔规则正确。"
     },
     {
@@ -774,13 +762,13 @@
     },
     "ambiguousInitialDirection": {
       "total": 28125,
-      "mismatched": 2546
+      "mismatched": 0
     }
   },
   "limitations": [
     {
       "id": "startup-direction",
-      "assessment": "边界约定未解决，不武断指定向上或向下",
+      "assessment": "已修复不对称；未知前缀按窗口边界政策跳过",
       "input": [
         [
           1,
@@ -799,13 +787,7 @@
           0
         ]
       ],
-      "actual": [
-        [
-          "G",
-          3,
-          2
-        ]
-      ],
+      "actual": [],
       "mirroredInput": [
         [
           10,
@@ -825,7 +807,7 @@
         ]
       ],
       "mirroredActual": [],
-      "reason": "起始两根直接保留，前两根等高时跳过合并；原典方向定义需要更早的非包含对。已知方向与未知方向的穷举分别报告。"
+      "reason": "原典方向定义需要更早的非包含对。方向未知时只保留最新原K作为边界，直到非包含对建立方向；不向未来借方向。此边界政策不是原文唯一实现。"
     },
     {
       "id": "live-right-bar",
@@ -870,8 +852,8 @@
     },
     {
       "id": "strength",
-      "assessment": "主图分型未实现强弱分类",
-      "reason": "几何成立与力度分开。第82课还涉及实体、影线、收盘位置等，不能仅凭成立条件声称已验证强弱。"
+      "assessment": "力度形态已实现，另有独立测试；本脚本未检验力度",
+      "reason": "第82课定性条件与软件比例阈值必须区分；不使用未来K，不宣称概率或相对高低点确认。"
     },
     {
       "id": "equal-extreme-time",
@@ -880,5 +862,5 @@
     }
   ],
   "verifiedCoreChecksPassed": true,
-  "fullAuditPassed": false
+  "fractalAuditPassed": true
 }

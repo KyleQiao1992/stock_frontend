@@ -10,6 +10,8 @@
     "test": "node --test server/*.test.js src/lib/*.test.js src/lib/chan/*.test.js",
     "test:chan-reference": "node scripts/checkChanReference.mjs --report",
     "test:chan-render": "node scripts/checkChanReferenceRendering.mjs",
+    "test:chan-detail": "node scripts/checkChanFractalDetail.mjs",
+    "test:chan-guides": "node scripts/checkChanGuideGeometry.mjs",
     "audit:chan-fractal": "node scripts/auditChanFractals.mjs --report",
     "preview": "vite preview",
     "start": "node server/index.js",

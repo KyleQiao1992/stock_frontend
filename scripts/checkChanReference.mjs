@@ -18,12 +18,14 @@ console.table(results.map((r) => ({
   exactMatch: r.matches, candidateFx: r.referenceFractalMatches,
   candidateZsFromOraclePens: r.referenceZonesMatchWithOraclePens,
 })));
-console.log(`Current chart parity: ${count}/${results.length}; website-fractal candidate: ${results.filter((r) => r.referenceFractalMatches).length}/${results.length}.`);
+console.log(`Historical website parity diagnostic: ${count}/${results.length}; website-fractal candidate: ${results.filter((r) => r.referenceFractalMatches).length}/${results.length}.`);
 console.log(`Website-zone candidate with oracle pen endpoints: ${results.filter((r) => r.referenceZonesMatchWithOraclePens).length}/${results.length}.`);
 if (process.argv.includes('--report')) {
   await writeFile(new URL('../docs/chan-reference-results.json', import.meta.url), JSON.stringify({
-    capturedAt: '2026-10-06', currentChartMatched: count, total: results.length, results,
+    capturedAt: '2026-10-06', auditedAt: '2026-10-16',
+    scope: '历史网站兼容诊断；原文旧笔独立K、真实动态日期与无伪评分修正后允许产生差异。不是原典正确性验收。', currentChartMatched: count, total: results.length, results,
   }, null, 2) + '\n');
 }
-// This gate must fail until the actual chart agrees with every fixture.
+// Retain a nonzero exit on ANY historical difference. Do not rewrite archived
+// expectations or present this diagnostic as a proof of original-text accuracy.
 if (count !== results.length || !results.length) process.exitCode = 1;

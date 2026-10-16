@@ -17,7 +17,7 @@ export function analyzeChan(rows, period = 'day') {
     const start = bi.findIndex((p) => p.time === zone.sdt);
     const head = bi.slice(start, start + 4);
     return { ...zone, zg_time: head.find((p) => p.price === zone.zg)?.time,
-      zd_time: head.find((p) => p.price === zone.zd)?.time, label: '参考笔中枢' };
+      zd_time: head.find((p) => p.price === zone.zd)?.time, label: '滑动笔重叠区' };
   });
   const dateAt = (time) => bars[time - 1]?.date;
   const datedPoint = (p) => ({ ...p, time: dateAt(p.time) });
@@ -35,11 +35,11 @@ export function analyzeChan(rows, period = 'day') {
   const historyOffset = result.candles[0]?.time - 1 || 0;
   return {
     dates: bars.map((r) => r.date), historyOffset, historyDates: result.candles.map((c) => c.date),
-    analysisCandles: result.candles, fx, bi, zs, pending,
+    analysisCandles: result.candles, fx, bi, zs, pending, fractalDetails: result.fractalDetails,
     biLine: [...bi, ...pending.slice(1)], segments: [], pendingSegments: [],
     outlook, trades: buildTrades(datedBi),
-    definition: { id: 'reference-incremental-bi-sliding-zs-v1', label: '参考站划线口径',
-      zoneLevel: '滑动笔中枢', historyBars: result.candles.length, requestedBars: limit,
+    definition: { id: 'chan-old-bi-sliding-overlap-v2', label: '原文旧笔条件与滑动笔重叠区',
+      zoneLevel: '滑动笔重叠区（非递归中枢）', historyBars: result.candles.length, requestedBars: limit,
       skippedInitialBars: historyOffset },
   };
 }

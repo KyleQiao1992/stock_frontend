@@ -6,6 +6,7 @@ import TradeSideHistoryPanel from "./TradeSideHistoryPanel";
 import { fetchTradeSideHistory, formatTradeQuoteTime } from "../lib/tradeSideHistory.js";
 import { tencentAshareVolumeToLots } from "../lib/tencentAshareVolume.js";
 import ChanOverlay from "./ChanOverlay";
+import ChanFractalDetail from "./ChanFractalDetail";
 import ChanLegend from "./ChanLegend";
 import ChanControls from "./ChanControls";
 import { analyzeChan } from "../lib/chan/index.js";
@@ -3445,6 +3446,7 @@ export function Chart({
   const [visibleMAs, setVisibleMAs] = useState(() => new Set([5, 10, 20, 60, "BBI"]));
   const [visibleVolMAs, setVisibleVolMAs] = useState(() => new Set([5, 10]));
   const [selectedPattern, setSelectedPattern] = useState(null);
+  const [selectedFractal, setSelectedFractal] = useState(null);
   // 阴影填充：把某条均线（MA10「黑马线」/ BBI）以下的区域填色，默认都关闭。用 Set 记录当前开启阴影的均线。
   const [shadowMAs, setShadowMAs] = useState(() => new Set());
   const toggleMA = (period) =>
@@ -3494,6 +3496,8 @@ export function Chart({
   const dragRef = useRef({ active: false, startX: 0, startScrollLeft: 0, moved: false });
   const brushRef = useRef({ active: false });
   const drawingEnabled = drawingTool !== "none";
+  const fractalDetail = chanOptions?.enabled && !drawingEnabled && selectedFractal?.data === chanData
+    ? chanData?.fractalDetails?.[selectedFractal.kind]?.[selectedFractal.time] : null;
 
   useEffect(() => {
     const container = scrollRef.current;
@@ -4124,7 +4128,10 @@ export function Chart({
           );
         })}
 
-        <ChanOverlay layer="lines" data={chanData} options={chanOptions} rows={safeRows} chart={chart} />
+        <ChanOverlay layer="lines" data={chanData} options={chanOptions} rows={safeRows} chart={chart}
+          onSelectFractal={drawingEnabled ? undefined : (point, kind) => {
+            setSelectedFractal({ time: point.time, kind, data: chanData });
+          }} />
 
         {/* 成交量均量线 MA5 / MA10，叠加在量柱之上（颜色与价格均线一致），可在 VOL 图例上点击显隐。 */}
         {VOL_MA_LINES.map((m) =>
@@ -4503,6 +4510,7 @@ export function Chart({
         </button>
       </div>
       <ChanLegend data={chanData} options={chanOptions} />
+      {fractalDetail && <ChanFractalDetail detail={fractalDetail} kind={selectedFractal.kind} onClose={() => setSelectedFractal(null)} />}
     </div>
   );
 }

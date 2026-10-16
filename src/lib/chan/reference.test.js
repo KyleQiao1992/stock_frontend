@@ -10,6 +10,41 @@ import { analyzeReferenceCandles, referenceHistoryLimit } from './referenceEngin
 const directory = new URL('./fixtures/reference/', import.meta.url);
 const fixtures = readdirSync(directory).filter((name) => name.endsWith('.json')).sort()
   .map((name) => ({ name, data: JSON.parse(readFileSync(new URL(name, directory), 'utf8')) }));
+const epochRows = (candles) => candles.map(({ time, vol, ...bar }) => ({ ...bar, date: String(time), volume: vol }));
+const calendarDate = (time, period) => new Date((time + 8 * 3600) * 1000).toISOString()
+  .slice(0, period.endsWith('m') ? 16 : 10).replace('T', ' ');
+
+function assertProductionInvariants(result, rows) {
+  for (const kind of ['fx', 'bi']) for (const point of result[kind]) {
+    assert.equal(point.idx, point.time - 1);
+    assert.equal(point.price, rows[point.idx][point.mark === 'G' ? 'high' : 'low']);
+    assert.equal(result.fractalDetails[kind][point.time].isValid, true);
+  }
+  for (let i = 1; i < result.bi.length; i++) {
+    const previous = result.bi[i - 1], current = result.bi[i];
+    assert.ok(current.time > previous.time);
+    assert.notEqual(current.mark, previous.mark);
+    const left = result.fractalDetails.bi[previous.time].mergedCandles[2];
+    const right = result.fractalDetails.bi[current.time].mergedCandles[0];
+    assert.ok(left.to + 1 < right.from, 'endpoint fractals must leave an independent K');
+    const top = previous.mark === 'G' ? previous : current;
+    const bottom = previous.mark === 'D' ? previous : current;
+    assert.ok(top.price > bottom.price);
+  }
+  if (result.pending.length) {
+    const endpoint = result.pending.at(-1);
+    assert.equal(endpoint.confirmed, false);
+    assert.ok(endpoint.time >= result.bi.at(-1).time);
+    assert.equal(endpoint.idx, endpoint.time - 1);
+    assert.equal(endpoint.price, rows[endpoint.idx][endpoint.mark === 'G' ? 'high' : 'low']);
+    const after = rows.slice(result.bi.at(-1).idx);
+    assert.equal(endpoint.price, endpoint.mark === 'G'
+      ? Math.max(...after.map((bar) => bar.high)) : Math.min(...after.map((bar) => bar.low)));
+  }
+  const zoneShape = ({ sdt, edt, zg, zd, zz, bi_count }) => [sdt, edt, zg, zd, zz, bi_count];
+  assert.deepEqual(result.zs.map(zoneShape), buildZs(result.bi).map(zoneShape));
+  assert.deepEqual(result.historyDates, result.analysisCandles.map((bar) => rows[bar.time - 1].date));
+}
 
 for (const { name, data } of fixtures) {
   test(`reference capture ${name}: candles, pen references and zone boundaries are consistent`, () => {
@@ -48,37 +83,51 @@ for (const { name, data } of fixtures) {
     assert.deepEqual(buildZs(data.trades), data.zs);
   });
 
-  test(`active chart pipeline ${name}: all structures and the complete outlook match the API`, () => {
+  test(`production rules ${name}: valid endpoints, independent K, real dynamic date; historical parity is diagnostic`, (t) => {
+    const rows = epochRows(data.candles);
+    const result = analyzeChan(rows, data.period);
+    assertProductionInvariants(result, rows);
     const report = compareReference(data);
-    for (const [key, check] of Object.entries(report.checks)) assert.equal(check.difference, null, `${key}: ${JSON.stringify(check.difference)}`);
-    assert.equal(report.matches, true);
-    assert.equal(report.currentDefinition, 'reference-incremental-bi-sliding-zs-v1');
+    assert.equal(report.currentDefinition, result.definition.id);
+    const differences = Object.entries(report.checks).filter(([, check]) => check.difference !== null);
+    t.diagnostic(`Saved API differences: ${differences.map(([key, check]) => `${key}(${check.expectedCount}→${check.actualCount})`).join(', ') || 'none'}`);
+    const first = report.checks.bi.difference;
+    if (first) t.diagnostic(`First historical pen difference: ${JSON.stringify(first)}`);
+    // The saved response is an unchanged historical oracle, not an authority
+    // overriding the independent-K or real-extremum-location requirements.
   });
 
-  test(`actual calendar input ${name}: displayed price/time labels and the complete outlook match the API`, () => {
+  test(`calendar input ${name}: epoch and +08 date representations produce equivalent structures and outlook`, () => {
     const rows = data.candles.map(({ time, vol, ...bar }) => ({ ...bar,
-      date: new Date((time + 8 * 3600) * 1000).toISOString()
-        .slice(0, data.period.endsWith('m') ? 16 : 10).replace('T', ' '), volume: vol }));
+      date: calendarDate(time, data.period), volume: vol }));
     const result = analyzeChan(rows, { day: '101', week: '102' }[data.period] || data.period);
-    assert.deepEqual(result.outlook, data.outlook);
-    assert.equal(result.outlook.conclusion.confirmed_signal, null);
+    const epoch = analyzeChan(epochRows(data.candles), data.period);
+    for (const kind of ['fx', 'bi', 'pending', 'biLine', 'zs']) assert.deepEqual(result[kind], epoch[kind]);
+    assert.deepEqual(result.outlook, epoch.outlook);
+    assertProductionInvariants(result, rows);
   });
 }
 
 test('outlook parity fails when the actual classification, boundary timestamp, condition or scenario score differs', () => {
   const source = fixtures.find(({ name }) => name === 'sh603818-day.json').data;
+  // This local fixture only isolates comparator behavior. Do not edit the saved
+  // historical capture, or require its old pen policy to match production.
+  const currentOutlook = analyzeChan(epochRows(source.candles), source.period).outlook;
+  const comparatorFixture = { ...source, outlook: currentOutlook };
+  const baseline = compareReference(comparatorFixture);
+  assert.equal(baseline.checks.outlook.difference, null);
   for (const change of [
     (outlook) => { outlook.conclusion.kind_hint = 'B3'; },
     (outlook) => { outlook.levels.zs_zg_bar = '2026-04-01 @ 3.68'; },
     (outlook) => { outlook.conclusion.trigger_condition = '替换条件'; },
     (outlook) => { outlook.scenarios[0].score = 8; },
   ]) {
-    const fixture = structuredClone(source);
+    const fixture = structuredClone(comparatorFixture);
     change(fixture.outlook);
     const report = compareReference(fixture);
     assert.equal(report.matches, false);
     assert.notEqual(report.checks.outlook.difference, null);
-    assert.equal(report.checks.bi.difference, null);
+    assert.deepEqual(report.checks.bi, baseline.checks.bi);
   }
 });
 
@@ -99,21 +148,20 @@ test('603818 day oracle preserves 23 strokes, ten sliding zones and the actual d
   assert.equal(fixture.candles.at(-1).close, 4.05);
 });
 
-test('300 original Tencent bars trim to the reference 286 bars with every plotted structure identical', () => {
+test('300 original Tencent bars preserve raw coordinates after rule-driven trimming, without inventing current-date extremes', (t) => {
   const input = JSON.parse(readFileSync(new URL('./fixtures/input/sh603818-day-300.json', import.meta.url), 'utf8'));
   const fixture = fixtures.find(({ name }) => name === 'sh603818-day.json').data;
   const report = compareReference(fixture, input.candles);
-  for (const check of Object.values(report.checks)) assert.equal(check.difference, null, JSON.stringify(check));
+  t.diagnostic(`Unchanged saved API comparison: ${JSON.stringify(Object.fromEntries(Object.entries(report.checks)
+    .map(([key, check]) => [key, { expected: check.expectedCount, actual: check.actualCount, differs: check.difference !== null }])) )}`);
   const rows = input.candles.map(({ time, vol, ...c }) => ({ ...c, date: String(time), volume: vol }));
   const result = analyzeChan(rows, '101');
-  assert.equal(result.historyOffset, 14);
-  assert.equal(result.definition.historyBars, 286);
-  assert.deepEqual(result.biLine.slice(-2).map((p) => p.price), [4.24, 3.75]);
-  assert.equal(result.biLine.at(-1).time, 300);
-  assert.equal(result.bi.at(-1).time, 294);
+  assertProductionInvariants(result, rows);
+  assert.equal(result.historyOffset + result.definition.historyBars, rows.length);
+  assert.equal(result.definition.requestedBars, 300);
+  assert.deepEqual(result.analysisCandles.map(({ high, low, open, close, date }) => ({ high, low, open, close, date })),
+    rows.slice(result.historyOffset).map(({ high, low, open, close, date }) => ({ high, low, open, close, date })));
   assert.equal(visibleOffset(result, rows.slice(-80)), 220);
-  assert.equal(result.outlook.levels.zs_zg, 3.68);
-  assert.equal(result.outlook.levels.zs_zd, 3.25);
 });
 
 test('reference history request length is independent of chart zoom and uses the real period mapping', () => {

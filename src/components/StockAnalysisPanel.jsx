@@ -8,7 +8,7 @@ function ChanOutlook({ data }) {
   if (!outlook?.ok) return <p className="py-6 text-sm text-slate-500">当前历史中尚无可绘制的笔结构。</p>;
   const { conclusion: c, levels, scenarios = [] } = outlook;
   const signal = c.latest_signal;
-  const phase = c.status === 'confirmed' ? `${c.kind} · 已确认` : c.kind_hint ? `${c.kind_hint} · 观察` : '等待结构';
+  const phase = c.status === 'confirmed' ? `${c.kind} · 已确认` : c.is_hypothesis ? '位置观察' : '等待结构';
   return <div aria-label="缠论结构研判" className="space-y-4 text-sm leading-6 text-slate-700">
     <div className="flex items-center justify-between gap-3">
       <h3 className="font-semibold text-slate-900">结构研判</h3>
@@ -24,7 +24,7 @@ function ChanOutlook({ data }) {
         <p>{c.structure_fact || c.summary}</p>
         <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-3">
           {[
-            ['现价', price(levels.close)], ['相对参考中枢', levels.vs_zs_label || '尚无参考笔中枢'],
+            ['现价', price(levels.close)], ['相对滑动笔重叠区', levels.vs_zs_label || '尚无滑动笔重叠区'],
             ['ZG 上沿', price(levels.zs_zg), levels.zs_zg_bar],
             ['ZD 下沿', price(levels.zs_zd), levels.zs_zd_bar],
             ['末笔高', price(levels.last_bi_high), levels.last_bi_high_bar],
@@ -36,13 +36,13 @@ function ChanOutlook({ data }) {
           </div>)}
         </div>
         {levels.zs_range && <div className="mt-3 rounded-xl bg-slate-100 p-3 text-xs">
-          <div className="text-slate-500">当前参考中枢</div><p>{levels.zs_range}</p>
+          <div className="text-slate-500">当前滑动笔重叠区</div><p>{levels.zs_range}</p>
           <p className="text-slate-500">{levels.zs_bi_count} 笔 · {levels.active_zs_id}</p>
         </div>}
       </section>
-      <section aria-label="已确认信号" className="mt-4 border-t border-slate-200 pt-3">
-        <h5 className="mb-2 font-semibold text-sky-600">2 · 已确认信号</h5>
-        <p>{signal ? `已确认信号：${signal.title || signal.kind} · ${signal.time_str || signal.time}` : '已确认信号：近期无一二三类触发'}</p>
+      <section aria-label="买卖点识别" className="mt-4 border-t border-slate-200 pt-3">
+        <h5 className="mb-2 font-semibold text-sky-600">2 · 买卖点识别</h5>
+        <p>{signal ? `已确认信号：${signal.title || signal.kind} · ${signal.time_str || signal.time}` : '未执行一二三类买卖点识别'}</p>
         {c.status === 'confirmed' && c.basis && <p>{c.basis}</p>}
         {c.confirm_note && <p>{c.confirm_note}</p>}
       </section>
@@ -51,7 +51,7 @@ function ChanOutlook({ data }) {
         <p>{c.status === 'confirmed' ? c.summary : c.observation || c.summary}</p>
         {c.status !== 'confirmed' && c.observation_basis && <div className="mt-3 rounded-xl border border-dashed border-amber-500/40 p-3">
           <p><span className="font-semibold text-amber-600">观察依据（非确认信号）</span> {c.observation_basis}</p>
-          <p className="mt-2"><span className="font-semibold">确认条件</span> {c.trigger_condition}</p>
+          <p className="mt-2"><span className="font-semibold">后续核验项目（未执行）</span> {c.trigger_condition}</p>
         </div>}
       </section>
       <section aria-label="失效与操作参考" className="mt-4 border-t border-slate-200 pt-3">
@@ -61,17 +61,17 @@ function ChanOutlook({ data }) {
       </section>
     </div>
     {scenarios.length > 0 && <>
-      <h4 className="font-semibold text-slate-900">接下来三种情景（评分满分 10）</h4>
+      <h4 className="font-semibold text-slate-900">接下来三种位置情景</h4>
       {scenarios.map((scenario) => <section aria-label={scenario.name} key={scenario.id} className="rounded-xl border border-slate-200 p-4">
         <div className="flex items-center justify-between gap-3">
           <h5 className="font-semibold text-slate-900">{scenario.id} · {scenario.name}</h5>
-          <span className="shrink-0 text-xs">评分 {scenario.score}/{scenario.score_max} · {scenario.bias}</span>
+          <span className="shrink-0 text-xs">{scenario.bias}</span>
         </div>
         <p className="mt-2">{scenario.explain}</p>
         <p className="mt-2"><span className="font-semibold">条件：</span>{scenario.condition}</p>
         <p className="mt-2"><span className="font-semibold">路径：</span>{scenario.path}</p>
         <div className="mt-3 space-y-3">{scenario.next_points.map((point) => <div key={point.kind} className="rounded-lg bg-slate-50 p-3">
-          <p><span className="mr-2 rounded border border-slate-200 px-1.5 py-0.5 text-xs">若触发 {point.kind}</span><span className="font-semibold">{point.title}</span></p>
+          <p><span className="mr-2 rounded border border-slate-200 px-1.5 py-0.5 text-xs">{point.hypothetical ? '待核验' : point.kind}</span><span className="font-semibold">{point.title}</span></p>
           <p className="mt-1">{point.trigger}</p><p className="mt-1 text-xs text-slate-500">{point.action}</p>
         </div>)}</div>
         <p className="mt-3"><span className="font-semibold">失效：</span>{scenario.invalid}</p>
@@ -117,10 +117,11 @@ export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, co
           <p className="mb-4 text-xs leading-5 text-slate-500">{({'101':'日K','102':'周K','103':'月K'})[period] || period} · {data.definition.historyBars} 根历史计算 · 截至 {data.historyDates.at(-1) || '—'}；缩放不改变计算起点。</p>
           {active === 'outlook' ? <ChanOutlook data={data} /> : <ChanEndpoints data={data} />}
           <details className="mb-4 rounded-xl border border-slate-200 p-3 text-xs leading-5 text-slate-500">
-            <summary className="cursor-pointer font-medium text-slate-700">参考站划线口径</summary>
-            <p className="mt-2">逐根处理K线包含和三K分型；笔被新K线破坏时回退重算。黄色折线连接笔端及当前动态极值，三角标记笔端参考，圆点标记分型。</p>
-            <p className="mt-2">中枢由连续前三笔固定ZG/ZD，保持核心区间最多延伸九笔，按滑动窗口绘制。蓝框为当前参考中枢。动态末端不参与笔端参考和中枢。</p>
-            <p className="mt-2">计算历史窗口与参考站保持相同请求长度，起笔前的历史自动裁去；缩放只改变可见范围。新行情可能修正近端结构。</p>
+            <summary className="cursor-pointer font-medium text-slate-700">计算口径与范围</summary>
+            <p className="mt-2">逐根处理K线包含和三K分型；按第62、65、77课旧笔口径，顶底分型之间至少有一根不属于任一分型的独立K线。笔被新K线破坏时回退重算。黄色折线连接笔端及当前动态极值，三角标记笔端参考，圆点标记分型。</p>
+            <p className="mt-2">蓝框为滑动笔重叠区：连续前三笔固定ZG/ZD，保持核心区间最多延伸九笔，按滑动窗口绘制；这是本地参考算法，不是原文按次级别走势递归定义的中枢。动态末端不参与笔端参考和重叠区。</p>
+            <p className="mt-2">计算只使用本次加载的本地历史窗口，窗口之前的数据未参与，起笔前的历史会裁去；窗口截断可能影响起笔及后续结构，缩放只改变可见范围。新行情可能修正近端结构。</p>
+            <p className="mt-2">三种情景只描述现价位于滑动笔重叠区上方、内部或下方；未执行一二三类买卖点识别，也未核验走势级别、递归中枢、背驰、线段及后续确认条件。</p>
           </details>
 
         </>}
