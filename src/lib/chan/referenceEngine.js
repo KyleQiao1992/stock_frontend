@@ -6,29 +6,40 @@
  * Keep the incremental order: batch fractal linking changes historical endpoints.
  */
 
-export const MIN_BI_LENGTH = 6;
+import { buildFractalDetail } from './fractalDetail.js';
+
+// Lessons 62/77: three K per endpoint plus at least one independent K.
+export const MIN_BI_LENGTH = 7;
 export const MAX_BI_COUNT = 50;
 
 function newBar(candle, idx) {
   return { high: candle.high, low: candle.low, time: candle.time, from: idx, to: idx,
-    elements: [{ ...candle, idx }] };
+    elements: [{ ...candle, idx }], mergeSteps: [] };
+}
+
+function containsRange(a, b) {
+  return (a.high <= b.high && a.low >= b.low)
+    || (a.high >= b.high && a.low <= b.low);
 }
 
 function mergeNext(a, b, candle, idx) {
   const raw = newBar(candle, idx);
   if (a.high === b.high) return raw;
   const up = a.high < b.high;
-  const contains = (b.high <= candle.high && b.low >= candle.low)
-    || (b.high >= candle.high && b.low <= candle.low);
+  const contains = containsRange(b, candle);
   if (!contains) return raw;
+  const high = up ? Math.max(b.high, candle.high) : Math.min(b.high, candle.high);
+  const low = up ? Math.max(b.low, candle.low) : Math.min(b.low, candle.low);
   // Replace the bar rather than mutating it: completed strokes retain snapshots.
   return {
-    high: up ? Math.max(b.high, candle.high) : Math.min(b.high, candle.high),
-    low: up ? Math.max(b.low, candle.low) : Math.min(b.low, candle.low),
+    high, low,
     time: up ? (b.high > candle.high ? b.time : candle.time)
       : (b.low < candle.low ? b.time : candle.time),
     from: b.from, to: idx,
-    elements: [...b.elements.slice(0, 100).filter((c) => c.time !== candle.time), { ...candle, idx }],
+    elements: [...b.elements.filter((c) => c.time !== candle.time), { ...candle, idx }],
+    mergeSteps: [...(b.mergeSteps || []), { direction: up ? 'up' : 'down', idx,
+      before: { high: b.high, low: b.low }, incoming: { high: candle.high, low: candle.low },
+      after: { high, low } }],
   };
 }
 
@@ -61,9 +72,12 @@ function checkBi(bars) {
   }
   if (!end) return { remaining: bars };
   const leg = bars.filter((b) => b.time >= start.elements[0].time && b.time <= end.elements[2].time);
+  const startRight = bars.indexOf(start.elements[2]);
+  const endLeft = bars.indexOf(end.elements[0]);
+  const hasIndependentBar = endLeft - startRight >= 2;
   const included = (start.high > end.high && start.low < end.low)
     || (start.high < end.high && start.low > end.low);
-  if (included || leg.length < MIN_BI_LENGTH) return { remaining: bars };
+  if (included || !hasIndependentBar || leg.length < MIN_BI_LENGTH) return { remaining: bars };
   return {
     remaining: bars.filter((b) => b.time >= end.elements[0].time),
     stroke: {
@@ -82,7 +96,13 @@ export function analyzeReferenceCandles(candles) {
   for (let idx = 0; idx < candles.length; idx++) {
     const candle = candles[idx];
     raw.push(candle);
-    if (unfinished.length < 2) unfinished.push(newBar(candle, idx));
+    if (unfinished.length < 2) {
+      // The left window boundary has no earlier non-containing pair from which
+      // lesson 65 can determine direction. Skip that unresolved prefix rather
+      // than inventing an up/down merge from future candles.
+      if (unfinished.length === 1 && containsRange(unfinished[0], candle)) unfinished[0] = newBar(candle, idx);
+      else unfinished.push(newBar(candle, idx));
+    }
     else {
       const next = mergeNext(unfinished.at(-2), unfinished.at(-1), candle, idx);
       if (next.from === idx) unfinished.push(next);
@@ -96,7 +116,7 @@ export function analyzeReferenceCandles(candles) {
           let start = fx[0];
           for (const point of fx) {
             if (point.mark === start.mark
-              && (start.mark === 'D' ? point.low <= start.low : point.high >= start.high)) start = point;
+              && (start.mark === 'D' ? point.low < start.low : point.high > start.high)) start = point;
           }
           const result = checkBi(unfinished.filter((b) => b.time >= start.elements[0].time));
           if (result.stroke) strokes.push(result.stroke);
@@ -126,21 +146,29 @@ export function analyzeReferenceCandles(candles) {
     if (!allFx.length || point.time > allFx.at(-1).time) allFx.push(point);
   }
   const simple = ({ time, price, mark }) => ({ time, price, mark, idx: candles.findIndex((c) => c.time === time) });
-  const fx = [...new Map(allFx.map((p) => [p.time, simple(p)])).values()];
-  const bi = strokes.length ? [...strokes.map((s) => s.start), strokes.at(-1).end].map(simple) : [];
+  const drawableFx = [...new Map(allFx.map((p) => [p.time, p])).values()];
+  const biPoints = strokes.length ? [...strokes.map((s) => s.start), strokes.at(-1).end] : [];
+  const fx = drawableFx.map(simple);
+  const bi = biPoints.map(simple);
+  const fractalDetails = Object.fromEntries([['fx', drawableFx], ['bi', biPoints]].map(([kind, points]) => [
+    kind, Object.fromEntries(points.map((point) => [point.time, buildFractalDetail(candles, point)])),
+  ]));
   const pending = [];
   if (bi.length) {
     const up = strokes.at(-1).direction === 'down';
-    const elements = unfinished.flatMap((b) => b.elements);
+    // The next leg begins at the actual final endpoint, not its left fractal
+    // neighbour. Read all raw candles so no capped/merged source can hide an
+    // intermediate extremum or move it to a date where the price never traded.
+    const elements = candles.filter((c) => c.time >= bi.at(-1).time);
     let extreme = elements[0];
     for (const candle of elements.slice(1)) {
       if (up ? candle.high > extreme.high : candle.low < extreme.low) extreme = candle;
     }
-    pending.push(bi.at(-1), { time: candles.at(-1).time,
+    pending.push(bi.at(-1), { time: extreme.time,
       price: up ? extreme.high : extreme.low, mark: up ? 'G' : 'D',
-      idx: candles.length - 1, extremeTime: extreme.time, confirmed: false });
+      idx: candles.findIndex((c) => c.time === extreme.time), extremeTime: extreme.time, confirmed: false });
   }
-  return { candles: raw, fx, bi, pending, strokeCount: strokes.length };
+  return { candles: raw, fx, bi, pending, strokeCount: strokes.length, fractalDetails };
 }
 
 /** Match the reference client's requested history, then let the engine trim it. */

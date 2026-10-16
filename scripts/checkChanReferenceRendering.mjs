@@ -10,7 +10,7 @@ import { analyzeChan } from '../src/lib/chan/index.js';
 const server = await createServer({ configFile: false, plugins: [react()],
   cacheDir: '/tmp/chan-reference-svg-cache', optimizeDeps: { noDiscovery: true },
   resolve: { alias: { '@': new URL('../src', import.meta.url).pathname } },
-  server: { middlewareMode: true, hmr: false }, appType: 'custom' });
+  server: { middlewareMode: true, hmr: false, ws: false }, appType: 'custom' });
 let count = 0;
 let outlookCount = 0;
 try {
@@ -28,35 +28,36 @@ try {
     }));
     const escaped = (text) => String(text).replaceAll('&', '&amp;').replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#x27;');
-    const { conclusion, levels, scenarios } = fixture.outlook;
-    const texts = [conclusion.title, `${conclusion.kind_hint} · 观察`, conclusion.status_label,
+    const { conclusion, levels, scenarios = [] } = data.outlook;
+    const texts = [conclusion.title, conclusion.is_hypothesis ? '位置观察' : '等待结构', conclusion.status_label,
       conclusion.structure_fact, conclusion.observation, conclusion.observation_basis,
       conclusion.trigger_condition, conclusion.invalidation, conclusion.action_hint,
       levels.last_bi_high_bar, levels.last_bi_low_bar, levels.zs_zg_bar, levels.zs_zd_bar,
-      levels.vs_zs_label, levels.zs_range, levels.active_zs_id, fixture.outlook.disclaimer,
-      '已确认信号：近期无一二三类触发', '观察依据（非确认信号）',
-      '1 · 结构事实', '2 · 已确认信号', '3 · 观察条件', '4 · 失效与操作参考'];
+      levels.vs_zs_label, levels.zs_range, levels.active_zs_id, data.outlook.disclaimer,
+      '未执行一二三类买卖点识别', '观察依据（非确认信号）',
+      '1 · 结构事实', '2 · 买卖点识别', '3 · 观察条件', '4 · 失效与操作参考'];
     for (const scenario of scenarios) {
-      texts.push(scenario.name, `评分 ${scenario.score}/${scenario.score_max} · ${scenario.bias}`,
+      texts.push(scenario.name, scenario.bias,
         scenario.explain, scenario.condition, scenario.path, scenario.invalid);
-      for (const point of scenario.next_points) texts.push(`若触发 ${point.kind}`, point.title, point.trigger, point.action);
+      for (const point of scenario.next_points) texts.push(point.hypothetical ? '待核验' : point.kind, point.title, point.trigger, point.action);
     }
-    for (const text of texts) assert.ok(panel.includes(escaped(text)), `${name}: actual outlook panel missing ${text}`);
-    assert.equal(panel.includes('缠论结构 · 结构观察'), false);
-    assert.ok(panel.indexOf(escaped(conclusion.title)) < panel.indexOf('参考站划线口径'));
+    for (const text of texts.filter((text) => text !== undefined)) assert.ok(panel.includes(escaped(text)), `${name}: actual outlook panel missing ${text}`);
+    assert.equal(panel.includes('评分满分'), false);
+    assert.equal(panel.includes('依当前结构吻合度赋分'), false);
+    assert.ok(panel.indexOf(escaped(conclusion.title)) < panel.indexOf('计算口径与范围'));
     outlookCount++;
     for (const visible of [80, 120, allRows.length]) {
       const rows = allRows.slice(-visible);
       const offset = allRows.length - rows.length;
       const chart = { margin: { left: 40, top: 20 }, plotW: 900, mainH: 400,
         x: (i) => 40 + i * 4, y: (price) => 1000 - price * 2 };
-      const x = (time) => chart.x(fixture.candles.findIndex((c) => c.time === time) - offset);
+      const x = (time) => chart.x(time - 1 - offset);
       const options = { enabled: true, bi: true, zs: true, fx: true };
       const props = { data, options, rows, chart };
       const lineHtml = renderToStaticMarkup(React.createElement('svg', null, React.createElement(ChanOverlay, { ...props, layer: 'lines' })));
       const zoneHtml = renderToStaticMarkup(React.createElement('svg', null, React.createElement(ChanOverlay, { ...props, layer: 'zones' })));
       const line = attrs(lineHtml.match(/<path\b[^>]*data-chan-path="bi"[^>]*>/)?.[0] || '');
-      const expectedPath = fixture.bi.map((p, i) => `${i ? 'L' : 'M'}${x(p.time)},${chart.y(p.price)}`).join(' ');
+      const expectedPath = data.biLine.map((p, i) => `${i ? 'L' : 'M'}${x(p.time)},${chart.y(p.price)}`).join(' ');
       assert.equal(line.d, expectedPath, `${name}/${visible}: real SVG pen line`);
       assert.equal(line.stroke, '#ffd54f');
       assert.equal(line['stroke-width'], '1.5');
@@ -65,23 +66,23 @@ try {
       assert.equal(lineHtml.includes('pending-segment'), false);
       const circles = [...lineHtml.matchAll(/<circle\b[^>]*>/g)].map((m) => attrs(m[0]));
       assert.deepEqual(circles.map((p) => [Number(p.cx), Number(p.cy), Number(p.r)]),
-        fixture.fx.map((p) => [x(p.time), chart.y(p.price) + (p.mark === 'G' ? -10 : 10), 3.5]), `${name}/${visible}: fractal circles`);
+        data.fx.map((p) => [x(p.time), chart.y(p.price) + (p.mark === 'G' ? -10 : 10), 3.5]), `${name}/${visible}: fractal circles`);
       const markers = [...lineHtml.matchAll(/<polygon\b[^>]*>/g)].map((m) => attrs(m[0]));
-      assert.deepEqual(markers.map((m) => m.points), fixture.trades.map((p) => {
+      assert.deepEqual(markers.map((m) => m.points), data.bi.map((p) => {
         const px = x(p.time), py = chart.y(p.price);
-        return p.side === 'sell' ? `${px},${py + 9} ${px + 9},${py - 9} ${px - 9},${py - 9}`
+        return p.mark === 'G' ? `${px},${py + 9} ${px + 9},${py - 9} ${px - 9},${py - 9}`
           : `${px},${py - 9} ${px + 9},${py + 9} ${px - 9},${py + 9}`;
       }), `${name}/${visible}: pen endpoint markers`);
       const zones = [...zoneHtml.matchAll(/<rect\b[^>]*data-chan-zone[^>]*>/g)].map((m) => attrs(m[0]));
       assert.deepEqual(zones.map((z) => [Number(z.x), Number(z.y), Number(z.width), Number(z.height)]),
-        fixture.zs.map((z) => [x(z.sdt), chart.y(z.zg), x(z.edt) - x(z.sdt), chart.y(z.zd) - chart.y(z.zg)]), `${name}/${visible}: zone rectangles`);
-      const active = fixture.zs.reduce((latest, z) => !latest || z.edt > latest.edt ? z : latest, null);
-      assert.deepEqual(zones.map((z) => Number(z['stroke-width'])), fixture.zs.map((z) => z === active ? 2 : 1));
+        data.zs.map((z) => [x(z.sdt), chart.y(z.zg), x(z.edt) - x(z.sdt), chart.y(z.zd) - chart.y(z.zg)]), `${name}/${visible}: zone rectangles`);
+      const active = data.zs.reduce((latest, z) => !latest || z.edt > latest.edt ? z : latest, null);
+      assert.deepEqual(zones.map((z) => Number(z['stroke-width'])), data.zs.map((z) => z === active ? 2 : 1));
       count++;
     }
   }
-  console.log(`Actual ChanOverlay SVG matches reference geometry: ${count}/${count} (13 cases × 3 viewports).`);
-  console.log(`Actual StockAnalysisPanel renders reference classification, facts, conditions, levels and all scenarios: ${outlookCount}/${outlookCount}.`);
+  console.log(`Actual ChanOverlay SVG matches the audited production analysis: ${count}/${count} (13 cases × 3 viewports).`);
+  console.log(`Actual StockAnalysisPanel renders current facts, limits, levels and unscored scenarios: ${outlookCount}/${outlookCount}.`);
 } finally {
   await server.close();
 }

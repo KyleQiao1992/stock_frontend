@@ -1,5 +1,3 @@
-import { observationText, scenarioText } from './referenceOutlookText.js';
-
 export function referenceTime(value) {
   if (typeof value === 'number' || /^\d+$/.test(String(value))) return Number(value);
   const text = String(value ?? '').replace(' ', 'T');
@@ -13,13 +11,6 @@ function formatTime(value, period) {
   return Number.isFinite(time) ? new Date((time + 8 * 3600) * 1000).toISOString()
     .slice(0, period.endsWith('m') ? 16 : 10).replace('T', ' ') : '—';
 }
-function fill(value, context) {
-  if (typeof value === 'string') return value.replace(/\{(\w+)\}/g, (_, key) => context[key]);
-  if (Array.isArray(value)) return value.map((item) => fill(item, context));
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, fill(item, context)]));
-  return value;
-}
-
 // Reference observations are hypotheses. Direction/zone position never creates a confirmed signal.
 export function buildReferenceOutlook({ candles = [], biPoints = [], zsList = [], close, period = 'day' }) {
   period = normalizedPeriod(period);
@@ -34,47 +25,55 @@ export function buildReferenceOutlook({ candles = [], biPoints = [], zsList = []
   // No zone evidence: retain facts without assigning a one/two/three class.
   if (!zone) return { ok: true, asof, period, conclusion: {
     title: '等待结构', kind: null, kind_hint: null, status: 'forming', status_label: '结构形成中',
-    structure_fact: `最新完成笔方向：${up ? '向上' : '向下'}；现价 ${price(close)}，尚无参考笔中枢。`,
-    observation: '等待参考笔中枢形成。', confirmed_signal: null, latest_signal: null,
+    structure_fact: `最新完成笔方向：${up ? '向上' : '向下'}；现价 ${price(close)}，尚无滑动笔重叠区。`,
+    observation: '尚无滑动笔重叠区；未执行一二三类买卖点识别。', confirmed_signal: null, latest_signal: null,
   }, levels: { close, last_bi_high: high.price, last_bi_low: low.price }, scenarios: [] };
   const tag = (time, v) => `${formatTime(time, period)} @ ${price(v)}`;
-  const range = `当前参考中枢 ${formatTime(zone.sdt, period)} ~ ${formatTime(zone.edt, period)}（ZG ${price(zone.zg)} / ZD ${price(zone.zd)}）`;
+  const range = `当前滑动笔重叠区 ${formatTime(zone.sdt, period)} ~ ${formatTime(zone.edt, period)}（ZG ${price(zone.zg)} / ZD ${price(zone.zd)}）`;
   const position = close > zone.zg ? 'above' : close < zone.zd ? 'below' : 'inside';
-  const positionLabel = { above: '中枢上方', below: '中枢下方', inside: '中枢内部' }[position];
-  const kind = up ? { above: 'S1', inside: 'S2', below: 'S3' }[position] : { below: 'B1', inside: 'B2', above: 'B3' }[position];
-  const side = up ? 'sell' : 'buy', bias = up ? '偏空' : '偏多';
-  const title = `${{ 1: '一', 2: '二', 3: '三' }[kind[1]]}类${up ? '卖' : '买'}点观察`;
+  const positionLabel = { above: '重叠区上方', below: '重叠区下方', inside: '重叠区内部' }[position];
+  const title = `向${up ? '上' : '下'}末笔 · ${positionLabel}`;
   const context = { range, close: price(close), high: price(high.price), low: price(low.price),
     highBar: tag(high.time, high.price), lowBar: tag(low.time, low.price), zg: price(zone.zg), zd: price(zone.zd),
     zgBar: tag(zone.zg_time, zone.zg), zdBar: tag(zone.zd_time, zone.zd) };
-  // S3 is the symmetric branch; the captured reference cases cover B1/B2/B3/S1/S2.
-  const observation = fill(observationText[kind] || '近期无一二三类信号触发，按最新笔与中枢位置做结构研判。 价格已在中枢下方，若反抽中枢下沿不过，结构偏向三卖观察。 下沿参考K：{zdBar}。参考{range}。', context);
+  const observation = `最新完成笔${up ? '向上' : '向下'}，现价位于${positionLabel}；这是价格位置观察，未执行一二三类买卖点识别。${range}。`;
   const vsLabel = `${positionLabel}（${range}）`;
-  const biasNote = `结构偏向${title}，现价 ${price(close)} 位于${vsLabel}；当前不是确认${up ? '卖' : '买'}点，倾向${up ? '先控制风险' : '观望'}并等待新确认 K。`;
-  const triggers = {
-    B1: '等待向下离开段背驰结束并出现反向笔，由新确认 K 触发一买信号。',
-    B2: '等待回调结束且不破前低，并由转强 K 触发二买信号。',
-    B3: '等待回踩当前参考中枢上沿不破，并由转强 K 触发三买信号。',
-    S1: '等待向上离开段背驰结束并出现反向笔，由新确认 K 触发一卖信号。',
-    S2: '等待反弹结束且不破前高，并由转弱 K 触发二卖信号。',
-    S3: '等待反抽当前参考中枢下沿不过，并由转弱 K 触发三卖信号。',
-  };
-  const scores = kind.endsWith('1') ? [7, 5, 5] : kind.endsWith('2') ? [6, 8, 4] : [8, 4, 2];
+  const biasNote = `现价 ${price(close)} 位于${vsLabel}；位置观察不提供买卖点或操作信号。`;
+  const verification = '后续需另行核验相应走势级别、原文递归中枢及各类买卖点适用的趋势、背驰、离开回试等条件；本功能未执行。滑动笔重叠区边界或单根 K 线不能直接推出一二三类买卖点。';
+  const pendingCheck = () => [{ kind: 'verification', title: '买卖点需另行核验', trigger: verification,
+    action: '此处只列后续核验项目，没有识别或确认买卖点。', hypothetical: true }];
+  const scenarios = [
+    { id: 'A', name: '重叠区上方', bias: '上方位置',
+      explain: `假设后续收盘位于滑动笔重叠区上方，仅描述价格位置。${range}。`,
+      condition: `后续收盘高于上沿 ${context.zg}（${context.zgBar}）。`,
+      path: '进入或保持重叠区上方 → 观察后续是否返回区间。', next_points: pendingCheck(),
+      invalid: `收盘不再高于 ${context.zg} 时，不再满足上方位置条件。` },
+    { id: 'B', name: '重叠区内部', bias: '区间内位置',
+      explain: `假设后续收盘位于滑动笔重叠区内，仅描述价格位置。${range}。`,
+      condition: `后续收盘不低于下沿 ${context.zd}，且不高于上沿 ${context.zg}。`,
+      path: '进入或保持重叠区内部 → 观察后续是否越过边界。', next_points: pendingCheck(),
+      invalid: `收盘低于 ${context.zd} 或高于 ${context.zg} 时，不再满足区间内位置条件。` },
+    { id: 'C', name: '重叠区下方', bias: '下方位置',
+      explain: `假设后续收盘位于滑动笔重叠区下方，仅描述价格位置。${range}。`,
+      condition: `后续收盘低于下沿 ${context.zd}（${context.zdBar}）。`,
+      path: '进入或保持重叠区下方 → 观察后续是否返回区间。', next_points: pendingCheck(),
+      invalid: `收盘不再低于 ${context.zd} 时，不再满足下方位置条件。` },
+  ];
   return { ok: true, asof, period,
-    conclusion: { kind: null, kind_hint: kind, is_hypothesis: true, status: 'forming', status_label: '结构形成中',
-      title, side, summary: observation, basis: '', confirm_note: '',
-      observation_basis: '依据最新完成笔方向、未完成段方向与现价相对当前参考中枢的位置推断；不是已确认信号。',
-      trigger_condition: triggers[kind], bias, bias_note: biasNote,
-      structure_fact: `最新完成笔方向：${up ? '向上' : '向下'}${extending ? '，末笔仍在延伸' : ''}；现价 ${price(close)}，${vsLabel}。`,
+    conclusion: { kind: null, kind_hint: null, position_branch: `${up ? 'up' : 'down'}-${position}`,
+      is_hypothesis: true, status: 'forming', status_label: '位置观察',
+      title, side: null, summary: observation, basis: '', confirm_note: '',
+      observation_basis: '仅依据最新完成笔方向与现价相对滑动笔重叠区的位置生成观察；未执行一二三类买卖点识别。',
+      trigger_condition: verification, bias: '位置观察', bias_note: biasNote,
+      structure_fact: `最新完成笔方向：${up ? '向上' : '向下'}${extending ? `，端点后出现${up ? '更高高点' : '更低低点'}` : ''}；现价 ${price(close)}，${vsLabel}。`,
       observation, action_hint: biasNote,
-      invalidation: up ? `若收盘升破末笔高点 ${context.high} 或当前参考中枢上沿 ${context.zg}，当前偏空观察失效。`
-        : `若收盘跌破末笔低点 ${context.low} 或当前参考中枢下沿 ${context.zd}，当前偏多观察失效。`,
+      invalidation: '现价跨过重叠区边界，位置分支随之改变；新行情或历史窗口变化也可能修正笔与重叠区。',
       confirmed_signal: null, latest_signal: null },
-    scenarios: fill(scenarioText[side], context).map((scenario, index) => ({ ...scenario, score: scores[index] })),
+    scenarios,
     levels: { close, last_bi_high: high.price, last_bi_low: low.price, last_bi_high_bar: context.highBar,
       last_bi_low_bar: context.lowBar, zs_zg: zone.zg, zs_zd: zone.zd,
       active_zs_id: `zs-${referenceTime(zone.sdt)}-${referenceTime(zone.edt)}`,
       zs_algorithm: zone.algorithm, zs_bi_count: zone.bi_count, zs_zg_bar: context.zgBar, zs_zd_bar: context.zdBar,
-      zs_range: range, vs_zs: position, vs_zs_label: vsLabel, bias, bias_note: biasNote },
-    disclaimer: '评分满分 10 分，依当前结构吻合度赋分；关键价旁标注对应 K 线时间。分支情景而非预言，不构成投资建议。' };
+      zs_range: range, vs_zs: position, vs_zs_label: vsLabel, bias: '位置观察', bias_note: biasNote },
+    disclaimer: '以上为末笔方向与滑动笔重叠区位置的分支情景，未执行一二三类买卖点识别。关键价旁标注对应 K 线时间；不构成投资建议。' };
 }

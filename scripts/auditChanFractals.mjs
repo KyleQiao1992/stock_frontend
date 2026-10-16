@@ -118,26 +118,26 @@ const startupInput = [[1,0],[2,0],[2,1],[1,0]];
 const realtimeTop = [[2,1],[3,2],[2.5,1.5]];
 const realtimeUpdated = [[2,1],[3,2],[3.5,1.5]];
 const report = {
-  auditedAt: '2026-10-15', entry: 'src/lib/chan/index.js → referenceEngine.js → ChanOverlay.jsx',
-  scope: '顶底分型与包含处理。未改生产判定、绘图、笔或中枢规则；不把网站一致性当原典严谨性。',
+  auditedAt: '2026-10-16', entry: 'src/lib/chan/index.js → referenceEngine.js → ChanOverlay.jsx',
+  scope: '三K分型谓词、已知方向包含公式、合并后原K定位与四K上下对称的有限域审计。生产初始化已修复；不是全部笔/线段/中枢/买卖点的证明。',
   sources: [
     { lesson: 62, url: 'https://blog.sina.com.cn/s/blog_486e105c01000bf2.html' },
     { lesson: 65, url: 'https://blog.sina.com.cn/s/blog_486e105c01000bpo.html' },
     { lesson: 82, url: 'https://blog.sina.com.cn/s/blog_486e105c01000cq4.html' },
   ],
-  correction: '旧版18/21将3项全量显示假设计入定义失败，归类不成立。现保留3项实际差异，独立报告；未修改生产算法。',
+  correction: '保留全量圆点与笔筛选输出的差异诊断，不把二者差异本身计为定义错误。2026-10-16已修复未知初始方向的不对称；成笔和动态日期另有独立回归。',
   passed: results.filter((r) => r.matches).length, total: results.length,
   matchesAllDefinitionChecks: results.every((r) => r.matches), results,
   completeOutputDiagnostics, finiteDomain, symmetry,
   limitations: [
-    { id: 'startup-direction', assessment: '边界约定未解决，不武断指定向上或向下', input: startupInput,
+    { id: 'startup-direction', assessment: '已修复不对称；未知前缀按窗口边界政策跳过', input: startupInput,
       actual: points(main(startupInput).fx), mirroredInput: mirror(startupInput), mirroredActual: points(main(mirror(startupInput)).fx),
-      reason: '起始两根直接保留，前两根等高时跳过合并；原典方向定义需要更早的非包含对。已知方向与未知方向的穷举分别报告。' },
+      reason: '原典方向定义需要更早的非包含对。方向未知时只保留最新原K作为边界，直到非包含对建立方向；不向未来借方向。此边界政策不是原文唯一实现。' },
     { id: 'live-right-bar', assessment: '未收盘快照允许变化；输出没有单独的收盘确认状态，不能据此判算法错误', input: realtimeTop,
       actual: points(main(realtimeTop).fx), updatedInput: realtimeUpdated, updatedActual: points(main(realtimeUpdated).fx),
       reason: '同一右侧K线盘中扩大高低区间后分型可消失；当前fx没有confirmed/confirmedAt，不能声称已验证收盘确认。' },
-    { id: 'strength', assessment: '主图分型未实现强弱分类',
-      reason: '几何成立与力度分开。第82课还涉及实体、影线、收盘位置等，不能仅凭成立条件声称已验证强弱。' },
+    { id: 'strength', assessment: '力度形态已实现，另有独立测试；本脚本未检验力度',
+      reason: '第82课定性条件与软件比例阈值必须区分；不使用未来K，不宣称概率或相对高低点确认。' },
     { id: 'equal-extreme-time', assessment: '参考站取最后一次同价极值，非原典唯一定位要求',
       reason: '保留的旧fractal.js取较早极值；它的单元测试不能替代主图生产路径测试。' },
   ],
@@ -145,14 +145,13 @@ const report = {
 report.verifiedCoreChecksPassed = report.matchesAllDefinitionChecks
   && Object.values(finiteDomain).filter((item) => typeof item === 'object').every((item) => !item.mismatched)
   && symmetry.knownInitialDirection.mismatched === 0;
-// Keep a nonzero audit status for the unresolved initial-direction asymmetry.
-// A green subset must not be presented as an unconditional full-engine pass.
-report.fullAuditPassed = report.verifiedCoreChecksPassed && symmetry.ambiguousInitialDirection.mismatched === 0;
+// A passing finite-domain subset is not an unconditional full-engine proof.
+report.fractalAuditPassed = report.verifiedCoreChecksPassed && symmetry.ambiguousInitialDirection.mismatched === 0;
 console.table(results.map(({ id, scope, matches }) => ({ id, scope, matches })));
 console.log(`定义及合并后原K定位检查：${report.passed}/${report.total}。`);
 console.log(`全量圆点输出差异：${completeOutputDiagnostics.filter((item) => !item.displaysAll).length}项（独立诊断，不作为已确立的定义失败）。`);
 console.log(JSON.stringify(finiteDomain));
 console.log(JSON.stringify(symmetry));
-console.log(`整体审计通过：${report.fullAuditPassed}；起始方向不明确时的不对称仍未解决。`);
+console.log(`本脚本有限域分型审计通过：${report.fractalAuditPassed}；不代表全部缠论功能已验证。`);
 if (process.argv.includes('--report')) await writeFile(new URL('../docs/chan-fractal-audit-results.json', import.meta.url), `${JSON.stringify(report, null, 2)}\n`);
-if (!report.fullAuditPassed) process.exitCode = 1;
+if (!report.fractalAuditPassed) process.exitCode = 1;
