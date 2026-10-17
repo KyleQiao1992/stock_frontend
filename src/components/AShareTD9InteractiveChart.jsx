@@ -3,6 +3,7 @@ import UserAdminPanel from "./UserAdminPanel";
 import AccountPanel from "./AccountPanel";
 import StockAnalysisPanel from "./StockAnalysisPanel";
 import TradeSideHistoryPanel from "./TradeSideHistoryPanel";
+import MarketIndexStrip from "./MarketIndexStrip";
 import { fetchTradeSideHistory, formatTradeQuoteTime } from "../lib/tradeSideHistory.js";
 import { tencentAshareVolumeToLots } from "../lib/tencentAshareVolume.js";
 import ChanOverlay from "./ChanOverlay";
@@ -587,28 +588,30 @@ async function fetchAshareKline({ code, period, adjust, limit }) {
   );
 }
 
-// 指数日线取数。腾讯 kline/kline 为主（不复权，显式 symbol，_var 脚本方式绕过跨域，最稳），东方财富兜底。
+// 指数取数。腾讯 kline/kline 为主（不复权，显式 symbol，_var 脚本方式绕过跨域），东方财富兜底。
 // 注意：指数不能用 fqkline/get（需复权参数，否则返回 bad params），也不能用 guessSecid/toTencentSymbol（会把上证/科创判成深市）。
-async function fetchIndexKline({ secid, tencentSymbol, name, limit = 500 }) {
+async function fetchIndexKline({ secid, tencentSymbol, name, period = "101", limit = 500 }) {
   const errors = [];
+  const ktype = periodToTencent(period);
 
-  // 腾讯不复权日线。注意 kline/kline 的 count 过大（>1000）会 param error，故仅适合较小窗口。
+  // 腾讯不复权 K 线。kline/kline 的 count 过大（>1000）会 param error。
   async function tryTencent() {
     if (!tencentSymbol) return null; // 板块（90.BKxxxx）等无腾讯代码的标的直接走东方财富。
     const varName = `tencent_index_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const param = `${tencentSymbol},day,,,${Math.min(limit, 1000)}`;
+    const param = `${tencentSymbol},${ktype},,,${Math.min(limit, 1000)}`;
     const tencentUrl = `https://web.ifzq.gtimg.cn/appstock/app/kline/kline?_var=${encodeURIComponent(varName)}&param=${encodeURIComponent(param)}`;
     for (const loader of [() => loadScriptVariable(tencentUrl, varName), () => loadTencentText(tencentUrl)]) {
       try {
         const res = await loader();
         const node = res?.data?.[tencentSymbol] || res?.data?.[tencentSymbol?.toUpperCase?.()];
-        const arr = Array.isArray(node?.day) ? node.day : Array.isArray(node?.qfqday) ? node.qfqday : null;
+        const arr = Array.isArray(node?.[ktype]) ? node[ktype] : null;
         if (!arr || !arr.length) throw new Error("腾讯指数 K 线为空");
         let prevClose = null;
         const parsed = arr
           .map((item) => {
             const close = Number(item[2]);
-            const pct = Number.isFinite(prevClose) && prevClose !== 0 ? ((close - prevClose) / prevClose) * 100 : 0;
+            const change = Number.isFinite(prevClose) ? close - prevClose : null;
+            const pct = Number.isFinite(change) && prevClose !== 0 ? (change / prevClose) * 100 : null;
             prevClose = close;
             return {
               date: item[0],
@@ -617,6 +620,7 @@ async function fetchIndexKline({ secid, tencentSymbol, name, limit = 500 }) {
               high: Number(item[3]),
               low: Number(item[4]),
               volume: Number(item[5]),
+              change,
               pct,
             };
           })
@@ -638,7 +642,7 @@ async function fetchIndexKline({ secid, tencentSymbol, name, limit = 500 }) {
       "https://82.push2his.eastmoney.com",
     ];
     for (const host of hosts) {
-      const url = buildEastmoneyKlineUrl({ host, secid, period: "101", adjust: "0", limit });
+      const url = buildEastmoneyKlineUrl({ host, secid, period, adjust: "0", limit });
       try {
         const res = await loadMarketJson(url);
         const data = res && res.data ? res.data : null;
@@ -657,7 +661,9 @@ async function fetchIndexKline({ secid, tencentSymbol, name, limit = 500 }) {
               high: Number(parts[3]),
               low: Number(parts[4]),
               volume: Number(parts[5]),
+              amount: Number(parts[6]),
               pct: Number(parts[8]),
+              change: Number(parts[9]),
             };
           })
           .filter((r) => r.date && [r.open, r.close, r.high, r.low].every(Number.isFinite));
@@ -3427,6 +3433,7 @@ export function Chart({
   drawnLines = [],
   onDrawnLinesChange = null,
   showPatterns = false,
+  showTurnover = true,
   chanData,
   chanOptions,
 }) {
@@ -3925,7 +3932,7 @@ export function Chart({
             涨跌 {Number.isFinite(hover.change) ? hover.change.toFixed(2) : "-"} ({Number.isFinite(hover.pct) ? hover.pct.toFixed(2) : "-"}%)
           </text>
           <text x={chart.margin.left + 190} y="19" fontSize="13" fill="var(--chart-ink-3)">
-            成交量 {formatNumber(hover.volume)} 换手 {Number.isFinite(hover.turnover) ? hover.turnover.toFixed(2) : "-"}%
+            成交量 {formatNumber(hover.volume)}{showTurnover ? ` 换手 ${Number.isFinite(hover.turnover) ? hover.turnover.toFixed(2) : "-"}%` : ""}
           </text>
           {currentTD && (
             <g>
@@ -5771,13 +5778,13 @@ function IndexTrendCard({ index, tab, year = "latest" }) {
   return (
     <Card className="rounded-2xl border-slate-200">
       <CardContent className="p-4">
-        <div className="mb-2 flex items-baseline justify-between">
-          <div className="flex items-baseline gap-2">
-            <span className="text-base font-semibold text-slate-800">{index.name}</span>
-            <span className="text-xs text-slate-400">{index.code}</span>
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+            <span className="whitespace-nowrap text-base font-semibold text-slate-800">{index.name}</span>
+            <span className="whitespace-nowrap text-xs text-slate-400">{index.code}</span>
             {trend ? (
               <span
-                className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                className={`whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ${
                   trend.isBull ? "bg-red-50 text-red-600" : "bg-slate-100 text-slate-500"
                 }`}
                 title={`CLOSE>MA${tab.ma}：${trend.c1 ? "✓" : "✗"}  MA${tab.ma} 向上：${trend.c2 ? "✓" : "✗"}  DIF>0：${trend.c3 ? "✓" : "✗"}`}
@@ -8805,6 +8812,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const [usPreloadStatus, setUsPreloadStatus] = useState({ running: false, total: 0, done: 0, current: "" });
   const [rawRows, setRawRows] = useState([]);
   const [meta, setMeta] = useState({ code: "", name: "" });
+  const isIndex = market === "ashare" && meta.instrumentType === "index";
   const [financialInfo, setFinancialInfo] = useState(null);
   const [financialLoading, setFinancialLoading] = useState(false);
   const [financialError, setFinancialError] = useState("");
@@ -8876,7 +8884,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const activeFavoriteGroup = activeFavoriteGroupMap[market] || "默认";
   const favoriteCodeSet = useMemo(() => new Set(favoriteItems.map((item) => item.code)), [favoriteItems]);
   const favoritePendingCodeSet = useMemo(() => new Set(favoritePendingCodes), [favoritePendingCodes]);
-  const activeMetaCode = normalizeCodeForMarket(meta.code || currentCode, market);
+  const activeMetaCode = isIndex ? "" : normalizeCodeForMarket(meta.code || currentCode, market);
   const activeMetaFavoritePending = favoritePendingCodeSet.has(activeMetaCode);
   const activeMetaFavorited = favoriteCodeSet.has(activeMetaCode);
   const manualWatchlistItems = watchlistItemsMap[market] || EMPTY_LIST;
@@ -9009,7 +9017,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   }, [chartFullscreen]);
 
   useEffect(() => {
-    if (market !== "ashare" || !ashareSuggestFocused) {
+    if (market !== "ashare" || !ashareSuggestFocused || TREND_INDICES.some((index) => index.tencentSymbol === currentCode.toLowerCase())) {
       setAshareSuggestions([]);
       setAshareSuggestOpen(false);
       setAshareSuggestLoading(false);
@@ -9142,7 +9150,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     setWatchlistLoading(true);
     setWatchlistError("");
     try {
-      const activeMeta = requestedMarket === market ? meta : null;
+      const activeMeta = requestedMarket === market && !isIndex ? meta : null;
       const results = await Promise.allSettled(
         codes.map(async (code) => {
           if (activeMeta?.code === code && activeMeta?.name) {
@@ -9238,7 +9246,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
         : await addFavorite({
           market: requestedMarket,
           code,
-          name: item?.name || (meta.code === code ? meta.name : "") || code,
+          name: item?.name || (!isIndex && meta.code === code ? meta.name : "") || code,
           // 新收藏落入当前选中的收藏夹。
           group: activeFavoriteGroupMap[requestedMarket] || "默认",
         });
@@ -9315,14 +9323,14 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     setTradeSideInfo(payload);
     const snapshot = payload.latest;
     if (!snapshot || (payload.realtimeSource?.key || payload.source?.key) !== 'tencent') return;
-    setMeta(previous => previous.code === payload.code && Number.isFinite(Date.parse(snapshot.quoteTime))
+    setMeta(previous => previous.instrumentType !== "index" && previous.code === payload.code && Number.isFinite(Date.parse(snapshot.quoteTime))
       && (!previous.quoteTime || Date.parse(snapshot.quoteTime) >= Date.parse(previous.quoteTime))
       ? { ...previous, innerVol: snapshot.innerVol, outerVol: snapshot.outerVol, quoteTime: snapshot.quoteTime, tradeSideVolumeSource: 'tencent' }
       : previous);
   }
 
   async function refreshTradeSideHistory() {
-    if (market !== 'ashare' || !/^\d{6}$/.test(meta.code)) return;
+    if (market !== 'ashare' || isIndex || !/^\d{6}$/.test(meta.code)) return;
     const code = meta.code;
     const runId = loadRunRef.current;
     const requestId = ++tradeSideRequestRef.current;
@@ -9342,7 +9350,14 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     if (isStandaloneMarket) return;
     const runId = ++loadRunRef.current;
     const rawTargetCode = typeof overrideCode === "string" ? overrideCode : currentCode;
-    let targetCode = normalizeCodeForMarket(rawTargetCode, market);
+    const targetIndex = market === "ashare" ? TREND_INDICES.find((index) => index.tencentSymbol === rawTargetCode.trim().toLowerCase()) : null;
+    let targetCode = targetIndex?.code || normalizeCodeForMarket(rawTargetCode, market);
+    const nextMeta = { code: targetCode, name: targetIndex?.name || "", instrumentType: targetIndex ? "index" : "stock", tencentSymbol: targetIndex?.tencentSymbol || "" };
+    if ((meta.tencentSymbol || meta.code) !== (targetIndex?.tencentSymbol || targetCode)) {
+      setRawRows([]);
+      setMeta(nextMeta);
+      clearDrawings();
+    }
     setLoading(true);
     setError("");
     setFinancialError("");
@@ -9352,8 +9367,14 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     setTradeSideInfo(null);
     setProfileError("");
     setProfileInfo(null);
+    setFinancialLoading(false);
+    setTradeSideLoading(false);
+    setProfileLoading(false);
+    setSuspensionRisk(null);
     try {
-      const result = market === "ashare"
+      const result = targetIndex
+        ? { ...await fetchIndexKline({ ...targetIndex, period, limit: 1000 }), code: targetIndex.code, name: targetIndex.name }
+        : market === "ashare"
         ? await (async () => {
           let normalized = onlyDigits(rawTargetCode);
           if (!isSixDigitCode(normalized)) {
@@ -9418,6 +9439,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
       setMeta({
         code: result.code,
         name: result.name,
+        instrumentType: targetIndex ? "index" : "stock",
+        tencentSymbol: targetIndex?.tencentSymbol || "",
         marketCap: result.marketCap || null,
         floatMarketCap: result.floatMarketCap || null,
         peRatio: Number.isFinite(result.peRatio) ? result.peRatio : null,
@@ -9439,7 +9462,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
         sourceInfo: result.sourceInfo || "",
       });
 
-      if (market === "ashare") {
+      if (market === "ashare" && !targetIndex) {
         setFinancialLoading(true);
         setTradeSideLoading(true);
         setProfileLoading(true);
@@ -9543,7 +9566,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
       if (runId !== loadRunRef.current) return;
       setError(getErrorMessage(e, "行情加载失败，请稍后重试。"));
       setRawRows([]);
-      setMeta({ code: targetCode, name: "" });
+      setMeta({ ...nextMeta, code: targetCode });
       setSuspensionRisk(null);
       setFinancialLoading(false);
       setTradeSideLoading(false);
@@ -9554,13 +9577,13 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   }
 
   useEffect(() => {
-    if (market !== 'ashare' || loading || !/^\d{6}$/.test(meta.code)) return undefined;
+    if (market !== 'ashare' || isIndex || loading || !/^\d{6}$/.test(meta.code)) return undefined;
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void refreshTradeSideHistory();
     }, tradeSideInfo?.history?.status === 'loading' ? 3_000 : 60_000);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [market, meta.code, loading, tradeSideInfo?.history?.status]);
+  }, [market, isIndex, meta.code, loading, tradeSideInfo?.history?.status]);
 
   useEffect(() => {
     // 当前市场还没有选中标的时（首屏 / 首次进入该市场），交给 loadDefaultWatchlist 选第一只；
@@ -9675,6 +9698,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                       marketRef.current = tab.value;
                       loadRunRef.current += 1;
                       setMarket(tab.value);
+                      clearDrawings();
                       setError("");
                       setFinancialError("");
                       setFinancialInfo(null);
@@ -9687,7 +9711,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                         setMeta({ code: marketCodes.hk || "", name: "" });
                       } else if (tab.value === "ashare") {
                         setRawRows([]);
-                        setMeta({ code: marketCodes.ashare || "", name: "" });
+                        const index = TREND_INDICES.find((item) => item.tencentSymbol === marketCodes.ashare);
+                        setMeta({ code: index?.code || marketCodes.ashare || "", name: index?.name || "", instrumentType: index ? "index" : "stock", tencentSymbol: index?.tencentSymbol || "" });
                       } else if (tab.value === "agent" || tab.value === "factor-research" || tab.value === "market-trend" || tab.value === "user-admin" || tab.value === "account") {
                         setRawRows([]);
                         setMeta({ code: "", name: "" });
@@ -9786,8 +9811,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
             </div>
           )}
           </div>
-          {!isStandaloneMarket && <div className="flex min-w-0 flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-          <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center">
+          {!isStandaloneMarket && <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2 border-t border-slate-100 pt-3">
+          <div className={`market-query-controls grid min-w-0 grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center ${market === "ashare" ? "" : "flex-1"}`}>
             <div className="relative col-span-2 flex items-center gap-2 rounded-xl border bg-white px-3 py-2 md:w-56">
               <Search className="h-4 w-4 text-slate-400" />
               <input
@@ -9969,6 +9994,14 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
               {loading ? "加载中" : "查询"}
             </Button>
           </div>
+          {market === "ashare" && <MarketIndexStrip indices={TREND_INDICES} selectedSymbol={isIndex ? meta.tencentSymbol : ""} onSelect={(index) => {
+            marketCodesRef.current = { ...marketCodesRef.current, ashare: index.tencentSymbol };
+            setMarketCodes((prev) => ({ ...prev, ashare: index.tencentSymbol }));
+            setAshareSuggestions([]);
+            setAshareSuggestOpen(false);
+            setAshareSuggestFocused(false);
+            load(index.tencentSymbol);
+          }} />}
           </div>}
         </div>
 
@@ -9983,7 +10016,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
           <div className="grid min-w-0 grid-cols-1 gap-4 [&>*]:min-w-0 xl:grid-cols-[260px_minmax(0,1fr)_260px] 2xl:grid-cols-[320px_minmax(0,1fr)_320px]">
             <Card className="rounded-2xl">
               <CardContent className="p-4">
-                <div className="text-sm text-slate-500">当前标的</div>
+                <div className="text-sm text-slate-500">{isIndex ? "当前指数" : "当前标的"}</div>
                 <div className="mt-1 flex min-w-0 items-center gap-2">
                   <div className="min-w-0 break-words text-2xl font-semibold">{meta.name || "-"}</div>
                   {activeMetaCode ? (
@@ -10036,6 +10069,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                         <span>{meta.boardLot}</span>
                       </div>
                     ) : null}
+                    {!isIndex && <>
                     <div className="quote-metric flex justify-between">
                       <span className="inline-flex items-center">
                         换手率
@@ -10086,6 +10120,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                         {market === "ashare" ? " 北京时间" : market === "hk" ? " 香港时间" : " 美东时间"}
                       </div>
                     ) : null}
+                    </>}
                     <div className="quote-metric quote-metric-wide flex justify-between">
                       <span className="inline-flex items-center">
                         RSI14
@@ -10124,7 +10159,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                     </div>
                   </div>
                 )}
-                {market === "ashare" && (
+                {market === "ashare" && !isIndex && (
                   <>
                     <AshareProfileSection
                       title="公司基本介绍"
@@ -10275,7 +10310,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                   </div>
                   {rows.length > 0 ? (
                     <Chart
-                      key={`inline-chart-${drawingTool}`}
+                      key={`inline-chart-${meta.tencentSymbol || `${market}-${meta.code}`}-${drawingTool}`}
+                      showTurnover={!isIndex}
                       rows={rows}
                       fullRows={fullRowsWithTD}
                       visibleGaps={visibleGaps}
@@ -10294,11 +10330,11 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                   )}
                   </CardContent>
                 </Card>
-                {(market === "ashare" || market === "hk" || chanOptions.enabled) && <StockAnalysisPanel
+                {((!isIndex && (market === "ashare" || market === "hk")) || chanOptions.enabled) && <StockAnalysisPanel
                   data={chanData} enabled={chanOptions.enabled} tab={analysisTab} onTabChange={setAnalysisTab}
                   code={meta.code || currentCode} name={meta.name} period={period}
                   market={market}
-                  showFinancial={market === "ashare"}
+                  showFinancial={market === "ashare" && !isIndex}
                   financialReportContent={<FinancialReportPanel
                     financialInfo={financialInfo}
                     loading={financialLoading}
@@ -10306,8 +10342,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                     market={market}
                     embedded
                   />}
-                  showNews={market === "ashare" || market === "hk"}
-                  showTradeSideHistory={market === "ashare"}
+                  showNews={!isIndex && (market === "ashare" || market === "hk")}
+                  showTradeSideHistory={market === "ashare" && !isIndex}
                   tradeSideHistoryContent={<TradeSideHistoryPanel
                     key={meta.code || currentCode}
                     info={tradeSideInfo}
@@ -10322,7 +10358,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
               market={market}
               inputValue={watchlistInput}
               items={watchlistItems}
-              activeCode={meta.code || currentCode}
+              activeCode={isIndex ? "" : meta.code || currentCode}
               loading={watchlistLoadingState}
               error={watchlistErrorState}
               style={effectiveWatchlistStyle}
@@ -10459,7 +10495,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-4 md:p-5">
                 <Chart
-                  key={`fullscreen-chart-${drawingTool}`}
+                  key={`fullscreen-chart-${meta.tencentSymbol || `${market}-${meta.code}`}-${drawingTool}`}
+                  showTurnover={!isIndex}
                   rows={rows}
                   fullRows={fullRowsWithTD}
                   visibleGaps={visibleGaps}

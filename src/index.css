@@ -193,6 +193,53 @@ body {
   white-space: nowrap;
 }
 
+/* Index quotes use their content width instead of stretching across the toolbar. */
+.market-query-controls {
+  max-width: 100%;
+}
+.market-index-strip {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  margin-inline-start: auto;
+  gap: 4px;
+}
+.market-index-quotes {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  row-gap: 4px;
+}
+.market-index-quote {
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+.market-index-quote + .market-index-quote {
+  border-left: 1px solid var(--color-slate-200);
+}
+.market-index-values {
+  display: flex;
+  align-items: baseline;
+  column-gap: 6px;
+}
+@media (max-width: 639px) {
+  .market-index-strip {
+    margin-inline-start: 0;
+  }
+  .market-index-quotes {
+    display: grid;
+    grid-template-columns: repeat(2, max-content);
+    gap: 4px 0;
+  }
+  .market-index-quote:nth-child(3) {
+    border-left: 0;
+  }
+}
+
 /* Quote fields need room for the label, help controls, and an unbroken value.
    Sidebar cards show one field per row; wider cards can share a row. */
 .quote-metrics {
