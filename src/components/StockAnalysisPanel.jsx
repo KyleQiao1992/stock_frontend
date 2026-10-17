@@ -20,7 +20,7 @@ function ChanOutlook({ data }) {
         <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-600">{phase}</span>
       </div>
       <section aria-label="结构事实">
-        <h5 className="mb-2 font-semibold text-sky-600">1 · 结构事实</h5>
+        <h5 className="mb-2 font-semibold text-sky-600">结构事实</h5>
         <p>{c.structure_fact || c.summary}</p>
         <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-3">
           {[
@@ -40,29 +40,27 @@ function ChanOutlook({ data }) {
           <p className="text-slate-500">{levels.zs_bi_count} 笔 · {levels.active_zs_id}</p>
         </div>}
       </section>
-      <section aria-label="买卖点识别" className="mt-4 border-t border-slate-200 pt-3">
-        <h5 className="mb-2 font-semibold text-sky-600">2 · 买卖点识别</h5>
-        <p>{signal ? `已确认信号：${signal.title || signal.kind} · ${signal.time_str || signal.time}` : '未执行一二三类买卖点识别'}</p>
+      {signal && <section aria-label="已确认信号" className="mt-4 border-t border-slate-200 pt-3">
+        <h5 className="mb-2 font-semibold text-sky-600">已确认信号</h5>
+        <p>{`已确认信号：${signal.title || signal.kind} · ${signal.time_str || signal.time}`}</p>
         {c.status === 'confirmed' && c.basis && <p>{c.basis}</p>}
         {c.confirm_note && <p>{c.confirm_note}</p>}
-      </section>
+      </section>}
       <section aria-label="观察条件" className="mt-4 border-t border-slate-200 pt-3">
-        <h5 className="mb-2 font-semibold text-sky-600">3 · 观察条件</h5>
+        <h5 className="mb-2 font-semibold text-sky-600">当前观察</h5>
         <p>{c.status === 'confirmed' ? c.summary : c.observation || c.summary}</p>
-        {c.status !== 'confirmed' && c.observation_basis && <div className="mt-3 rounded-xl border border-dashed border-amber-500/40 p-3">
-          <p><span className="font-semibold text-amber-600">观察依据（非确认信号）</span> {c.observation_basis}</p>
-          <p className="mt-2"><span className="font-semibold">后续核验项目（未执行）</span> {c.trigger_condition}</p>
-        </div>}
       </section>
       <section aria-label="失效与操作参考" className="mt-4 border-t border-slate-200 pt-3">
-        <h5 className="mb-2 font-semibold text-sky-600">4 · 失效与操作参考</h5>
+        <h5 className="mb-2 font-semibold text-sky-600">参考变化</h5>
         <p>{c.invalidation}</p>
-        {c.action_hint && <p className="mt-2"><span className="font-semibold">操作参考（非信号） · {c.bias}</span> {c.action_hint}</p>}
       </section>
     </div>
     {scenarios.length > 0 && <>
-      <h4 className="font-semibold text-slate-900">接下来三种位置情景</h4>
-      {scenarios.map((scenario) => <section aria-label={scenario.name} key={scenario.id} className="rounded-xl border border-slate-200 p-4">
+      <div data-chan-watch-intro>
+        <h4 className="font-semibold text-slate-900">买卖点观察 · 接下来三种情景</h4>
+        {outlook.watch_note && <p className="mt-1 text-xs text-slate-500">{outlook.watch_note}</p>}
+      </div>
+      {scenarios.map((scenario) => <section aria-label={scenario.name} key={scenario.id} data-chan-scenario={scenario.id} className="rounded-xl border border-slate-200 p-4">
         <div className="flex items-center justify-between gap-3">
           <h5 className="font-semibold text-slate-900">{scenario.id} · {scenario.name}</h5>
           <span className="shrink-0 text-xs">{scenario.bias}</span>
@@ -70,8 +68,8 @@ function ChanOutlook({ data }) {
         <p className="mt-2">{scenario.explain}</p>
         <p className="mt-2"><span className="font-semibold">条件：</span>{scenario.condition}</p>
         <p className="mt-2"><span className="font-semibold">路径：</span>{scenario.path}</p>
-        <div className="mt-3 space-y-3">{scenario.next_points.map((point) => <div key={point.kind} className="rounded-lg bg-slate-50 p-3">
-          <p><span className="mr-2 rounded border border-slate-200 px-1.5 py-0.5 text-xs">{point.hypothetical ? '待核验' : point.kind}</span><span className="font-semibold">{point.title}</span></p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">{scenario.next_points.map((point) => <div key={point.kind} data-chan-signal-watch={point.kind} className="min-w-0 rounded-lg bg-slate-50 p-3">
+          <p><span className="mr-2 rounded border border-slate-200 px-1.5 py-0.5 text-xs">{point.kind}</span><span className="font-semibold">{point.title}</span></p>
           <p className="mt-1">{point.trigger}</p><p className="mt-1 text-xs text-slate-500">{point.action}</p>
         </div>)}</div>
         <p className="mt-3"><span className="font-semibold">失效：</span>{scenario.invalid}</p>
@@ -121,7 +119,7 @@ export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, co
             <p className="mt-2">逐根处理K线包含和三K分型；按第62、65、77课旧笔口径，顶底分型之间至少有一根不属于任一分型的独立K线。笔被新K线破坏时回退重算。黄色折线连接笔端及当前动态极值，三角标记笔端参考，圆点标记分型。</p>
             <p className="mt-2">蓝框为滑动笔重叠区：连续前三笔固定ZG/ZD，保持核心区间最多延伸九笔，按滑动窗口绘制；这是本地参考算法，不是原文按次级别走势递归定义的中枢。动态末端不参与笔端参考和重叠区。</p>
             <p className="mt-2">计算只使用本次加载的本地历史窗口，窗口之前的数据未参与，起笔前的历史会裁去；窗口截断可能影响起笔及后续结构，缩放只改变可见范围。新行情可能修正近端结构。</p>
-            <p className="mt-2">三种情景只描述现价位于滑动笔重叠区上方、内部或下方；未执行一二三类买卖点识别，也未核验走势级别、递归中枢、背驰、线段及后续确认条件。</p>
+            <p className="mt-2">买卖点观察按第17、20、21、101课列出后续条件，不代表已识别或已确认；当前未执行走势级别、递归中枢、背驰及一二三类买卖点的自动识别。二类观察须从真实一类买卖点后的次级别走势出发，不能用任意前低或前高替代。</p>
           </details>
 
         </>}

@@ -30,20 +30,22 @@ try {
       .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#x27;');
     const { conclusion, levels, scenarios = [] } = data.outlook;
     const texts = [conclusion.title, conclusion.is_hypothesis ? '位置观察' : '等待结构', conclusion.status_label,
-      conclusion.structure_fact, conclusion.observation, conclusion.observation_basis,
-      conclusion.trigger_condition, conclusion.invalidation, conclusion.action_hint,
+      conclusion.structure_fact, conclusion.observation, conclusion.invalidation, data.outlook.watch_note,
       levels.last_bi_high_bar, levels.last_bi_low_bar, levels.zs_zg_bar, levels.zs_zd_bar,
       levels.vs_zs_label, levels.zs_range, levels.active_zs_id, data.outlook.disclaimer,
-      '未执行一二三类买卖点识别', '观察依据（非确认信号）',
-      '1 · 结构事实', '2 · 买卖点识别', '3 · 观察条件', '4 · 失效与操作参考'];
+      '结构事实', '当前观察', '参考变化', '买卖点观察 · 接下来三种情景'];
     for (const scenario of scenarios) {
       texts.push(scenario.name, scenario.bias,
         scenario.explain, scenario.condition, scenario.path, scenario.invalid);
-      for (const point of scenario.next_points) texts.push(point.hypothetical ? '待核验' : point.kind, point.title, point.trigger, point.action);
+      for (const point of scenario.next_points) texts.push(point.kind, point.title, point.trigger, point.action);
     }
     for (const text of texts.filter((text) => text !== undefined)) assert.ok(panel.includes(escaped(text)), `${name}: actual outlook panel missing ${text}`);
     assert.equal(panel.includes('评分满分'), false);
     assert.equal(panel.includes('依当前结构吻合度赋分'), false);
+    assert.equal(panel.includes('待核验'), false);
+    assert.equal(panel.includes('买卖点需另行核验'), false);
+    assert.equal((panel.match(/data-chan-watch-intro/g) || []).length, 1);
+    assert.equal((panel.match(/data-chan-signal-watch=/g) || []).length, 6);
     assert.ok(panel.indexOf(escaped(conclusion.title)) < panel.indexOf('计算口径与范围'));
     outlookCount++;
     for (const visible of [80, 120, allRows.length]) {
