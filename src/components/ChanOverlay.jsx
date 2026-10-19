@@ -8,6 +8,15 @@ export default function ChanOverlay({ layer, data, options, rows, chart, onSelec
   if (offset < 0) return null;
   const x = (time) => chart.x(time - 1 - offset);
   const path = (points) => points.map((p, i) => `${i ? 'L' : 'M'}${x(p.time)},${chart.y(p.price)}`).join(' ');
+  const dateAt = (time) => data.dates[time - 1] ?? `第 ${time} 根K`;
+  const pointLabel = (point) => `${dateAt(point.time)} @ ${point.price}`;
+  const visibleLine = (start, end) => end.time - 1 - offset >= 0
+    && start.time - 1 - offset < rows.length;
+  const segments = data.segments ?? [];
+  const pendingSegments = data.pendingSegments ?? [];
+  const segmentTitle = (segment) => `已确认${segment.direction === 'up' ? '向上' : '向下'}线段 · ${segment.stroke_count} 笔\n起点：${pointLabel(segment.start)}\n终点：${pointLabel(segment.end)}\n确认依据K：${dateAt(segment.confirmed_time)}（本次历史窗口复算，非系统首次观测时刻）`;
+  const pendingTitle = pendingSegments.length === 2
+    ? `发展中线段参考 · 尚未确认\n起点：${pointLabel(pendingSegments[0])}\n当前方向极值：${pointLabel(pendingSegments[1])}\n后续完成笔仍可能改变此参考，未计入已确认线段` : '';
   const active = data.zs.reduce((latest, z) => !latest || z.edt > latest.edt ? z : latest, null)?.id;
   const colors = ['rgba(255,193,7,0.18)', 'rgba(66,165,245,0.18)', 'rgba(171,71,188,0.16)',
     'rgba(38,166,154,0.18)', 'rgba(239,83,80,0.14)', 'rgba(255,167,38,0.18)'];
@@ -27,7 +36,7 @@ export default function ChanOverlay({ layer, data, options, rows, chart, onSelec
     },
   } : {};
   return (
-    <g data-chan-layer={layer} pointerEvents="none" aria-hidden={onSelectFractal ? undefined : true}>
+    <g data-chan-layer={layer} pointerEvents="none" aria-hidden={onSelectFractal || options.segment ? undefined : true}>
       <defs><clipPath id={clipId}><rect x={chart.margin.left} y={chart.margin.top} width={chart.plotW} height={chart.mainH} /></clipPath></defs>
       <g clipPath={`url(#${clipId})`}>
         {layer === 'zones' && options.zs && data.zs.map((z, i) => (
@@ -42,6 +51,24 @@ export default function ChanOverlay({ layer, data, options, rows, chart, onSelec
         {layer === 'lines' && <>
           {options.bi && <>
             <path data-chan-path="bi" d={path(data.biLine)} fill="none" stroke="#ffd54f" strokeWidth="1.5" strokeLinejoin="round" />
+          </>}
+          {options.segment && <>
+            {segments.map((segment) => (
+              <path key={segment.id} data-chan-path="segment" data-chan-segment={segment.id}
+                d={path([segment.start, segment.end])} fill="none" stroke="var(--chan-segment)"
+                strokeWidth="2.75" strokeLinecap="round" strokeLinejoin="round"
+                pointerEvents="stroke" role="img" aria-label={segmentTitle(segment)}
+                tabIndex={visibleLine(segment.start, segment.end) ? 0 : -1}>
+                <title>{segmentTitle(segment)}</title>
+              </path>
+            ))}
+            {pendingSegments.length === 2 && <path data-chan-path="pending-segment"
+              d={path(pendingSegments)} fill="none" stroke="var(--chan-segment)" strokeWidth="2.5"
+              strokeDasharray="7 4" strokeLinecap="round" strokeLinejoin="round"
+              pointerEvents="stroke" role="img" aria-label={pendingTitle}
+              tabIndex={visibleLine(pendingSegments[0], pendingSegments[1]) ? 0 : -1}>
+              <title>{pendingTitle}</title>
+            </path>}
           </>}
           {options.fx && data.fx.map((f) => (
             <g key={`${f.time}-${f.mark}`} {...interaction(f, 'fx')}>

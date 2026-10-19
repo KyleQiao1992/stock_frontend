@@ -1,0 +1,150 @@
+{
+  "scope": "有限保存样本的因果回放；不验证全部原图、理论证明、交易收益或线上行情",
+  "completionInput": "保存样本不伪造complete字段；最新unknown待后继K，证据时刻记后继K",
+  "prefixes": 4787,
+  "reports": [
+    {
+      "file": "hk00700-5m.json",
+      "prefixes": 884,
+      "appearances": 4,
+      "withdrawals": 1,
+      "reappearances": 1,
+      "timingChanges": 0,
+      "violations": []
+    },
+    {
+      "file": "hk00700-day.json",
+      "prefixes": 298,
+      "appearances": 2,
+      "withdrawals": 0,
+      "reappearances": 0,
+      "timingChanges": 0,
+      "violations": []
+    },
+    {
+      "file": "sh000001-day.json",
+      "prefixes": 268,
+      "appearances": 6,
+      "withdrawals": 3,
+      "reappearances": 3,
+      "timingChanges": 0,
+      "violations": []
+    },
+    {
+      "file": "sh510300-day.json",
+      "prefixes": 287,
+      "appearances": 8,
+      "withdrawals": 4,
+      "reappearances": 4,
+      "timingChanges": 0,
+      "violations": []
+    },
+    {
+      "file": "sh510300-week.json",
+      "prefixes": 260,
+      "appearances": 1,
+      "withdrawals": 0,
+      "reappearances": 0,
+      "timingChanges": 0,
+      "violations": []
+    },
+    {
+      "file": "sh600519-day.json",
+      "prefixes": 291,
+      "appearances": 0,
+      "withdrawals": 0,
+      "reappearances": 0,
+      "timingChanges": 0,
+      "violations": []
+    },
+    {
+      "file": "sh603818-15m.json",
+      "prefixes": 783,
+      "appearances": 4,
+      "withdrawals": 1,
+      "reappearances": 1,
+      "timingChanges": 0,
+      "violations": []
+    },
+    {
+      "file": "sh603818-30m.json",
+      "prefixes": 293,
+      "appearances": 5,
+      "withdrawals": 2,
+      "reappearances": 2,
+      "timingChanges": 0,
+      "violations": []
+    },
+    {
+      "file": "sh603818-5m.json",
+      "prefixes": 308,
+      "appearances": 0,
+      "withdrawals": 0,
+      "reappearances": 0,
+      "timingChanges": 0,
+      "violations": []
+    },
+    {
+      "file": "sh603818-60m.json",
+      "prefixes": 285,
+      "appearances": 2,
+      "withdrawals": 1,
+      "reappearances": 1,
+      "timingChanges": 0,
+      "violations": []
+    },
+    {
+      "file": "sh603818-day.json",
+      "prefixes": 286,
+      "appearances": 2,
+      "withdrawals": 1,
+      "reappearances": 1,
+      "timingChanges": 0,
+      "violations": []
+    },
+    {
+      "file": "sh603818-week.json",
+      "prefixes": 259,
+      "appearances": 2,
+      "withdrawals": 0,
+      "reappearances": 0,
+      "timingChanges": 0,
+      "violations": []
+    },
+    {
+      "file": "sz000001-day.json",
+      "prefixes": 285,
+      "appearances": 1,
+      "withdrawals": 0,
+      "reappearances": 0,
+      "timingChanges": 0,
+      "violations": []
+    }
+  ],
+  "rollingWindow": {
+    "explicitlyClosedSynthetic": true,
+    "period": "day",
+    "limit": 300,
+    "interpretation": "确认依据K来自本次窗口复算，不是该段跨窗口首次观测时刻",
+    "changedOriginExamples": [
+      {
+        "observedAt": 308,
+        "windowStart": "K9",
+        "id": "segment-17-73",
+        "basisK": 106
+      },
+      {
+        "observedAt": 316,
+        "windowStart": "K17",
+        "id": "segment-25-49",
+        "basisK": 82
+      },
+      {
+        "observedAt": 316,
+        "windowStart": "K17",
+        "id": "segment-49-73",
+        "basisK": 106
+      }
+    ]
+  }
+}

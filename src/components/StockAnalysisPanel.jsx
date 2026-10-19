@@ -3,6 +3,29 @@ import { Card, CardContent } from './ui/card';
 import StockNewsPanel from './StockNewsPanel';
 
 const price = (n) => Number.isFinite(n) ? n.toFixed(2) : '—';
+function ChanSegments({ data }) {
+  const segments = data.segments ?? [];
+  const pending = data.pendingSegments ?? [];
+  const dateAt = (time) => data.dates[time - 1] ?? '—';
+  const pointText = (point) => `${dateAt(point.time)} @ ${price(point.price)}`;
+  return <section aria-label="线段结构" className="rounded-xl border border-slate-200 p-4">
+    <h4 className="font-semibold text-slate-900">线段结构 · {segments.length} 段已确认</h4>
+    <p className="mt-2 text-xs text-slate-500">当前图的旧笔经特征序列划段；紫色实线为已确认段，虚线为发展中参考。新行情导致笔回退时，线段同步重算。</p>
+    <p className="mt-2 text-xs text-slate-500">确认依据K由本次历史窗口复算，不等于系统当时已观测或发出信号；窗口起点变化也会重划历史。最新K未明确收盘时不用于确认。</p>
+    {data.definition.segmentHistoryStart && <p className="mt-1 text-xs text-slate-500">线段历史起点：{data.definition.segmentHistoryStart}</p>}
+    {segments.length > 0 ? <details className="mt-2 text-xs">
+      <summary className="cursor-pointer text-sky-600">查看各段起终点与确认依据K</summary>
+      <ol className="mt-2 space-y-3">
+        {segments.map((segment, i) => <li key={segment.id} className="rounded-lg bg-slate-50 p-3">
+          <p className="font-medium">{i + 1}. {segment.direction === 'up' ? '向上' : '向下'} · {segment.stroke_count} 笔</p>
+          <p>起点：{pointText(segment.start)}</p><p>终点：{pointText(segment.end)}</p>
+          <p>确认依据K：{dateAt(segment.confirmed_time)}</p>
+        </li>)}
+      </ol>
+    </details> : <p className="mt-2 text-xs text-slate-500">当前历史尚无满足确认条件的线段。</p>}
+    {pending.length === 2 && <p className="mt-2 text-xs text-slate-500">发展中参考：{pointText(pending[0])} → {pointText(pending[1])}；尚未确认。</p>}
+  </section>;
+}
 function ChanOutlook({ data }) {
   const outlook = data.outlook;
   if (!outlook?.ok) return <p className="py-6 text-sm text-slate-500">当前历史中尚无可绘制的笔结构。</p>;
@@ -55,6 +78,7 @@ function ChanOutlook({ data }) {
         <p>{c.invalidation}</p>
       </section>
     </div>
+    <ChanSegments data={data} />
     {scenarios.length > 0 && <>
       <div data-chan-watch-intro>
         <h4 className="font-semibold text-slate-900">买卖点观察 · 接下来三种情景</h4>
@@ -117,6 +141,7 @@ export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, co
           <details className="mb-4 rounded-xl border border-slate-200 p-3 text-xs leading-5 text-slate-500">
             <summary className="cursor-pointer font-medium text-slate-700">计算口径与范围</summary>
             <p className="mt-2">逐根处理K线包含和三K分型；按第62、65、77课旧笔口径，顶底分型之间至少有一根不属于任一分型的独立K线。笔被新K线破坏时回退重算。黄色折线连接笔端及当前动态极值，三角标记笔端参考，圆点标记分型。</p>
+            <p className="mt-2">线段采用第65、67、71、77、78课特征序列规则及第81课更正；前三笔须有价格重叠，已确认段由后续完成笔的破坏条件确认，端点与确认依据K分别记录。来源未明确最新K已收盘时，须等待后继同周期K才将前K计为已完成；来源明确未收盘的K不能用于确认。线段使用本次请求窗口的完整笔序列，不受主图最近50笔展示上限影响；这不代表已经识别递归中枢或更高走势级别。</p>
             <p className="mt-2">蓝框为滑动笔重叠区：连续前三笔固定ZG/ZD，保持核心区间最多延伸九笔，按滑动窗口绘制；这是本地参考算法，不是原文按次级别走势递归定义的中枢。动态末端不参与笔端参考和重叠区。</p>
             <p className="mt-2">计算只使用本次加载的本地历史窗口，窗口之前的数据未参与，起笔前的历史会裁去；窗口截断可能影响起笔及后续结构，缩放只改变可见范围。新行情可能修正近端结构。</p>
             <p className="mt-2">买卖点观察按第17、20、21、101课列出后续条件，不代表已识别或已确认；当前未执行走势级别、递归中枢、背驰及一二三类买卖点的自动识别。二类观察须从真实一类买卖点后的次级别走势出发，不能用任意前低或前高替代。</p>

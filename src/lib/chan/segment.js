@@ -1,11 +1,11 @@
 /**
  * 线段：第 67 / 71 / 77 / 78 课定义，以及第 81 课对第二种情况的更正。
  * 只接收已确认笔端。特征元素是反向笔，不是三笔价格折线的转折猜测。
- * https://eczsc.com/originals/67
- * https://eczsc.com/originals/71
- * https://eczsc.com/originals/77
- * https://eczsc.com/originals/78
- * https://eczsc.com/originals/81
+ * https://blog.sina.com.cn/s/blog_486e105c01000c16.html
+ * https://blog.sina.com.cn/s/blog_486e105c01000c8i.html
+ * https://blog.sina.com.cn/s/blog_486e105c01000cih.html
+ * https://blog.sina.com.cn/s/blog_486e105c01000cio.html
+ * https://blog.sina.com.cn/s/blog_486e105c01000cmz.html
  */
 
 const opposite = (direction) => direction === 'up' ? 'down' : 'up';
@@ -109,7 +109,7 @@ function boundaryProof(points, start, end, direction) {
 
   // 第 71 课：首笔即破坏，第三笔继续越过首笔结束位置，反向段成立。
   // 前后两元素不能包含合并，否则会抹去这一转折力度。
-  const firstBreak = direction === 'up' ? center.low < left.low : center.high > left.high;
+  const firstBreak = direction === 'up' ? center.low <= left.low : center.high >= left.high;
   if (!gap && firstBreak) {
     for (let index = end + 2; index < points.length; index++) {
       const resumes = direction === 'up' ? points[index].price >= points[end].price
@@ -157,19 +157,23 @@ function makeSegment(points, start, proof, direction) {
     high_point: { ...highPoint }, low_point: { ...lowPoint },
     confirmation: proof.mode, feature_gap: proof.gap,
     confirmedIndex: proof.confirmedIndex,
-    confirmed_time: points[proof.confirmedIndex].time,
+    // A pen endpoint occurs before the candle which fixes it. Confirmation
+    // belongs to the latest required evidence candle, never to the old pivot.
+    confirmed_endpoint_time: points[proof.confirmedIndex].time,
+    confirmed_time: Math.max(...points.slice(0, proof.confirmedIndex + 1)
+      .map((p) => p.confirmed_time ?? p.time)),
   };
 }
 
 /**
  * 返回完成段及未破坏的最后一段参考端点。
- * 奇数笔、前三笔重合、顶底方向正确均为硬条件。含未确认笔的输入在该点截断。
+ * 奇数笔、前三笔重合、顶底方向正确均为硬条件。确认状态缺失也在该点截断。
  * 开始点之前不足三笔重合的片段不伪造为线段；此后各完成段共享分界点。
  */
 export function buildSegments(biPoints) {
   const points = [];
   for (const point of biPoints) {
-    if (point.confirmed === false || !Number.isFinite(point.price)) break;
+    if (point.confirmed !== true || !Number.isFinite(point.price)) break;
     const previous = points.at(-1);
     if (previous && (previous.mark === point.mark || previous.time >= point.time)) break;
     points.push(point);
@@ -207,7 +211,7 @@ export function buildSegments(biPoints) {
     if (!pendingEnd || (direction === 'up' ? points[index].price > pendingEnd.price
       : points[index].price < pendingEnd.price)) pendingEnd = points[index];
   }
-  const pending = pendingEnd
+  const pending = pendingEnd && firstThreeOverlap(points, start)
     ? [{ ...points[start], confirmed: false }, { ...pendingEnd, confirmed: false }] : [];
   return { segments, pending };
 }

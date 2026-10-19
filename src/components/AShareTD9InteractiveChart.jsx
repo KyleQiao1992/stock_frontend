@@ -3804,9 +3804,10 @@ export function Chart({
   }
 
   return (
+    <div className="relative min-w-0 w-full overflow-hidden rounded-2xl border bg-white shadow-sm">
     <div
       ref={scrollRef}
-      className={`relative w-full overscroll-contain overflow-x-auto rounded-2xl border bg-white p-3 shadow-sm ${drawingEnabled ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"}`}
+      className={`relative w-full overscroll-contain overflow-x-auto p-3 ${drawingEnabled ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing"}`}
       onMouseDown={(e) => {
         if (drawingTool === "brush") return;
         if (drawingEnabled) return;
@@ -4427,7 +4428,7 @@ export function Chart({
             const selected = clampedSelectedIndex === guideIndex;
             const guidePositive = guideRow.close >= guideRow.open;
             return (
-              <g>
+              <g pointerEvents="none">
                 <line x1={gx} x2={gx} y1={chart.margin.top} y2={chart.macdTop + chart.macdH} stroke={selected ? "var(--chart-ink)" : "var(--chart-ink-3)"} strokeDasharray="3 3" opacity={selected ? "0.85" : "0.65"} />
                 <circle cx={gx} cy={chart.y(guideRow.close)} r="3" fill={guidePositive ? "var(--chart-up)" : "var(--chart-down)"} />
                 <rect x={boxX} y={boxY} width={labelW} height={labelH} rx="6" fill="var(--chart-surface)" stroke={selected ? "var(--chart-ink)" : "var(--chart-grid)"} />
@@ -4516,7 +4517,8 @@ export function Chart({
           {showMacdSignals ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
         </button>
       </div>
-      <ChanLegend data={chanData} options={chanOptions} />
+    </div>
+      <div className="px-3 pb-1"><ChanLegend data={chanData} options={chanOptions} /></div>
       {fractalDetail && <ChanFractalDetail detail={fractalDetail} kind={selectedFractal.kind} onClose={() => setSelectedFractal(null)} />}
     </div>
   );
@@ -8826,7 +8828,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showPatterns, setShowPatterns] = useState(false);
-  const [chanOptions, setChanOptions] = useState({ enabled: true, bi: true, zs: true, fx: true });
+  const [chanOptions, setChanOptions] = useState({ enabled: true, bi: true, segment: true, zs: true, fx: true });
   const [analysisTab, setAnalysisTab] = useState("financial");
   const chanData = useMemo(() => analyzeChan(rawRows, period), [rawRows, period]);
 

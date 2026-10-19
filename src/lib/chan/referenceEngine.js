@@ -88,14 +88,32 @@ function checkBi(bars) {
   };
 }
 
+/**
+ * A supplied K is not a closed K merely because its current range makes a pen.
+ * Explicit completion is observed on that K. Without that flag, only seeing the
+ * next K of this same input period establishes completion, at the next K's time.
+ * An explicit false stays unconfirmed until the data source revises the flag.
+ */
+function strokeConfirmationTime(stroke, candles) {
+  const formedIndex = candles.findIndex((candle) => candle.time === stroke.formed_time);
+  const firstEvidence = stroke.start.elements[0].from;
+  let knownAt = stroke.formed_time;
+  for (let index = firstEvidence; index <= formedIndex; index++) {
+    const candle = candles[index];
+    if (candle.complete === false) return null;
+    const completedAt = candle.complete === true ? candle.time : candles[index + 1]?.time;
+    if (completedAt === undefined) return null;
+    knownAt = Math.max(knownAt, completedAt);
+  }
+  return knownAt;
+}
+
 /** Analyze ascending candles without reading reference fixtures or symbol names. */
 export function analyzeReferenceCandles(candles) {
-  let raw = [];
   let unfinished = [];
   let strokes = [];
   for (let idx = 0; idx < candles.length; idx++) {
     const candle = candles[idx];
-    raw.push(candle);
     if (unfinished.length < 2) {
       // The left window boundary has no earlier non-containing pair from which
       // lesson 65 can determine direction. Skip that unresolved prefix rather
@@ -119,13 +137,13 @@ export function analyzeReferenceCandles(candles) {
               && (start.mark === 'D' ? point.low < start.low : point.high > start.high)) start = point;
           }
           const result = checkBi(unfinished.filter((b) => b.time >= start.elements[0].time));
-          if (result.stroke) strokes.push(result.stroke);
+          if (result.stroke) strokes.push({ ...result.stroke, formed_time: candle.time });
           unfinished = result.remaining;
         }
       } else {
         const result = checkBi(unfinished);
         unfinished = result.remaining;
-        if (result.stroke) strokes.push(result.stroke);
+        if (result.stroke) strokes.push({ ...result.stroke, formed_time: candle.time });
         const last = strokes.at(-1);
         const broken = last.direction === 'up' ? unfinished.at(-1).high > last.high
           : unfinished.at(-1).low < last.low;
@@ -137,19 +155,35 @@ export function analyzeReferenceCandles(candles) {
         }
       }
     }
-    strokes = strokes.slice(-MAX_BI_COUNT);
-    if (strokes.length) raw = raw.filter((c) => c.time >= strokes[0].start.elements[0].time);
   }
 
-  const allFx = strokes.flatMap((s) => s.fx.slice(1));
+  // Keep one complete sequence for this request. The display cap must not reset
+  // the segment origin, or hide older strokes needed after a cascading rollback.
+  const displayedStrokes = strokes.slice(-MAX_BI_COUNT);
+  const raw = displayedStrokes.length
+    ? candles.filter((c) => c.time >= displayedStrokes[0].start.elements[0].time) : [...candles];
+  const allFx = displayedStrokes.flatMap((s) => s.fx.slice(1));
   for (const point of findFractals(unfinished)) {
     if (!allFx.length || point.time > allFx.at(-1).time) allFx.push(point);
   }
   const simple = ({ time, price, mark }) => ({ time, price, mark, idx: candles.findIndex((c) => c.time === time) });
   const drawableFx = [...new Map(allFx.map((p) => [p.time, p])).values()];
-  const biPoints = strokes.length ? [...strokes.map((s) => s.start), strokes.at(-1).end] : [];
+  const biPoints = displayedStrokes.length
+    ? [...displayedStrokes.map((s) => s.start), displayedStrokes.at(-1).end] : [];
   const fx = drawableFx.map(simple);
-  const bi = biPoints.map(simple);
+  // A subsequent opposite stroke confirms its starting endpoint in the current
+  // valid sequence only after its raw K evidence has completed. Record when that
+  // completion becomes known, rather than its historical pivot/formation K.
+  // Confirmation is not a permanent lock: the upstream engine can retract more
+  // than one stroke, so every call rebuilds these points from the surviving path.
+  const segmentBi = strokes.map((stroke) => {
+    const confirmedTime = strokeConfirmationTime(stroke, candles);
+    return { ...simple(stroke.start), confirmed: confirmedTime !== null,
+      confirmed_time: confirmedTime };
+  });
+  if (strokes.length) segmentBi.push({ ...simple(strokes.at(-1).end),
+    confirmed: false, confirmed_time: null });
+  const bi = displayedStrokes.length ? segmentBi.slice(-(displayedStrokes.length + 1)) : [];
   const fractalDetails = Object.fromEntries([['fx', drawableFx], ['bi', biPoints]].map(([kind, points]) => [
     kind, Object.fromEntries(points.map((point) => [point.time, buildFractalDetail(candles, point)])),
   ]));
@@ -166,9 +200,11 @@ export function analyzeReferenceCandles(candles) {
     }
     pending.push(bi.at(-1), { time: extreme.time,
       price: up ? extreme.high : extreme.low, mark: up ? 'G' : 'D',
-      idx: candles.findIndex((c) => c.time === extreme.time), extremeTime: extreme.time, confirmed: false });
+      idx: candles.findIndex((c) => c.time === extreme.time), extremeTime: extreme.time,
+      confirmed: false, confirmed_time: null });
   }
-  return { candles: raw, fx, bi, pending, strokeCount: strokes.length, fractalDetails };
+  return { candles: raw, fx, bi, segmentBi, pending, strokeCount: displayedStrokes.length,
+    segmentStrokeCount: strokes.length, fractalDetails };
 }
 
 /** Match the reference client's requested history, then let the engine trim it. */
