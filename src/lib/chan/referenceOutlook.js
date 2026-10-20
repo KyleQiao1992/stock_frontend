@@ -1,11 +1,9 @@
-export function referenceTime(value) {
-  if (typeof value === 'number' || /^\d+$/.test(String(value))) return Number(value);
-  const text = String(value ?? '').replace(' ', 'T');
-  return Date.parse(`${text.length === 10 ? `${text}T00:00:00` : text}+08:00`) / 1000;
-}
+import { parseKlineTime } from '../klinePeriod.js';
+
+export const referenceTime = parseKlineTime;
 
 const price = (v) => Number.isFinite(v) ? v.toFixed(2) : '—';
-const normalizedPeriod = (period) => ({ 101: 'day', 102: 'week', 103: 'month', 5: '5m', 15: '15m', 30: '30m', 60: '60m' })[period] || period;
+const normalizedPeriod = (period) => ({ 101: 'day', 102: 'week', 103: 'month', 5: '5m', 15: '15m', 30: '30m', 60: '60m', 240: '240m' })[period] || period;
 function formatTime(value, period) {
   const time = referenceTime(value);
   return Number.isFinite(time) ? new Date((time + 8 * 3600) * 1000).toISOString()

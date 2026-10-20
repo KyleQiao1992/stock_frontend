@@ -6,6 +6,9 @@ import TradeSideHistoryPanel from "./TradeSideHistoryPanel";
 import MarketIndexStrip from "./MarketIndexStrip";
 import { fetchTradeSideHistory, formatTradeQuoteTime } from "../lib/tradeSideHistory.js";
 import { tencentAshareVolumeToLots } from "../lib/tencentAshareVolume.js";
+import { fetchAshareMinuteKline } from "../lib/ashareMinuteKline.js";
+import { fetchAshareFourHourKline } from "../lib/ashareFourHourKline.js";
+import { isMinutePeriod, isFourHourPeriod, periodLabel, klineDateLabel, klineTradingDate } from "../lib/klinePeriod.js";
 import ChanOverlay from "./ChanOverlay";
 import ChanFractalDetail from "./ChanFractalDetail";
 import ChanLegend from "./ChanLegend";
@@ -50,24 +53,37 @@ const THEME_ICONS = { light: Sun, dark: Moon, system: Monitor };
 const AgentMarkdownMessage = lazy(() => import("./AgentMarkdownMessage"));
 
 const PERIOD_OPTIONS = [
+  { value: "5", label: "5分钟", ashareOnly: true },
+  { value: "30", label: "30分钟", ashareOnly: true },
+  { value: "240", label: "4小时", ashareOnly: true },
   { value: "101", label: "日K" },
   { value: "102", label: "周K" },
   { value: "103", label: "月K" },
 ];
 const EMPTY_LIST = Object.freeze([]);
 
-const DISPLAY_COUNT_OPTIONS = [20, 30, 45, 60, 80, 120, 180, 240, 360, 500];
+const DISPLAY_COUNT_OPTIONS = [20, 30, 45, 60, 80, 120, 180, 240, 360, 500, 600, 800, 1000, 1200, 1500, 2000];
 
-function stepDisplayCount(current, direction, maxCount = 500) {
-  const availableMax = Math.max(20, Math.min(500, Number(maxCount) || 500));
-  const options = DISPLAY_COUNT_OPTIONS.filter((count) => count <= availableMax);
-  if (!options.includes(availableMax)) options.push(availableMax);
-  options.sort((a, b) => a - b);
-  const value = Number(current) || 80;
+function getDisplayCountOptions(maxCount, current) {
+  const availableMax = Math.max(1, Math.floor(Number(maxCount) || DISPLAY_COUNT_OPTIONS.at(-1)));
+  // Include the source's actual history length, even when it is between presets.
+  return [...new Set([...DISPLAY_COUNT_OPTIONS, Number(current), availableMax]
+    .filter((count) => count > 0 && count <= availableMax))].sort((a, b) => a - b);
+}
+
+function stepDisplayCount(current, direction, maxCount) {
+  const options = getDisplayCountOptions(maxCount, current);
+  const value = Math.min(Number(current) || 80, options.at(-1));
   if (direction < 0) {
     return [...options].reverse().find((count) => count < value) ?? options[0];
   }
   return options.find((count) => count > value) ?? options[options.length - 1];
+}
+
+function chartBarTimeLabel(row) {
+  return row?.periodStart && row?.periodEnd
+    ? `${row.periodStart}–${row.periodEnd.slice(11)}`
+    : row?.date || "";
 }
 
 
@@ -301,9 +317,10 @@ function toTencentSymbol(code) {
 }
 
 function periodToTencent(period) {
+  if (period === "101") return "day";
   if (period === "102") return "week";
   if (period === "103") return "month";
-  return "day";
+  throw new Error(`不支持的K线周期：${period}`);
 }
 
 function adjustToTencent(adjust) {
@@ -382,12 +399,39 @@ async function loadTencentText(url, timeout = 12000) {
   }
 }
 
+async function loadTencentMinuteJson(url) {
+  const varName = `tencent_minute_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const requestUrl = `${url}${url.includes("?") ? "&" : "?"}_var=${encodeURIComponent(varName)}`;
+  try {
+    return await loadScriptVariable(requestUrl, varName);
+  } catch (scriptError) {
+    try {
+      return await loadTencentText(requestUrl);
+    } catch (fetchError) {
+      throw new Error(`腾讯分钟行情请求失败：${scriptError.message}；${fetchError.message}`, { cause: fetchError });
+    }
+  }
+}
+
+async function fetchMinuteChart({ code, symbol = toTencentSymbol(code), name, period, adjust = "1", isIndex = false }) {
+  const result = isFourHourPeriod(period)
+    ? await fetchAshareFourHourKline({ code, symbol, adjust, isIndex, loadJson: loadTencentMinuteJson })
+    : await fetchAshareMinuteKline({ code, symbol, period, adjust, isIndex, limit: 1320, loadJson: loadTencentMinuteJson });
+  return {
+    ...result,
+    ...extractTencentQuoteMeta(result.quotePayload, code, symbol),
+    code,
+    name: name || extractTencentName(result.quotePayload, code, symbol),
+  };
+}
+
 function buildTencentKlineUrl({ code, period, adjust, limit, varName }) {
   const symbol = toTencentSymbol(code);
   const ktype = periodToTencent(period);
   const adj = adjustToTencent(adjust);
   const param = `${symbol},${ktype},,,${limit}${adj ? `,${adj}` : ""}`;
-  return `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=${encodeURIComponent(varName)}&param=${encodeURIComponent(param)}`;
+  const endpoint = adj ? "fqkline/get" : "kline/kline";
+  return `https://ifzq.gtimg.cn/appstock/app/${endpoint}?_var=${encodeURIComponent(varName)}&param=${encodeURIComponent(param)}`;
 }
 
 function parseTencentKlineResponse(res, { code, period, adjust }) {
@@ -398,9 +442,9 @@ function parseTencentKlineResponse(res, { code, period, adjust }) {
   if (!node) throw new Error("腾讯行情返回中未找到该股票数据");
 
   const keyCandidates = [];
-  if (adj === "qfq") keyCandidates.push(`qfq${ktype}`, `${ktype}qfq`, "qfqday", "qfqweek", "qfqmonth");
-  if (adj === "hfq") keyCandidates.push(`hfq${ktype}`, `${ktype}hfq`, "hfqday", "hfqweek", "hfqmonth");
-  keyCandidates.push(ktype, "day", "week", "month");
+  if (adj === "qfq") keyCandidates.push(`qfq${ktype}`, `${ktype}qfq`);
+  if (adj === "hfq") keyCandidates.push(`hfq${ktype}`, `${ktype}hfq`);
+  keyCandidates.push(ktype);
 
   let arr = null;
   for (const key of keyCandidates) {
@@ -473,8 +517,8 @@ async function fetchTencentKline({ code, period, adjust, limit }) {
   throw new Error(`腾讯行情也失败：${errors.slice(-2).join("；")}`);
 }
 
-function extractTencentQuoteMeta(res, code) {
-  const symbol = toTencentSymbol(code);
+function extractTencentQuoteMeta(res, code, explicitSymbol) {
+  const symbol = explicitSymbol || toTencentSymbol(code);
   const node = res?.data?.[symbol] || res?.data?.[code] || res?.[symbol] || res?.[code];
   const qt = node?.qt?.[symbol] || node?.qt?.[code];
   if (!Array.isArray(qt)) return { marketCap: null, floatMarketCap: null, peRatio: null, turnoverRate: null, volumeRatio: null, outerVol: null, innerVol: null };
@@ -494,6 +538,9 @@ function extractTencentQuoteMeta(res, code) {
   const totalMarketCapYi = Number(qt[45]);
   const volumeRatio = Number(qt[49]);
   return {
+    latestPrice: Number(qt[3]) > 0 ? Number(qt[3]) : null,
+    pct: Number.isFinite(Number(qt[32])) && String(qt[32] ?? "").trim() ? Number(qt[32]) : null,
+    dailyVolume: sideVolume(qt[6]),
     marketCap: Number.isFinite(totalMarketCapYi) ? totalMarketCapYi * 100000000 : null,
     floatMarketCap: Number.isFinite(floatMarketCapYi) ? floatMarketCapYi * 100000000 : null,
     peRatio: Number.isFinite(peRatio) ? peRatio : null,
@@ -506,8 +553,8 @@ function extractTencentQuoteMeta(res, code) {
   };
 }
 
-function extractTencentName(res, code) {
-  const symbol = toTencentSymbol(code);
+function extractTencentName(res, code, explicitSymbol) {
+  const symbol = explicitSymbol || toTencentSymbol(code);
   const node = res?.data?.[symbol] || res?.data?.[code] || res?.[symbol] || res?.[code];
   const qt = node?.qt?.[symbol] || node?.qt?.[code];
   if (Array.isArray(qt) && qt[1]) return qt[1];
@@ -515,6 +562,7 @@ function extractTencentName(res, code) {
 }
 
 async function fetchAshareKline({ code, period, adjust, limit }) {
+  if (isMinutePeriod(period)) return fetchMinuteChart({ code, period, adjust });
   const secid = guessSecid(code);
   if (!secid) throw new Error("请输入 6 位 A 股代码，例如 600519、000001、300750。");
 
@@ -582,8 +630,8 @@ async function fetchAshareKline({ code, period, adjust, limit }) {
   }
 
   throw new Error(
-    `行情数据暂时不可用。已优先尝试腾讯行情，并用东方财富兜底，但都失败了。请稍后重试，或换一只股票代码。最后错误：${errors
-      .slice(-3)
+    `行情数据暂时不可用。已优先尝试腾讯行情，并用东方财富兜底，但都失败了。请稍后重试，或换一只股票代码。失败原因：${[errors[0], ...errors.slice(-2)]
+      .filter(Boolean)
       .join("；")}`,
   );
 }
@@ -591,6 +639,7 @@ async function fetchAshareKline({ code, period, adjust, limit }) {
 // 指数取数。腾讯 kline/kline 为主（不复权，显式 symbol，_var 脚本方式绕过跨域），东方财富兜底。
 // 注意：指数不能用 fqkline/get（需复权参数，否则返回 bad params），也不能用 guessSecid/toTencentSymbol（会把上证/科创判成深市）。
 async function fetchIndexKline({ secid, tencentSymbol, name, period = "101", limit = 500 }) {
+  if (isMinutePeriod(period)) return fetchMinuteChart({ code: tencentSymbol.slice(2), symbol: tencentSymbol, name, period, isIndex: true });
   const errors = [];
   const ktype = periodToTencent(period);
 
@@ -1276,7 +1325,7 @@ const KLINE_PATTERN_DETAILS = {
     definition: "上涨波段顶部出现向上跳开的极小实体或近似十字星，代表上涨动能停顿，后续若转弱容易形成顶部反转。",
     conditions: [
       "位于上升波段顶部",
-      "开盘通常在前一日收盘价之上",
+      "开盘通常在前一根 K 线收盘价之上",
       "实体很小或开盘价等于收盘价",
       "上下影线较短且长度相差不大",
     ],
@@ -1289,11 +1338,11 @@ const KLINE_PATTERN_DETAILS = {
     definition: "下跌波段底部出现向下跳开的极小实体或近似十字星（启明星），代表下跌动能趋于完结，后续若转强容易形成底部反转。是黄昏之星的镜像。",
     conditions: [
       "位于下降波段底部",
-      "开盘通常在前一日收盘价之下",
+      "开盘通常在前一根 K 线收盘价之下",
       "实体很小或开盘价等于收盘价",
       "上下影线较短且长度相差不大",
     ],
-    note: "与黄昏之星形状完全相同，仅趋势(下跌底部)与开盘方向(低开)相反；标在小星本身，不要求次日确认阳线。",
+    note: "与黄昏之星形状完全相同，仅趋势(下跌底部)与开盘方向(低开)相反；标在小星本身，不要求后一根确认阳线。",
   },
   "长腿车夫": {
     bias: "看跌",
@@ -1304,7 +1353,7 @@ const KLINE_PATTERN_DETAILS = {
     conditions: [
       "位于上升波段顶部",
       "上影线和下影线都很长，均至少为实体的 2 倍",
-      "上下长影是「当日震荡幅度相当大」的表现",
+      "上下长影是本根 K 线震荡幅度相当大的表现",
       "实体较小，实体颜色不是硬条件",
     ],
     note: "当前实现要求实体不超过整根振幅 15%，上下影线各自至少为前一根振幅的一半（pRange×0.5），以排除绝对很小的迷你十字。",
@@ -1316,7 +1365,7 @@ const KLINE_PATTERN_DETAILS = {
     definition: "下跌波段底部出现实体极小、上下影都很长且相近的单根 K 线，盘中多空反复拉扯后收回原位，底部多空分歧剧烈、止跌迹象增强。是长腿车夫的镜像。",
     conditions: [
       "位于下降波段底部",
-      "开盘价在前一日收盘价之下",
+      "开盘价在前一根 K 线收盘价之下",
       "上影线与下影线都很长，且长度相差不大",
       "实体非常小或开盘价等于收盘价",
     ],
@@ -1367,7 +1416,7 @@ const KLINE_PATTERN_DETAILS = {
     type: "顶部反转",
     status: "已核对",
     exampleKey: "bearishEngulfing",
-    definition: "上涨波段顶部由中长阳线和高开的长阴线组成，第二根阴线收盘跌破前一根开盘价，说明前一日涨幅被完全吞没，顶部抛压更强。",
+    definition: "上涨波段顶部由中长阳线和高开的长阴线组成，第二根阴线收盘跌破前一根开盘价，说明前一根涨幅被完全吞没，顶部抛压更强。",
     conditions: [
       "位于上升波段顶部",
       "第一根 K 线为中阳或长阳线",
@@ -2155,7 +2204,7 @@ function calcVolumePriceState(rows) {
     state = "weakDown";
     label = "下跌缩量，抛压可能减弱";
   }
-  return { ready: true, state, text: `${label}；近5日涨跌 ${percentText(priceChange5)}，量能比 ${latestValid(volRatio, 2)}` };
+  return { ready: true, state, text: `${label}；近5根K线涨跌 ${percentText(priceChange5)}，量能比 ${latestValid(volRatio, 2)}` };
 }
 
 function buildTrendPrediction(rawRows) {
@@ -2305,9 +2354,9 @@ function InfoTip({ text }) {
   );
 }
 
-// 近期换手率走势小图：腾讯日K不返回单日换手率，这里用 当日成交量 / 最新成交量 × 当前换手率
-// 反推（短期内流通股本近似不变），故最后一个点恰好等于面板显示的换手率。
-function TurnoverSparkline({ rows, currentRate, days = 30 }) {
+// 日K以最新交易日校准历史换手率；分钟/4小时只看最近交易日，
+// 用当日累计成交量校准各根/各分段，不能把一根的量当作全天量。
+function TurnoverSparkline({ rows, currentRate, days = 30, period = "101", dailyVolume }) {
   const [open, setOpen] = useState(false);
   const [popupLeft, setPopupLeft] = useState(0);
   const [hoverIdx, setHoverIdx] = useState(null);
@@ -2329,8 +2378,10 @@ function TurnoverSparkline({ rows, currentRate, days = 30 }) {
 
   const series = useMemo(() => {
     if (!Array.isArray(rows) || rows.length === 0) return [];
-    const recent = rows.slice(-days);
-    const latestVol = Number(rows[rows.length - 1]?.volume);
+    const latestDay = klineTradingDate(rows.at(-1)?.date);
+    const periodRows = isMinutePeriod(period) ? rows.filter((row) => klineTradingDate(row.date) === latestDay) : rows;
+    const recent = periodRows.slice(-days);
+    const latestVol = isMinutePeriod(period) ? Number(dailyVolume) : Number(rows[rows.length - 1]?.volume);
     const calibratable =
       Number.isFinite(currentRate) && currentRate > 0 && Number.isFinite(latestVol) && latestVol > 0;
     return recent
@@ -2341,7 +2392,7 @@ function TurnoverSparkline({ rows, currentRate, days = 30 }) {
         return value == null ? null : { date: r.date, value };
       })
       .filter(Boolean);
-  }, [rows, currentRate, days]);
+  }, [rows, currentRate, days, period, dailyVolume]);
 
   const W = 200;
   const H = 56;
@@ -2382,7 +2433,7 @@ function TurnoverSparkline({ rows, currentRate, days = 30 }) {
           setOpen((v) => !v);
         }}
         className="ml-1 inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-500 hover:bg-slate-100"
-        title="近期换手率走势"
+        title={isFourHourPeriod(period) ? "当日分段换手率" : "近期换手率走势"}
       >
         <Activity className="h-3 w-3" />
       </button>
@@ -2391,7 +2442,7 @@ function TurnoverSparkline({ rows, currentRate, days = 30 }) {
           {hasSeries ? (
             <>
               <span className="mb-1 flex items-center justify-between text-[11px]">
-                <span className="text-slate-500">{hoverIdx == null ? `近${series.length}日换手率` : active.date}</span>
+                <span className="text-slate-500">{hoverIdx == null ? `${isMinutePeriod(period) ? "当日" : ""}近${series.length}根K线换手率` : active.date}</span>
                 <span className="font-medium text-slate-700">{active.value.toFixed(2)}%</span>
               </span>
               <svg
@@ -2429,7 +2480,7 @@ function TurnoverSparkline({ rows, currentRate, days = 30 }) {
             </>
           ) : (
             <span className="block text-[11px] leading-5 text-slate-500">
-              当前仅取得 {series.length} 个交易日的换手率数据，至少需要 2 日才能绘制趋势线。
+              当前取得 {series.length} 根K线的换手率数据，至少需要 2 根才能绘制趋势线。
             </span>
           )}
         </span>
@@ -2491,13 +2542,13 @@ function TrendPredictionPanel({ prediction }) {
     <div className="mt-5 border-t pt-4">
       <div className="mb-2 flex items-center text-sm font-semibold text-slate-700">
         趋势预测面板
-        <InfoTip text="面板由规则评分和历史相似状态统计组成：先计算趋势分，再统计历史上类似趋势/九转状态后未来 5/10/20 日的表现。" />
+        <InfoTip text="面板由规则评分和历史相似状态统计组成：先计算趋势分，再统计历史上类似趋势/九转状态后未来 5/10/20 根K线的表现。" />
       </div>
       <div className="rounded-2xl bg-slate-50 p-3">
         <div className="flex items-center justify-between">
           <span className="inline-flex items-center text-sm text-slate-500">
             综合判断
-            <InfoTip text="综合判断来自趋势分：初始 50 分；收盘价高于/低于 MA20、均线多空排列、MA20 与 MA60 关系、当前九转阶段、未回补断层方向、当日涨跌幅过大等因素共同加减分。分数越高表示历史规则下偏强，越低表示偏弱。" />
+            <InfoTip text="综合判断来自趋势分：初始 50 分；收盘价高于/低于 MA20、均线多空排列、MA20 与 MA60 关系、当前九转阶段、未回补断层方向、本根涨跌幅过大等因素共同加减分。分数越高表示历史规则下偏强，越低表示偏弱。" />
           </span>
           <span
             className={
@@ -2536,31 +2587,31 @@ function TrendPredictionPanel({ prediction }) {
           <div className="rounded-xl bg-slate-50 p-2">
             <div className="inline-flex items-center">
               断层状态
-              <InfoTip text="断层按相邻 K 线判断：向上断层为当日最低价高于前一根最高价；向下断层为当日最高价低于前一根最低价。若后续价格完全回到缺口边界，则视为已回补；未回补向上断层偏强，未回补向下断层偏弱。" />
+              <InfoTip text="断层按相邻 K 线判断：向上断层为本根最低价高于前一根最高价；向下断层为本根最高价低于前一根最低价。若后续价格完全回到缺口边界，则视为已回补；未回补向上断层偏强，未回补向下断层偏弱。" />
             </div>
             <div className="mt-1 text-slate-500">{prediction.gapText}</div>
           </div>
           <div className="rounded-xl bg-slate-50 p-2">
             <div className="inline-flex items-center">
               量价关系
-              <InfoTip text="量价关系比较近 5 日价格涨跌与近 5 日/20 日平均成交量。上涨放量偏确认趋势，上涨缩量可能是量价背离；下跌放量说明抛压偏强，下跌缩量说明抛压可能减弱。" />
+              <InfoTip text="量价关系比较近 5 根K线价格涨跌与近 5 根/20 根K线平均成交量。上涨放量偏确认趋势，上涨缩量可能是量价背离；下跌放量说明抛压偏强，下跌缩量说明抛压可能减弱。" />
             </div>
             <div className="mt-1 text-slate-500">{prediction.volumePriceText}</div>
           </div>
           <ProbabilityLine
-            label="未来5日历史上涨概率"
+            label="未来5根K线历史上涨概率"
             stat={prediction.stats5}
-            info="计算历史上与当前状态相似的样本：趋势分类相同、九转方向相同、九转阶段桶相同（早期 1-5、后期 6-9、或无九转），然后统计这些样本 5 个交易日后收盘价高于当前收盘价的比例，以及平均收益。"
+            info="计算历史上与当前状态相似的样本：趋势分类相同、九转方向相同、九转阶段桶相同（早期 1-5、后期 6-9、或无九转），然后统计这些样本 5 根K线后收盘价高于当前收盘价的比例，以及平均收益。"
           />
           <ProbabilityLine
-            label="未来10日历史上涨概率"
+            label="未来10根K线历史上涨概率"
             stat={prediction.stats10}
-            info="计算逻辑同未来 5 日，但观察窗口改为 10 个交易日后。上涨概率=历史相似样本中 10 日后收益为正的比例；平均收益=这些样本的 10 日收益均值。"
+            info="计算逻辑同未来 5 根K线，但观察窗口改为 10 根K线后。上涨概率=历史相似样本中 10 根K线后收益为正的比例；平均收益=这些样本的 10 根K线收益均值。"
           />
           <ProbabilityLine
-            label="未来20日历史上涨概率"
+            label="未来20根K线历史上涨概率"
             stat={prediction.stats20}
-            info="计算逻辑同未来 5/10 日，但观察窗口改为 20 个交易日后。该指标更偏中短期，不适合解释为短线明日涨跌预测。"
+            info="计算逻辑同未来 5/10 根K线，但观察窗口改为 20 根K线后。观察跨度随当前K线周期变化。"
           />
           <div className="rounded-xl bg-slate-50 p-2">
             <div className="inline-flex items-center">
@@ -2793,7 +2844,7 @@ function buildTrendChecklist(rawRows) {
       title: "MA20 / MA60 是否向上",
       ok: maUp,
       status: maUp ? "是" : "否",
-      detail: `MA20 ${latestValid(ma20)} vs 5日前 ${latestValid(ma20Prev)}；MA60 ${latestValid(ma60)} vs 5日前 ${latestValid(ma60Prev)}`,
+      detail: `MA20 ${latestValid(ma20)} vs 5根K线前 ${latestValid(ma20Prev)}；MA60 ${latestValid(ma60)} vs 5根K线前 ${latestValid(ma60Prev)}`,
     },
     {
       key: "maBull",
@@ -2807,7 +2858,7 @@ function buildTrendChecklist(rawRows) {
       title: "价格是否持续创新高",
       ok: isNew20High,
       status: isNew20High ? "是" : "否",
-      detail: `当前收盘 ${latestValid(latest.close)}；近20日前高 ${latestValid(prev20High)}；近60日前高 ${latestValid(prev60High)}`,
+      detail: `当前收盘 ${latestValid(latest.close)}；近20根K线前高 ${latestValid(prev20High)}；近60根K线前高 ${latestValid(prev60High)}`,
     },
     {
       key: "macd",
@@ -3027,10 +3078,20 @@ function SuspensionRiskBadge({ risk }) {
             {risk.metrics ? (
               <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-slate-100 pt-2 text-[11px] text-slate-500">
                 <div>近3日偏离：<b className="text-slate-700">{fmtSignedPct(m.dev3)}</b>（异波±{m.abnThreshold}%）</div>
-                <div>同向异波：<b className="text-slate-700">{m.abnEventCount10}/{m.reqCount}次</b></div>
+                {m.abnWindowDays < 3 && <div>近{m.abnWindowDays}日偏离（3日内）：<b className="text-slate-700">{fmtSignedPct(m.abnDeviation)}</b>（异波±{m.abnThreshold}%）</div>}
+                <div>同向异波{risk.eventCountApproximate ? "（估算）" : ""}：<b className="text-slate-700">{m.abnEventCount10}/{m.reqCount}次</b></div>
                 <div>10日偏离：<b className="text-slate-700">{fmtSignedPct(m.dev10)}</b>（严重+{m.serious?.dev10?.up}%）</div>
                 <div>30日偏离：<b className="text-slate-700">{fmtSignedPct(m.dev30)}</b>（严重+{m.serious?.dev30?.up}%）</div>
+                {[["dev10", 10], ["dev30", 30]].map(([key, maxDays]) => {
+                  const window = m.seriousWindows?.[key];
+                  return window?.days < maxDays && window.severity + 1e-11 >= 0.8 ? (
+                    <div key={key} className="col-span-2">近{window.days}日偏离（{maxDays}日内）：<b className="text-slate-700">{fmtSignedPct(window.deviation)}</b>（严重+{m.serious?.[key]?.up}%/{m.serious?.[key]?.down}%）</div>
+                  ) : null;
+                })}
               </div>
+            ) : null}
+            {risk.calculationBasis === "daily-trading-reference-close" ? (
+              <div className="mt-2 text-[10px] text-slate-400">涨跌幅按交易参考前收价计算，已剔除除权除息价差。</div>
             ) : null}
             <div className="mt-2 text-[10px] text-slate-400">
               基准：{risk.benchmark} · 截至 {risk.asOf} · 仅供参考，非投资建议
@@ -3167,7 +3228,7 @@ function ChartToolbar({
           type="button"
           className="inline-flex h-7 w-7 items-center justify-center rounded-lg hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35"
           onClick={() => onDisplayCountChange(stepDisplayCount(displayCount, 1, maxDisplayCount))}
-          disabled={displayCount >= Math.min(500, maxDisplayCount || 500)}
+          disabled={displayCount >= (maxDisplayCount || DISPLAY_COUNT_OPTIONS.at(-1))}
           title="缩小：显示更多 K 线"
           aria-label="缩小，显示更多K线"
         >
@@ -3185,7 +3246,7 @@ function ChartToolbar({
           type="button"
           className="inline-flex h-7 w-7 items-center justify-center rounded-lg hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35"
           onClick={() => onDisplayCountChange(stepDisplayCount(displayCount, -1, maxDisplayCount))}
-          disabled={displayCount <= DISPLAY_COUNT_OPTIONS[0]}
+          disabled={displayCount <= Math.min(DISPLAY_COUNT_OPTIONS[0], maxDisplayCount || DISPLAY_COUNT_OPTIONS[0])}
           title="放大：显示更少 K 线"
           aria-label="放大，显示更少K线"
         >
@@ -3424,6 +3485,7 @@ function KlinePatternPopover({ selected, onClose }) {
 export function Chart({
   rows,
   fullRows = rows,
+  period = "101",
   visibleGaps,
   showGaps,
   expanded = false,
@@ -3666,7 +3728,7 @@ export function Chart({
       }
     }
     const xStep = plotW / Math.max(safeRows.length, 1);
-    const candleW = Math.max(3, Math.min(13, xStep * 0.58));
+    const candleW = Math.min(13, xStep * 0.58);
     const x = (i) => margin.left + i * xStep + xStep / 2;
     const y = (price) => margin.top + ((yMax - price) / Math.max(yMax - yMin, 1)) * mainH;
     const vy = (vol) => margin.top + mainH + gap + (1 - vol / maxVol) * volH;
@@ -3674,24 +3736,29 @@ export function Chart({
     const macdTop = volBase + gap;
     const macdBase = macdTop + macdH / 2;
     const macdY = (value) => macdBase - (value / macdAbsMax) * (macdH * 0.46);
-    const ma5 = movingAverage(safeRows, 5);
-    const ma10 = movingAverage(safeRows, 10);
-    const ma20 = movingAverage(safeRows, 20);
-    const ma60 = movingAverage(safeRows, 60);
-    const ma120 = movingAverage(safeRows, 120);
+    const fullIndexByDate = new Map(fullSafeRows.map((row, index) => [row.date, index]));
+    const projectAverage = (period, pick) => {
+      const averages = movingAverage(fullSafeRows, period, pick);
+      return safeRows.map((row) => averages[fullIndexByDate.get(row.date)] ?? null);
+    };
+    const ma5 = projectAverage(5);
+    const ma10 = projectAverage(10);
+    const ma20 = projectAverage(20);
+    const ma60 = projectAverage(60);
+    const ma120 = projectAverage(120);
     // BBI 多空指标 = (MA3 + MA6 + MA12 + MA24) / 4，一条兼顾快慢的平均线，常作多空分界。
-    const bbiMa3 = movingAverage(safeRows, 3);
-    const bbiMa6 = movingAverage(safeRows, 6);
-    const bbiMa12 = movingAverage(safeRows, 12);
-    const bbiMa24 = movingAverage(safeRows, 24);
+    const bbiMa3 = projectAverage(3);
+    const bbiMa6 = projectAverage(6);
+    const bbiMa12 = projectAverage(12);
+    const bbiMa24 = projectAverage(24);
     const bbi = safeRows.map((_, i) => {
       const parts = [bbiMa3[i], bbiMa6[i], bbiMa12[i], bbiMa24[i]];
       if (!parts.every(Number.isFinite)) return null;
       return (parts[0] + parts[1] + parts[2] + parts[3]) / 4;
     });
     // 成交量均量线（与价格均线同算法，取 volume）：MA5/MA10 均量。
-    const volMa5 = movingAverage(safeRows, 5, (r) => r.volume);
-    const volMa10 = movingAverage(safeRows, 10, (r) => r.volume);
+    const volMa5 = projectAverage(5, (r) => r.volume);
+    const volMa10 = projectAverage(10, (r) => r.volume);
     // 均量线金叉/死叉：MA5均量 上穿 MA10均量 记为金叉(golden)，下穿记为死叉(death)。
     const volMaCrosses = [];
     for (let i = 1; i < safeRows.length; i += 1) {
@@ -3849,6 +3916,8 @@ export function Chart({
       )}
       <div className="relative" style={{ width: `${width}px` }}>
         <svg
+          data-kline-period={period}
+          data-kline-count={safeRows.length}
           viewBox={`0 0 ${width} ${height}`}
           style={{ width: `${width}px`, height: `${height}px` }}
           className="cursor-pointer select-none"
@@ -3926,14 +3995,14 @@ export function Chart({
             </clipPath>
           </defs>
           {/* 顶部信息在窄图中分行；价格覆盖层不得进入文字区域。 */}
-          <text x={width - chart.margin.right - 6} y={compactHeader ? 98 : 58} textAnchor="end" fontSize="13" fill="var(--chart-ink-3)">
-            {hover.date} 开 {hover.open.toFixed(2)} 高 {hover.high.toFixed(2)} 低 {hover.low.toFixed(2)} 收 {hover.close.toFixed(2)}
+          <text x={width - chart.margin.right - 6} y={compactHeader ? 98 : 58} textAnchor="end" fontSize={isFourHourPeriod(period) ? "12" : "13"} fill="var(--chart-ink-3)">
+            {periodLabel(period)} · {chartBarTimeLabel(hover)}{hover.complete === false ? " 盘中" : ""} 开 {hover.open.toFixed(2)} 高 {hover.high.toFixed(2)} 低 {hover.low.toFixed(2)} 收 {hover.close.toFixed(2)}
           </text>
           <text x={chart.margin.left} y="19" fontSize="13" fill={positive ? "var(--chart-up)" : "var(--chart-down)"}>
-            涨跌 {Number.isFinite(hover.change) ? hover.change.toFixed(2) : "-"} ({Number.isFinite(hover.pct) ? hover.pct.toFixed(2) : "-"}%)
+            {isMinutePeriod(period) ? "本根涨跌" : "涨跌"} {Number.isFinite(hover.change) ? hover.change.toFixed(2) : "-"} ({Number.isFinite(hover.pct) ? hover.pct.toFixed(2) : "-"}%)
           </text>
           <text x={chart.margin.left + 190} y="19" fontSize="13" fill="var(--chart-ink-3)">
-            成交量 {formatNumber(hover.volume)}{showTurnover ? ` 换手 ${Number.isFinite(hover.turnover) ? hover.turnover.toFixed(2) : "-"}%` : ""}
+            成交量 {formatNumber(hover.volume)}{showTurnover ? ` 换手 ${Number.isFinite(hover.turnover) ? `${hover.turnover.toFixed(2)}%` : "—"}` : ""}
           </text>
           {currentTD && (
             <g>
@@ -4116,9 +4185,11 @@ export function Chart({
           const volBarH = chart.volBase - volTop;
           const baseOpacity = klineFaded ? 0.07 : 1;
           return (
-            <g key={`${d.date}-${i}`}>
-              <line x1={cx} x2={cx} y1={highY} y2={lowY} stroke={color} strokeWidth="1" opacity={baseOpacity} />
-              <rect x={cx - chart.candleW / 2} y={bodyTop} width={chart.candleW} height={bodyH} fill={up ? color : "var(--chart-surface)"} stroke={color} strokeWidth="1" opacity={baseOpacity} />
+            <g key={`${d.date}-${i}`} data-kline-time={d.date} data-kline-complete={d.complete === true ? "true" : d.complete === false ? "false" : undefined}
+              data-kline-start={d.periodStart} data-kline-end={d.periodEnd}
+              data-kline-source-time={d.lastSourceTime} data-kline-source-count={d.sourceBarCount}>
+              <line x1={cx} x2={cx} y1={highY} y2={lowY} stroke={color} strokeWidth={Math.min(1, chart.candleW)} opacity={baseOpacity} />
+              <rect x={cx - chart.candleW / 2} y={bodyTop} width={chart.candleW} height={bodyH} fill={up ? color : "var(--chart-surface)"} stroke={color} strokeWidth={Math.min(1, chart.candleW)} opacity={baseOpacity} />
               <rect x={cx - chart.candleW / 2} y={volTop} width={chart.candleW} height={Math.max(1, volBarH)} fill={color} opacity={0.45} />
               {d.tdUp != null && (
                 <g>
@@ -4410,15 +4481,14 @@ export function Chart({
 
         {Array.from({ length: xLabels }).map((_, i) => {
           const idx = xLabels === 1 ? 0 : Math.min(safeRows.length - 1, Math.round((safeRows.length - 1) * (i / (xLabels - 1))));
-          return <text key={`x-${i}`} x={chart.x(idx)} y={height - 10} textAnchor="middle" fontSize="11" fill="var(--chart-ink-3)">{safeRows[idx].date.slice(5)}</text>;
+          return <text key={`x-${i}`} x={chart.x(idx)} y={height - 10} textAnchor="middle" fontSize={isMinutePeriod(period) ? "9" : "11"} fill="var(--chart-ink-3)">{klineDateLabel(safeRows[idx].date, { compact: true })}</text>;
         })}
 
         {guideIndex != null &&
           guideRow &&
           (() => {
             const gx = chart.x(guideIndex);
-            const weekday = ['日', '一', '二', '三', '四', '五', '六'][new Date(`${guideRow.date}T00:00:00Z`).getUTCDay()];
-            const label = `${guideRow.date.split('-').join('/')} 周${weekday}`;
+            const label = klineDateLabel(guideRow.date, { weekday: true });
             const labelW = Math.max(76, label.length * 7 + 16);
             const labelH = 20;
             const minX = chart.margin.left;
@@ -8802,6 +8872,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   });
   const [watchlistStyle, setWatchlistStyle] = useState("cards");
   const [period, setPeriod] = useState("101");
+  const [loadedPeriod, setLoadedPeriod] = useState("101");
+  const periodRef = useRef(period);
   const adjust = "1";
   const [displayCount, setDisplayCount] = useState(80);
   const [tdMode, setTdMode] = useState("current");
@@ -8830,7 +8902,19 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const [showPatterns, setShowPatterns] = useState(false);
   const [chanOptions, setChanOptions] = useState({ enabled: true, bi: true, segment: true, zs: true, fx: true });
   const [analysisTab, setAnalysisTab] = useState("financial");
-  const chanData = useMemo(() => analyzeChan(rawRows, period), [rawRows, period]);
+  const chanData = useMemo(() => analyzeChan(rawRows, loadedPeriod), [rawRows, loadedPeriod]);
+  const minuteView = isMinutePeriod(loadedPeriod);
+
+  function handlePeriodChange(nextPeriod) {
+    if (nextPeriod === period) return;
+    loadRunRef.current += 1;
+    periodRef.current = nextPeriod;
+    setPeriod(nextPeriod);
+    setRawRows([]);
+    setLoading(false);
+    setError("");
+    clearDrawings();
+  }
 
   function handleChanOptionsChange(next) {
     // Only entering Chan mode selects 80 bars; later viewport changes stay independent.
@@ -8846,8 +8930,10 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   }
 
   const fullRowsWithTD = useMemo(() => calcTD9(rawRows, tdMode), [rawRows, tdMode]);
-  const displayStartIndex = Math.max(0, fullRowsWithTD.length - displayCount,
-    chanOptions.enabled ? chanData.historyOffset : 0);
+  const visibleDisplayCount = fullRowsWithTD.length ? Math.min(displayCount, fullRowsWithTD.length) : displayCount;
+  const displayCountOptions = getDisplayCountOptions(fullRowsWithTD.length, visibleDisplayCount);
+  // The analysis window controls overlays, not how much price history can be viewed.
+  const displayStartIndex = Math.max(0, fullRowsWithTD.length - visibleDisplayCount);
   const rows = useMemo(() => fullRowsWithTD.slice(displayStartIndex), [fullRowsWithTD, displayStartIndex]);
   const visibleGaps = useMemo(() => {
     const displayEndIndex = fullRowsWithTD.length - 1;
@@ -8864,7 +8950,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const latest = rows.length > 0 ? rows[rows.length - 1] : null;
   const latestColor = latest && latest.close >= latest.open ? "text-red-600" : "text-green-700";
   const displayedPrice = market === "hk" && Number.isFinite(meta.latestPrice) ? meta.latestPrice : latest?.close;
-  const displayedPct = market === "hk" && Number.isFinite(meta.quotePct) ? meta.quotePct : latest?.pct;
+  const displayedPct = (market === "hk" || minuteView) && Number.isFinite(meta.quotePct) ? meta.quotePct : latest?.pct;
   const prediction = useMemo(() => buildTrendPrediction(rawRows), [rawRows]);
   const rsiInfo = useMemo(() => calcRSIState(rawRows), [rawRows]);
   const vwapInfo = useMemo(() => market === "ashare" ? calcVWAPState(rawRows) : {
@@ -9159,10 +9245,10 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
             return { code, name: activeMeta.name };
           }
           const detail = requestedMarket === "ashare"
-            ? await fetchAshareKline({ code, period, adjust, limit: 60 })
+            ? await fetchAshareKline({ code, period: "101", adjust, limit: 60 })
             : requestedMarket === "hk"
-              ? await fetchHkKline({ code, period, adjust, limit: 60 })
-              : await fetchUsKlineCached({ symbol: code, period, adjust, limit: 60 });
+              ? await fetchHkKline({ code, period: "101", adjust, limit: 60 })
+              : await fetchUsKlineCached({ symbol: code, period: "101", adjust, limit: 60 });
           return {
             code: detail.code || code,
             name: detail.name || code,
@@ -9348,8 +9434,9 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     }
   }
 
-  async function load(overrideCode) {
-    if (isStandaloneMarket) return;
+  async function load(overrideCode, { refresh = false } = {}) {
+    if (isStandaloneMarket || market !== marketRef.current) return;
+    const requestPeriod = periodRef.current;
     const runId = ++loadRunRef.current;
     const rawTargetCode = typeof overrideCode === "string" ? overrideCode : currentCode;
     const targetIndex = market === "ashare" ? TREND_INDICES.find((index) => index.tencentSymbol === rawTargetCode.trim().toLowerCase()) : null;
@@ -9362,20 +9449,22 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     }
     setLoading(true);
     setError("");
-    setFinancialError("");
-    setFinancialInfo(null);
-    tradeSideRequestRef.current += 1;
-    setTradeSideError("");
-    setTradeSideInfo(null);
-    setProfileError("");
-    setProfileInfo(null);
-    setFinancialLoading(false);
-    setTradeSideLoading(false);
-    setProfileLoading(false);
-    setSuspensionRisk(null);
+    if (!refresh) {
+      setFinancialError("");
+      setFinancialInfo(null);
+      tradeSideRequestRef.current += 1;
+      setTradeSideError("");
+      setTradeSideInfo(null);
+      setProfileError("");
+      setProfileInfo(null);
+      setFinancialLoading(false);
+      setTradeSideLoading(false);
+      setProfileLoading(false);
+      setSuspensionRisk(null);
+    }
     try {
       const result = targetIndex
-        ? { ...await fetchIndexKline({ ...targetIndex, period, limit: 1000 }), code: targetIndex.code, name: targetIndex.name }
+        ? { ...await fetchIndexKline({ ...targetIndex, period: requestPeriod, limit: 1000 }), code: targetIndex.code, name: targetIndex.name }
         : market === "ashare"
         ? await (async () => {
           let normalized = onlyDigits(rawTargetCode);
@@ -9395,7 +9484,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
           }
           return fetchAshareKline({
             code: normalized,
-            period,
+            period: requestPeriod,
             adjust,
             limit: Math.max(5000, Number(displayCount) + 120),
           });
@@ -9419,7 +9508,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
             }
             return fetchHkKline({
               code: normalized,
-              period,
+              period: requestPeriod,
               adjust,
               limit: Math.min(1000, Math.max(600, Number(displayCount) + 120)),
             });
@@ -9431,13 +9520,14 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
           }
           return fetchUsKlineCached({
             symbol: normalized,
-            period,
+            period: requestPeriod,
             adjust,
             limit: Math.max(5000, Number(displayCount) + 120),
           });
         })();
-      if (runId !== loadRunRef.current) return;
+      if (runId !== loadRunRef.current || requestPeriod !== periodRef.current || market !== marketRef.current) return;
       setRawRows(result.klines);
+      setLoadedPeriod(requestPeriod);
       setMeta({
         code: result.code,
         name: result.name,
@@ -9461,8 +9551,11 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
         boardLot: Number.isFinite(result.boardLot) ? result.boardLot : null,
         latestPrice: Number.isFinite(result.latestPrice) ? result.latestPrice : null,
         quotePct: Number.isFinite(result.pct) ? result.pct : null,
+        dailyVolume: Number.isFinite(result.dailyVolume) ? result.dailyVolume : null,
         sourceInfo: result.sourceInfo || "",
       });
+
+      if (refresh) return;
 
       if (market === "ashare" && !targetIndex) {
         setFinancialLoading(true);
@@ -9590,13 +9683,27 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   useEffect(() => {
     // 当前市场还没有选中标的时（首屏 / 首次进入该市场），交给 loadDefaultWatchlist 选第一只；
     // 这里只负责在已有选中代码时重新拉取。
-    if (isStandaloneMarket || !currentCode) return undefined;
+    const target = meta.tencentSymbol || meta.code || currentCode;
+    if (isStandaloneMarket || !target) return undefined;
     const timer = window.setTimeout(() => {
-      load();
+      load(target);
     }, 0);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [market]);
+  }, [market, period]);
+
+  useEffect(() => {
+    if (market !== "ashare" || !isMinutePeriod(period) || loadedPeriod !== period || loading || !rawRows.length || !meta.code) return undefined;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      const time = new Date(Date.now() + 8 * 3600000);
+      const day = time.getUTCDay(), minute = time.getUTCHours() * 60 + time.getUTCMinutes();
+      if (day === 0 || day === 6 || !((minute >= 570 && minute <= 691) || (minute >= 780 && minute <= 901))) return;
+      void load(meta.tencentSymbol || meta.code, { refresh: true });
+    }, 60_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [market, period, loadedPeriod, meta.code, meta.tencentSymbol, rawRows.length, loading]);
 
   useEffect(() => {
     if (isStandaloneMarket) return undefined;
@@ -9699,7 +9806,12 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                       if (active) return;
                       marketRef.current = tab.value;
                       loadRunRef.current += 1;
+                      if (tab.value !== "ashare" && isMinutePeriod(periodRef.current)) {
+                        periodRef.current = "101";
+                        setPeriod("101");
+                      }
                       setMarket(tab.value);
+                      setLoading(false);
                       clearDrawings();
                       setError("");
                       setFinancialError("");
@@ -9969,13 +10081,13 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                 </div>
               )}
             </div>
-            <select value={period} onChange={(e) => setPeriod(e.target.value)} disabled={isStandaloneMarket} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
-              {PERIOD_OPTIONS.map((item) => (
+            <select aria-label="K线周期" value={period} onChange={(e) => handlePeriodChange(e.target.value)} disabled={isStandaloneMarket} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
+              {PERIOD_OPTIONS.filter((item) => !item.ashareOnly || market === "ashare").map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
               ))}
             </select>
-            <select value={displayCount} onChange={(e) => setDisplayCount(Number(e.target.value))} disabled={isStandaloneMarket} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400" title="也可在 K 线图内滚动鼠标滚轮调整">
-              {DISPLAY_COUNT_OPTIONS.map((count) => <option key={count} value={count}>近{count}根</option>)}
+            <select value={visibleDisplayCount} onChange={(e) => setDisplayCount(Number(e.target.value))} disabled={isStandaloneMarket} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400" title="也可在 K 线图内滚动鼠标滚轮调整">
+              {displayCountOptions.map((count) => <option key={count} value={count}>近{count}根</option>)}
             </select>
             <select value={tdMode} onChange={(e) => setTdMode(e.target.value)} disabled={isStandaloneMarket} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
               <option value="current">只显示当前九转</option>
@@ -10006,6 +10118,12 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
           }} />}
           </div>}
         </div>
+
+        {market === "ashare" && isFourHourPeriod(period) && (
+          <p role="note" data-four-hour-rule className="px-1 text-xs leading-5 text-slate-500">
+            4小时由腾讯30分钟K线合成，按北京时间 09:30–13:30、13:30–15:00 分段；午休计入时钟，尾段在收盘时截断。
+          </p>
+        )}
 
         {error && (
           <div className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-700">
@@ -10042,9 +10160,15 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                 {latest && (
                   <div className="quote-metrics mt-4 grid gap-x-4 gap-y-2 text-sm">
                     <div className="quote-metric quote-metric-wide flex justify-between">
-                      <span>日期</span>
-                      <span>{latest.date}{latest.isIntradayEstimate ? " 盘中" : ""}</span>
+                      <span>{isFourHourPeriod(loadedPeriod) ? "K线区间" : minuteView ? "K线时间" : "日期"}</span>
+                      <span className="text-right">{chartBarTimeLabel(latest)}{latest.isIntradayEstimate || latest.complete === false ? " 盘中" : ""}</span>
                     </div>
+                    {isFourHourPeriod(loadedPeriod) && meta.quoteTime ? (
+                      <div className="quote-metric quote-metric-wide flex justify-between gap-3">
+                        <span>行情时间</span>
+                        <span className="text-right">{meta.quoteTime}</span>
+                      </div>
+                    ) : null}
                     {market === "hk" && meta.quoteTime ? (
                       <div className="quote-metric quote-metric-wide quote-snapshot flex justify-between gap-3">
                         <span>腾讯快照</span>
@@ -10052,17 +10176,17 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                       </div>
                     ) : null}
                     <div className="quote-metric flex justify-between">
-                      <span>{market === "hk" ? "最新" : "收盘"}</span>
+                      <span>{market === "hk" ? "最新" : minuteView ? "本根收盘" : "收盘"}</span>
                       <span className={`font-semibold ${latestColor}`}>{displayedPrice.toFixed(2)}</span>
                     </div>
                     <div className="quote-metric flex justify-between">
-                      <span>涨跌幅</span>
+                      <span>{minuteView ? Number.isFinite(meta.quotePct) ? "当日涨跌幅" : "本根涨跌幅" : "涨跌幅"}</span>
                       <span className={displayedPct >= 0 ? "text-red-600" : "text-green-700"}>
                         {Number.isFinite(displayedPct) ? displayedPct.toFixed(2) : "-"}%
                       </span>
                     </div>
                     <div className="quote-metric flex justify-between">
-                      <span>成交量</span>
+                      <span>{minuteView ? "本根成交量" : "成交量"}</span>
                       <span>{formatNumber(latest.volume)}</span>
                     </div>
                     {market === "hk" && Number.isFinite(meta.boardLot) ? (
@@ -10074,9 +10198,9 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                     {!isIndex && <>
                     <div className="quote-metric flex justify-between">
                       <span className="inline-flex items-center">
-                        换手率
+                        {minuteView ? "当日换手率" : "换手率"}
                         <InfoTip text={"换手率 = 某段时期成交量 ÷ 流通总股数 × 100%，反映流通性与活跃度。\n\n<3%  多数股票常态，3% 是活跃分界线\n3%～7%  相对活跃，较适合波段操作\n7%～10%  强势股，高度活跃\n10%～15%  顶部上升浪，大股本超10%多已临近见顶\n>15%  中小盘疯狂冲顶、分歧加大、上行空间有限，连续高换手后见大阴线宜减仓\n>20%  极少见，多为疯狂炒作的题材股\n\n高于10% 即属异常活跃，可结合顶部反转K线（吞没/乌云盖顶等）判断见顶。"} />
-                        <TurnoverSparkline rows={rawRows} currentRate={meta.turnoverRate} />
+                        <TurnoverSparkline rows={rawRows} currentRate={meta.turnoverRate} period={loadedPeriod} dailyVolume={meta.dailyVolume} />
                       </span>
                       <span>{Number.isFinite(meta.turnoverRate) ? `${meta.turnoverRate.toFixed(2)}%` : "-"}</span>
                     </div>
@@ -10126,7 +10250,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                     <div className="quote-metric quote-metric-wide flex justify-between">
                       <span className="inline-flex items-center">
                         RSI14
-                        <InfoTip text={"RSI = 100 − 100 ÷ (1 + 近14日平均涨幅 ÷ 近14日平均跌幅)，衡量涨跌动能强弱，取值 0～100。\n\n>75  高位过热，追高风险大，常见滞涨/回调\n60～75  强势区，多头动能占优\n40～60  中性震荡，方向不明\n30～40  弱势区，空头动能占优\n<30  低位超跌，易出现反弹，但下跌趋势中可长期钝化\n\n单看数值意义有限：强趋势中 RSI 会长时间贴在高位或低位（钝化），更实用的是「价格创新高而 RSI 未创新高」的顶背离，以及反向的底背离。"} />
+                        <InfoTip text={"RSI = 100 − 100 ÷ (1 + 近14根K线平均涨幅 ÷ 近14根K线平均跌幅)，衡量涨跌动能强弱，取值 0～100。\n\n>75  高位过热，追高风险大，常见滞涨/回调\n60～75  强势区，多头动能占优\n40～60  中性震荡，方向不明\n30～40  弱势区，空头动能占优\n<30  低位超跌，易出现反弹，但下跌趋势中可长期钝化\n\n单看数值意义有限：强趋势中 RSI 会长时间贴在高位或低位（钝化），更实用的是「价格创新高而 RSI 未创新高」的顶背离，以及反向的底背离。"} />
                       </span>
                       <span className="inline-flex items-baseline gap-1">
                         <span
@@ -10147,7 +10271,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                       <span className="inline-flex items-center">
                         {market === "ashare" ? "VWAP20" : "VWAP"}
                         {market !== "ashare" ? <span className="ml-1 text-xs text-slate-400">当日</span> : null}
-                        <InfoTip text={market !== "ashare" ? "当日 VWAP = 腾讯快照当日累计成交额 ÷ 累计成交股数，使用原始价格口径，不使用典型价近似。数据日期和时间见腾讯快照；非交易日显示最近交易日。切换日/周/月K不改变这个当日指标。\n\n右侧百分比是同一快照最新价相对当日 VWAP 的偏离。交易范围遵循腾讯行情源，不能保证与其他平台是否纳入竞价、盘前盘后等成交的口径一致。成交额或成交量缺失时不显示数值。" : "VWAP = Σ(单日均价 × 当日成交量) ÷ Σ成交量，即当前周期最近 20 根 K 线的成交量加权平均价（日K对应20个交易日，周K对应20周，月K对应20个月）；不足20根时用已有样本。这里是滚动指标，和美股常见的当日 VWAP 口径不同。\n\n股价 > VWAP  多数持仓浮盈，回踩 VWAP 常成支撑\n股价 < VWAP  多数持仓套牢，反弹到 VWAP 常遇解套抛压\n偏离 ±10% 以上  乖离偏大，有向均价回归的需求\n\n右侧百分比为收盘价相对 VWAP 的溢价（+）或折价（−）。日线数据没有分笔明细，单日均价优先用 成交额 ÷ 成交量；数据源未提供成交额时用 (最高+最低+收盘)/3 近似，近似结果与真实成交均价可能有差异，不能当作精确成本。"} />
+                        <InfoTip text={market !== "ashare" ? "当日 VWAP = 腾讯快照当日累计成交额 ÷ 累计成交股数，使用原始价格口径，不使用典型价近似。数据日期和时间见腾讯快照；非交易日显示最近交易日。切换日/周/月K不改变这个当日指标。\n\n右侧百分比是同一快照最新价相对当日 VWAP 的偏离。交易范围遵循腾讯行情源，不能保证与其他平台是否纳入竞价、盘前盘后等成交的口径一致。成交额或成交量缺失时不显示数值。" : "VWAP = Σ(本根均价 × 本根成交量) ÷ Σ成交量，即当前周期最近 20 根 K 线的成交量加权平均价（5分钟K对应100个交易分钟，30分钟K对应600个交易分钟，4小时K对应最近20个分段；日K对应20个交易日，周K对应20周，月K对应20个月）；不足20根时用已有样本。这里是滚动指标，和美股常见的当日 VWAP 口径不同。\n\n股价 > VWAP  多数持仓浮盈，回踩 VWAP 常成支撑\n股价 < VWAP  多数持仓套牢，反弹到 VWAP 常遇解套抛压\n偏离 ±10% 以上  乖离偏大，有向均价回归的需求\n\n右侧百分比为收盘价相对 VWAP 的溢价（+）或折价（−）。每根均价优先用 成交额 ÷ 成交量；数据源未提供成交额时用 (最高+最低+收盘)/3 近似，近似结果与真实成交均价可能有差异，不能当作精确成本。"} />
                       </span>
                       <span className="inline-flex items-baseline gap-1">
                         <span>{vwapInfo.ready ? latestValid(vwapInfo.value) : market === "ashare" ? "-" : "数据不足"}</span>
@@ -10300,7 +10424,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                         fullscreen={chartFullscreen}
                         onToggleFullscreen={() => setChartFullscreen((value) => !value)}
                         suspensionRisk={suspensionRisk}
-                        displayCount={displayCount}
+                        displayCount={visibleDisplayCount}
                         onDisplayCountChange={setDisplayCount}
                         maxDisplayCount={fullRowsWithTD.length}
                         chanOptions={chanOptions}
@@ -10312,13 +10436,14 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                   </div>
                   {rows.length > 0 ? (
                     <Chart
+                      period={loadedPeriod}
                       key={`inline-chart-${meta.tencentSymbol || `${market}-${meta.code}`}-${drawingTool}`}
                       showTurnover={!isIndex}
                       rows={rows}
                       fullRows={fullRowsWithTD}
                       visibleGaps={visibleGaps}
                       showGaps={showGaps}
-                      displayCount={displayCount}
+                      displayCount={visibleDisplayCount}
                       onDisplayCountChange={setDisplayCount}
                       drawingTool={drawingTool}
                       drawnLines={drawnLines}
@@ -10334,7 +10459,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                 </Card>
                 {((!isIndex && (market === "ashare" || market === "hk")) || chanOptions.enabled) && <StockAnalysisPanel
                   data={chanData} enabled={chanOptions.enabled} tab={analysisTab} onTabChange={setAnalysisTab}
-                  code={meta.code || currentCode} name={meta.name} period={period}
+                  code={meta.code || currentCode} name={meta.name} period={loadedPeriod}
                   market={market}
                   showFinancial={market === "ashare" && !isIndex}
                   financialReportContent={<FinancialReportPanel
@@ -10485,7 +10610,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                     fullscreen={chartFullscreen}
                     onToggleFullscreen={() => setChartFullscreen(false)}
                     suspensionRisk={suspensionRisk}
-                    displayCount={displayCount}
+                    displayCount={visibleDisplayCount}
                     onDisplayCountChange={setDisplayCount}
                     maxDisplayCount={fullRowsWithTD.length}
                     showPatterns={showPatterns}
@@ -10497,6 +10622,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
               </div>
               <div className="min-h-0 flex-1 overflow-auto p-4 md:p-5">
                 <Chart
+                  period={loadedPeriod}
                   key={`fullscreen-chart-${meta.tencentSymbol || `${market}-${meta.code}`}-${drawingTool}`}
                   showTurnover={!isIndex}
                   rows={rows}
@@ -10504,7 +10630,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                   visibleGaps={visibleGaps}
                   showGaps={showGaps}
                   expanded
-                  displayCount={displayCount}
+                  displayCount={visibleDisplayCount}
                   onDisplayCountChange={setDisplayCount}
                   drawingTool={drawingTool}
                   drawnLines={drawnLines}

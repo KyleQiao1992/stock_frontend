@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Card, CardContent } from './ui/card';
 import StockNewsPanel from './StockNewsPanel';
+import { periodLabel } from '../lib/klinePeriod.js';
 
 const price = (n) => Number.isFinite(n) ? n.toFixed(2) : '—';
 function ChanSegments({ data }) {
@@ -136,7 +137,7 @@ export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, co
           <span className="text-xs text-slate-500">{name} {code}</span>
         </div>
         {active === 'financial' ? financialReportContent : active === 'news' ? <div className="flex h-[520px] min-h-0 overflow-hidden"><StockNewsPanel code={code} market={market} /></div> : active === 'tradeSideHistory' ? tradeSideHistoryContent : <>
-          <p className="mb-4 text-xs leading-5 text-slate-500">{({'101':'日K','102':'周K','103':'月K'})[period] || period} · {data.definition.historyBars} 根历史计算 · 截至 {data.historyDates.at(-1) || '—'}；缩放不改变计算起点。</p>
+          <p className="mb-4 text-xs leading-5 text-slate-500">{periodLabel(period)} · {data.definition.historyBars} 根历史计算 · 截至 {data.historyDates.at(-1) || '—'}；缩放不改变计算起点。</p>
           {active === 'outlook' ? <ChanOutlook data={data} /> : <ChanEndpoints data={data} />}
           <details className="mb-4 rounded-xl border border-slate-200 p-3 text-xs leading-5 text-slate-500">
             <summary className="cursor-pointer font-medium text-slate-700">计算口径与范围</summary>

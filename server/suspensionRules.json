@@ -1,12 +1,12 @@
 {
-  "version": "locked-2026-06-25",
-  "_note": "停牌预警规则配置。阈值/指数均已对交易所现行原文锁定，依据见 docs/suspension-alert-rules.md。",
-  "deviationFormula": "(stockClose_end / stockPrevClose_start - 1) * 100 - (indexClose_end / indexPrevClose_start - 1) * 100",
+  "version": "reference-within-three-2026-10-20",
+  "_note": "停牌预警规则配置。本次除权、3日内窗口及沪市主板基准修正依据见 docs/suspension-alert-rules.md；其他板块配置未在本轮重新逐项审计。",
+  "deviationFormula": "(product(stockClose_t / tradingReferenceClose_t) - indexClose_end / indexPrevClose_start) * 100",
   "calc": {
-    "priceBasis": "no-adjust",
+    "priceBasis": "unadjusted-close-with-ex-rights-trading-reference",
     "windowUnit": "trading-days",
     "skipSuspendedDays": true,
-    "_deviationDef": "收盘价涨跌幅偏离值 = 单只证券涨跌幅 - 对应分类指数涨跌幅（整段窗口一次算）"
+    "_deviationDef": "区间个股复合涨跌幅减指数同期涨跌幅；除权除息日以前收参考价消除机械价差，不能直接跨除权比较原始收盘价，也不累加舍入后的日涨幅"
   },
   "resetRule": "严重异常波动/异常波动指标自交易所公布的次一交易日或复牌之日起重新计算（『最近一轮』需持久化上一次触发日）",
   "riskTiers": {
@@ -21,7 +21,7 @@
     "SH_MAIN": {
       "label": "沪市主板",
       "codePrefixes": ["60"],
-      "benchmarkIndex": { "name": "上证指数", "code": "000001" },
+      "benchmarkIndex": { "name": "上证A股指数", "code": "000002" },
       "abnormal": {
         "windowDays": 3,
         "deviationPct": 20,

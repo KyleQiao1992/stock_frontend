@@ -8,6 +8,8 @@
     "build": "vite build",
     "lint": "eslint .",
     "test": "node --test server/*.test.js src/lib/*.test.js src/lib/chan/*.test.js",
+    "test:minute-kline": "node scripts/checkMinuteKline.mjs",
+    "test:four-hour-kline": "node scripts/checkFourHourKline.mjs",
     "test:chan-reference": "node scripts/checkChanReference.mjs --report",
     "test:chan-render": "node scripts/checkChanReferenceRendering.mjs",
     "test:chan-segments": "node scripts/checkChanSegments.mjs",

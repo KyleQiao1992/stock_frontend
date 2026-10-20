@@ -3,12 +3,13 @@
 // 规则口径见 docs/suspension-alert-rules.md，阈值/对应指数配置见 server/suspensionRules.json。
 //
 // 前端用法：GET /api/suspension-alert?code=603678
-// 全部同步现算（个股不复权日K + 对应指数日K + 东财停复牌feed），不落库，结果 Redis 短缓存。
+// 全部同步现算（个股原始日K/除权参考价 + 对应指数日K + 东财停复牌feed），不落库，结果 Redis 短缓存。
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getRedisClient } from "./redisClient.js";
+import { parseEastmoneyDailyKline, parseTencentDailyKline, cumDeviation, abnormalWindow, abnormalDirection, deviationWindow, severityReached, countSameDirAbnormal } from "./suspensionPrices.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RULES = JSON.parse(readFileSync(path.join(__dirname, "suspensionRules.json"), "utf-8"));
@@ -66,28 +67,19 @@ function boardForCode(code) {
 }
 
 // ── 取数：日 K（不复权），东财 push2his 主、腾讯兜底 ──────────────────────
-// 偏离值只用到收盘价；push2his 在部分服务器网络不可达，腾讯(web.ifzq.gtimg.cn)兜底。
+// 保留原始收盘价、实际交易参考前收价；腾讯用同源除权事件恢复参考价。
 
-async function fetchKlineEastmoney(secid, limit) {
+async function fetchKlineEastmoney(secid, limit, isIndex, request) {
   for (const host of PUSH2HIS_HOSTS) {
     try {
       const url =
         `${host}/api/qt/stock/kline/get?secid=${encodeURIComponent(secid)}&ut=${EM_UT}` +
         "&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61" +
         `&klt=101&fqt=0&beg=0&end=20500101&lmt=${limit}`;
-      const r = await fetch(url, { headers: EM_HEADERS, signal: AbortSignal.timeout(8000) });
+      const r = await request(url, { headers: EM_HEADERS, signal: AbortSignal.timeout(8000) });
       if (!r.ok) continue;
       const j = await r.json();
-      const klines = j?.data?.klines;
-      if (!Array.isArray(klines) || !klines.length) continue;
-      // fields2: f51日期 f52开 f53收 f54高 f55低 f56量 f57额 f58振幅 f59涨跌幅 f60涨跌额 f61换手率
-      const rows = klines
-        .map((s) => {
-          const a = String(s).split(",");
-          return { date: a[0], close: Number(a[2]) };
-        })
-        .filter((row) => row.date && Number.isFinite(row.close));
-      if (rows.length) return { name: j.data.name || "", rows };
+      return parseEastmoneyDailyKline(j, { isIndex });
     } catch {
       /* 换下一个 host */
     }
@@ -95,33 +87,30 @@ async function fetchKlineEastmoney(secid, limit) {
   return null;
 }
 
-async function fetchKlineTencent(code, isIndex, limit) {
+async function fetchKlineTencent(code, isIndex, limit, request) {
   const sym = tencentSym(code, isIndex);
   try {
-    const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${sym},day,,,${limit},`;
-    const r = await fetch(url, {
+    const url = `https://ifzq.gtimg.cn/appstock/app/kline/kline?param=${sym},day,,,${limit}`;
+    const r = await request(url, {
       headers: { Referer: "https://gu.qq.com/", "User-Agent": EM_HEADERS["User-Agent"] },
       signal: AbortSignal.timeout(8000),
     });
     if (!r.ok) return null;
     const j = await r.json();
-    const d = j?.data?.[sym];
-    const arr = d?.day || d?.qfqday; // [date,open,close,high,low,volume,...]
-    if (!Array.isArray(arr) || !arr.length) return null;
-    const rows = arr
-      .map((x) => ({ date: x[0], close: Number(x[2]) }))
-      .filter((row) => row.date && Number.isFinite(row.close));
-    if (!rows.length) return null;
-    return { name: "", rows }; // 腾讯这条不带简称，ST 判定走前端传入的 name
-  } catch {
-    return null;
+    // Scope action parsing to the requested recent history; older unsupported
+    // allocation formats do not affect the current calculation windows.
+    const source = j?.data?.[sym];
+    if (Array.isArray(source?.day)) source.day = source.day.slice(-limit);
+    return parseTencentDailyKline(j, sym, { isIndex });
+  } catch (error) {
+    throw new Error(`腾讯日K/除权参考价不可用：${error.message}`, { cause: error });
   }
 }
 
-async function fetchDailyKline(code, { isIndex = false, limit = 60 } = {}) {
-  const viaEm = await fetchKlineEastmoney(isIndex ? indexSecid(code) : stockSecid(code), limit);
+export async function fetchDailyKline(code, { isIndex = false, limit = 60, request = fetch } = {}) {
+  const viaEm = await fetchKlineEastmoney(isIndex ? indexSecid(code) : stockSecid(code), limit, isIndex, request);
   if (viaEm) return viaEm;
-  return fetchKlineTencent(code, isIndex, limit);
+  return fetchKlineTencent(code, isIndex, limit, request);
 }
 
 // ── 取数：东财两市停复牌 feed（已公告停牌，前瞻） ─────────────────────────
@@ -166,64 +155,6 @@ async function fetchSuspendFeed() {
   return map;
 }
 
-// ── 计算：累计偏离值 + 同向异常波动次数 ─────────────────────────────────
-
-// 整段窗口累计偏离值 = 个股区间涨跌幅 − 对应指数区间涨跌幅（用收盘价端点，不复权）。
-// rows 升序；窗口为最后 n 个交易日，期初前收盘取 rows[len-n-1]。
-function cumDeviation(rows, idxByDate, n) {
-  const L = rows.length;
-  if (L < n + 1) return null;
-  const end = rows[L - 1];
-  const startPrev = rows[L - n - 1];
-  const idxEnd = idxByDate.get(end.date);
-  const idxStartPrev = idxByDate.get(startPrev.date);
-  if (!Number.isFinite(idxEnd) || !Number.isFinite(idxStartPrev) || !startPrev.close || !idxStartPrev) {
-    return null;
-  }
-  const stockChg = (end.close / startPrev.close - 1) * 100;
-  const idxChg = (idxEnd / idxStartPrev - 1) * 100;
-  return stockChg - idxChg;
-}
-
-// 3 日累计偏离值结束于 rows 第 i 根（含），用于逐日判定异常波动。
-function dev3At(rows, idxByDate, i) {
-  if (i < 3) return null;
-  const end = rows[i];
-  const startPrev = rows[i - 3];
-  const idxEnd = idxByDate.get(end.date);
-  const idxStartPrev = idxByDate.get(startPrev.date);
-  if (!Number.isFinite(idxEnd) || !Number.isFinite(idxStartPrev) || !startPrev.close || !idxStartPrev) {
-    return null;
-  }
-  return (end.close / startPrev.close - 1) * 100 - (idxEnd / idxStartPrev - 1) * 100;
-}
-
-// 近 windowDays 个交易日内「同向异常波动」次数（近似：3 日偏离越过阈值的上升沿，按方向分别计）。
-function countSameDirAbnormal(rows, idxByDate, threshold, windowDays) {
-  const L = rows.length;
-  let up = 0;
-  let down = 0;
-  const from = Math.max(3, L - windowDays);
-  const dirAt = (i) => {
-    const d = dev3At(rows, idxByDate, i);
-    if (!Number.isFinite(d)) return 0; // 0 无 / 1 涨向 / -1 跌向
-    if (d >= threshold) return 1;
-    if (d <= -threshold) return -1;
-    return 0;
-  };
-  // 用窗口左边界前一天的状态播种，避免把跨边界延续的同一轮触发误计成窗口内新发生的一次。
-  let prevTriggered = dirAt(from - 1);
-  for (let i = from; i < L; i += 1) {
-    const cur = dirAt(i);
-    if (cur !== 0 && cur !== prevTriggered) {
-      if (cur > 0) up += 1;
-      else down += 1;
-    }
-    prevTriggered = cur;
-  }
-  return Math.max(up, down);
-}
-
 // ── 主流程 ───────────────────────────────────────────────────────────────
 
 function effectiveStThreshold(stObj, todayStr) {
@@ -240,7 +171,7 @@ const LEVEL_META = {
   announced_suspend: { label: "已公告停牌", color: "rose", rank: 4 },
 };
 
-async function computeRisk(code, passedName = "") {
+export async function computeRisk(code, passedName = "", { loadDaily = fetchDailyKline, loadFeed = fetchSuspendFeed, today = todayCST() } = {}) {
   const boardKey = boardForCode(code);
   if (!boardKey) {
     return { code, level: "normal", levelLabel: "未知板块", reasons: ["无法识别板块（仅支持沪深 A 股）"], unsupported: true };
@@ -250,12 +181,10 @@ async function computeRisk(code, passedName = "") {
     return { code, board: board.label, level: "normal", levelLabel: board.label, reasons: ["北交所规则不同，暂未纳入沪深引擎"], unsupported: true };
   }
 
-  const today = todayCST();
-
   const [stock, index, feed] = await Promise.all([
-    fetchDailyKline(code, { isIndex: false }),
-    fetchDailyKline(board.benchmarkIndex.code, { isIndex: true }),
-    fetchSuspendFeed(),
+    loadDaily(code, { isIndex: false }),
+    loadDaily(board.benchmarkIndex.code, { isIndex: true }),
+    loadFeed(),
   ]);
 
   if (!stock || stock.rows.length < 31) {
@@ -274,7 +203,16 @@ async function computeRisk(code, passedName = "") {
   const dev3 = cumDeviation(stock.rows, idxByDate, 3);
   const dev10 = cumDeviation(stock.rows, idxByDate, 10);
   const dev30 = cumDeviation(stock.rows, idxByDate, 30);
+  const abnWindow = abnormalWindow(stock.rows, idxByDate);
   const s = board.serious;
+  const seriousWindows = {
+    dev10: deviationWindow(stock.rows, idxByDate, 10, s.dev10),
+    dev30: deviationWindow(stock.rows, idxByDate, 30, s.dev30),
+  };
+  if (!abnWindow || !seriousWindows.dev10 || !seriousWindows.dev30
+    || [dev3, dev10, dev30].some(value => !Number.isFinite(value))) {
+    throw new Error("日K参考前收价或同期指数数据缺失，无法计算偏离值");
+  }
   const reqCount = s.sameDirAbnormalCount.count;
   const eventCount = countSameDirAbnormal(stock.rows, idxByDate, abnThreshold, s.sameDirAbnormalCount.windowDays);
 
@@ -283,23 +221,23 @@ async function computeRisk(code, passedName = "") {
 
   // 严重异常波动判定
   const seriousHits = [];
-  if (dev10 != null && (dev10 >= s.dev10.up || dev10 <= s.dev10.down)) {
-    seriousHits.push(`10日累计偏离${fmt(dev10)}（阈值+${s.dev10.up}%/${s.dev10.down}%）`);
+  if (severityReached(seriousWindows.dev10)) {
+    seriousHits.push(`近${seriousWindows.dev10.days}日累计偏离${fmt(seriousWindows.dev10.deviation)}（10日内，阈值+${s.dev10.up}%/${s.dev10.down}%）`);
   }
-  if (dev30 != null && (dev30 >= s.dev30.up || dev30 <= s.dev30.down)) {
-    seriousHits.push(`30日累计偏离${fmt(dev30)}（阈值+${s.dev30.up}%/${s.dev30.down}%）`);
+  if (severityReached(seriousWindows.dev30)) {
+    seriousHits.push(`近${seriousWindows.dev30.days}日累计偏离${fmt(seriousWindows.dev30.deviation)}（30日内，阈值+${s.dev30.up}%/${s.dev30.down}%）`);
   }
   if (eventCount >= reqCount) {
     seriousHits.push(`10日内同向异常波动${eventCount}次（达${reqCount}次）`);
   }
 
-  const abnormalHit = dev3 != null && Math.abs(dev3) >= abnThreshold;
+  const abnormalHit = abnormalDirection(abnWindow.deviation, abnThreshold) !== 0;
   const nearRatio = RULES.riskTiers.approachRatio;
   const nearSerious =
-    (dev10 != null && (dev10 >= s.dev10.up * nearRatio || dev10 <= s.dev10.down * nearRatio)) ||
-    (dev30 != null && (dev30 >= s.dev30.up * nearRatio || dev30 <= s.dev30.down * nearRatio)) ||
+    severityReached(seriousWindows.dev10, nearRatio) ||
+    severityReached(seriousWindows.dev30, nearRatio) ||
     eventCount === reqCount - 1;
-  const nearAbnormal = dev3 != null && Math.abs(dev3) >= abnThreshold * nearRatio;
+  const nearAbnormal = abnormalDirection(abnWindow.deviation, abnThreshold * nearRatio) !== 0;
 
   const announced = feed[code] || null;
 
@@ -318,11 +256,19 @@ async function computeRisk(code, passedName = "") {
   } else if (abnormalHit || nearSerious) {
     level = "abnormal_or_near_serious";
     levelLabel = abnormalHit ? "已触发异常波动" : "接近严重异常波动";
-    if (abnormalHit) reasons.push(`已触发异常波动：近3日累计偏离${fmt(dev3)}（阈值±${abnThreshold}%）`);
-    if (nearSerious) reasons.push(`接近严重异常波动（10日${fmt(dev10)} / 30日${fmt(dev30)} / 同向${eventCount}次）`);
+    if (abnormalHit) reasons.push(`已触发异常波动：近${abnWindow.days}日累计偏离${fmt(abnWindow.deviation)}（阈值±${abnThreshold}%）`);
+    if (nearSerious) {
+      const candidates = [];
+      for (const [key, maxDays] of [["dev10", 10], ["dev30", 30]]) {
+        const window = seriousWindows[key];
+        if (severityReached(window, nearRatio)) candidates.push(`近${window.days}日偏离${fmt(window.deviation)}（${maxDays}日内）`);
+      }
+      if (eventCount === reqCount - 1) candidates.push(`同向异波${eventCount}次（估算）`);
+      reasons.push(`接近严重异常波动：${candidates.join("；")}`);
+    }
   } else if (nearAbnormal) {
     level = "near_abnormal";
-    reasons.push(`接近异常波动：近3日累计偏离${fmt(dev3)}（阈值±${abnThreshold}%）`);
+    reasons.push(`接近异常波动：近${abnWindow.days}日累计偏离${fmt(abnWindow.deviation)}（阈值±${abnThreshold}%）`);
   } else {
     level = "normal";
     reasons.push("近期偏离值离各档阈值都较远");
@@ -340,10 +286,17 @@ async function computeRisk(code, passedName = "") {
     rank: meta.rank,
     asOf: stock.rows[stock.rows.length - 1].date,
     benchmark: `${board.benchmarkIndex.name}(${board.benchmarkIndex.code})`,
+    calculationBasis: "daily-trading-reference-close",
+    eventCountApproximate: true,
     metrics: {
       dev3: dev3 == null ? null : Number(dev3.toFixed(2)),
+      abnWindowDays: abnWindow.days,
+      abnDeviation: Number(abnWindow.deviation.toFixed(2)),
       dev10: dev10 == null ? null : Number(dev10.toFixed(2)),
       dev30: dev30 == null ? null : Number(dev30.toFixed(2)),
+      seriousWindows: Object.fromEntries(Object.entries(seriousWindows).map(([key, window]) => [key, {
+        ...window, deviation: Number(window.deviation.toFixed(2)),
+      }])),
       abnEventCount10: eventCount,
       reqCount,
       abnThreshold,
@@ -354,7 +307,7 @@ async function computeRisk(code, passedName = "") {
   };
 }
 
-export function createSuspensionAlertHandler() {
+export function createSuspensionAlertHandler({ compute = computeRisk, getRedis = getRedisClient } = {}) {
   return async function suspensionAlertHandler(req, res) {
     const reply = (status, payload) => {
       res.statusCode = status;
@@ -369,9 +322,12 @@ export function createSuspensionAlertHandler() {
       return reply(400, { error: "code 必须是 6 位 A 股代码" });
     }
 
-    const cacheKey = `suspend-alert:${code}`;
+    const name = requestUrl.searchParams.get("name") || "";
+    // Exclude results from the old raw-close and fixed-three-session engines.
+    // Name is part of the key because it can determine the ST threshold.
+    const cacheKey = `suspend-alert:reference-v3:${code}:${encodeURIComponent(name)}`;
     try {
-      const redis = await getRedisClient();
+      const redis = await getRedis();
       const cached = await redis.get(cacheKey);
       if (cached) return reply(200, JSON.parse(cached));
     } catch {
@@ -379,9 +335,9 @@ export function createSuspensionAlertHandler() {
     }
 
     try {
-      const result = await computeRisk(code, requestUrl.searchParams.get("name") || "");
+      const result = await compute(code, name);
       try {
-        const redis = await getRedisClient();
+        const redis = await getRedis();
         await redis.set(cacheKey, JSON.stringify(result), { EX: RESULT_TTL });
       } catch {
         /* 忽略缓存写入失败 */
