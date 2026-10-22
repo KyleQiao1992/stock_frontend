@@ -152,7 +152,8 @@ body,
 }
 
 body {
-  min-width: 320px;
+  /* Use the available width even when a 320px window has a visible scrollbar. */
+  min-width: 0;
   background: var(--color-canvas);
   color: var(--color-slate-900);
 }

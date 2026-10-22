@@ -15,6 +15,8 @@
     "test:chan-segments": "node scripts/checkChanSegments.mjs",
     "test:chan-detail": "node scripts/checkChanFractalDetail.mjs",
     "test:chan-guides": "node scripts/checkChanGuideGeometry.mjs",
+    "test:index-trend": "node scripts/checkIndexTrendChart.mjs",
+    "test:ashare-kline": "node scripts/checkAshareKline.mjs",
     "audit:chan-fractal": "node scripts/auditChanFractals.mjs --report",
     "audit:chan-segments": "node scripts/auditChanSegments.mjs --report",
     "preview": "vite preview",

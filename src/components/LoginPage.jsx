@@ -47,8 +47,9 @@ export default function LoginPage({ onLogin, notice }) {
         {notice && <p role="status" className="mb-4 text-sm text-slate-600">{notice}</p>}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">用户名</label>
+            <label htmlFor="login-username" className="mb-1 block text-sm font-medium text-slate-700">用户名</label>
             <input
+              id="login-username"
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
@@ -60,8 +61,9 @@ export default function LoginPage({ onLogin, notice }) {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700">密码</label>
+            <label htmlFor="login-password" className="mb-1 block text-sm font-medium text-slate-700">密码</label>
             <input
+              id="login-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}

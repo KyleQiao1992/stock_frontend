@@ -14,6 +14,6 @@ export default function ChanLegend({ data, options }) {
     </>}
     <span>点击分型圆点或三角，查看原始与合并K线</span>
     {options.zs && <span>色框：滑动笔重叠区（非递归中枢） · 蓝框：当前参考区</span>}
-    <span>{Math.max(0, data.bi.length - 1)} 笔 / {segmentCount} 已确认线段 / {data.zs.length} 重叠区 · 笔历史 {data.definition.historyBars} 根{data.definition.segmentHistoryBars != null && ` / 线段历史 ${data.definition.segmentHistoryBars} 根`}</span>
+    <span>{Math.max(0, data.bi.length - 1)} 笔 / {segmentCount} 已确认线段 / {data.zs.length} 重叠区 · 全部已加载 {data.dates.length} 根K线参与计算</span>
   </div>;
 }

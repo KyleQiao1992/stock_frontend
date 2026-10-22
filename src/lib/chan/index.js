@@ -1,4 +1,4 @@
-import { analyzeReferenceCandles, referenceHistoryLimit } from './referenceEngine.js';
+import { analyzeReferenceCandles } from './referenceEngine.js';
 import { buildZs } from './referenceZs.js';
 import { buildTrades } from './outlook.js';
 import { buildReferenceOutlook } from './referenceOutlook.js';
@@ -8,9 +8,7 @@ export function analyzeChan(rows, period = 'day') {
   const bars = rows.filter((r) => [r.open, r.high, r.low, r.close, r.volume].every(Number.isFinite));
   // Coordinates refer to the original history, even after the reference engine trims its prefix.
   const candles = bars.map((r, i) => ({ ...r, time: i + 1, vol: r.volume }));
-  const limit = referenceHistoryLimit(period);
-  const requestCandles = candles.slice(-limit);
-  const result = analyzeReferenceCandles(requestCandles);
+  const result = analyzeReferenceCandles(candles);
   const point = (p) => ({ ...p, idx: p.time - 1 });
   const bi = result.bi.map(point);
   const segmentBi = result.segmentBi.map(point);
@@ -22,7 +20,7 @@ export function analyzeChan(rows, period = 'day') {
     const [start, end] = segmentCandidate;
     const up = end.price > start.price;
     let extreme = null;
-    for (const candle of requestCandles) {
+    for (const candle of candles) {
       if (candle.time <= start.time) continue;
       if (!extreme || (up ? candle.high > extreme.high : candle.low < extreme.low)) extreme = candle;
     }
@@ -59,11 +57,12 @@ export function analyzeChan(rows, period = 'day') {
     biLine: [...bi, ...pending.slice(1)], segmentBi, segments, pendingSegments,
     outlook, trades: buildTrades(datedBi),
     definition: { id: 'chan-old-bi-sliding-overlap-v2', label: '原文旧笔条件与滑动笔重叠区',
-      zoneLevel: '滑动笔重叠区（非递归中枢）', historyBars: result.candles.length, requestedBars: limit,
-      segmentSource: '本次请求窗口内的已确认笔端，随上游笔回退重算',
+      zoneLevel: '滑动笔重叠区（非递归中枢）', historyBars: result.candles.length, requestedBars: candles.length,
+      analysisScope: 'all-loaded',
+      segmentSource: '全部已加载历史内的已确认笔端，随上游笔回退重算',
       segmentCompletion: 'complete=true才可由本K确认；缺失状态待后继同周期K出现，确认时刻记后继K；complete=false不确认',
-      segmentConfirmationScope: '当前请求窗口复算的必要证据K，不等于跨窗口首次观测或交易信号时刻',
-      segmentHistoryBars: requestCandles.length, segmentHistoryStart: requestCandles[0]?.date ?? null,
+      segmentConfirmationScope: '全部已加载历史复算的必要证据K，不等于跨加载范围首次观测或交易信号时刻',
+      segmentHistoryBars: candles.length, segmentHistoryStart: candles[0]?.date ?? null,
       skippedInitialBars: historyOffset },
   };
 }

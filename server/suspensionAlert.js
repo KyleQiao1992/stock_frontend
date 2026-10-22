@@ -29,6 +29,37 @@ const PUSH2HIS_HOSTS = [
 
 const RESULT_TTL = 300; // 单票结果缓存 5 分钟
 const FEED_TTL = 1800; // 停复牌 feed 缓存 30 分钟
+const CACHE_WAIT_MS = 300; // 可选缓存不能让诊断等待连接/命令超时。
+
+function withDeadline(operation, timeoutMs) {
+  let timer;
+  return Promise.race([
+    Promise.resolve().then(operation),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("缓存等待超时")), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+function optionalCache(getRedis, waitMs) {
+  return {
+    async read(key) {
+      try {
+        const value = await withDeadline(async () => (await getRedis()).get(key), waitMs);
+        return value ? JSON.parse(value) : null;
+      } catch {
+        return null;
+      }
+    },
+    write(key, value, ttl) {
+      // 写缓存不属于诊断结果；故障时不能阻塞已经算好的响应。
+      void withDeadline(async () => {
+        const redis = await getRedis();
+        await redis.set(key, JSON.stringify(value), { EX: ttl });
+      }, waitMs).catch(() => {});
+    },
+  };
+}
 
 // ── 工具：日期/secid/板块路由 ───────────────────────────────────────────
 
@@ -66,7 +97,7 @@ function boardForCode(code) {
   return null;
 }
 
-// ── 取数：日 K（不复权），东财 push2his 主、腾讯兜底 ──────────────────────
+// ── 取数：日 K（不复权），腾讯主、东财 push2his 备选 ──────────────────────
 // 保留原始收盘价、实际交易参考前收价；腾讯用同源除权事件恢复参考价。
 
 async function fetchKlineEastmoney(secid, limit, isIndex, request) {
@@ -95,7 +126,7 @@ async function fetchKlineTencent(code, isIndex, limit, request) {
       headers: { Referer: "https://gu.qq.com/", "User-Agent": EM_HEADERS["User-Agent"] },
       signal: AbortSignal.timeout(8000),
     });
-    if (!r.ok) return null;
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const j = await r.json();
     // Scope action parsing to the requested recent history; older unsupported
     // allocation formats do not affect the current calculation windows.
@@ -108,52 +139,67 @@ async function fetchKlineTencent(code, isIndex, limit, request) {
 }
 
 export async function fetchDailyKline(code, { isIndex = false, limit = 60, request = fetch } = {}) {
+  // 腾讯正常时立即使用，避免每次先等三个当前不可达的东财 host。
+  let primaryError;
+  try {
+    return await fetchKlineTencent(code, isIndex, limit, request);
+  } catch (error) {
+    primaryError = error;
+  }
   const viaEm = await fetchKlineEastmoney(isIndex ? indexSecid(code) : stockSecid(code), limit, isIndex, request);
   if (viaEm) return viaEm;
-  return fetchKlineTencent(code, isIndex, limit, request);
+  throw primaryError;
 }
 
 // ── 取数：东财两市停复牌 feed（已公告停牌，前瞻） ─────────────────────────
 
-async function fetchSuspendFeed() {
-  const date = todayCST();
-  try {
-    const redis = await getRedisClient();
-    const cached = await redis.get("suspend-feed");
-    if (cached) return JSON.parse(cached);
-  } catch {
-    /* Redis 不可用则直连 */
-  }
-  const map = {};
-  try {
-    const url =
-      "https://datacenter-web.eastmoney.com/api/data/v1/get" +
-      "?reportName=RPT_CUSTOM_SUSPEND_DATA_INTERFACE&columns=ALL&source=WEB&client=WEB" +
-      "&sortColumns=SUSPEND_START_DATE&sortTypes=-1&pageNumber=1&pageSize=500" +
-      `&filter=(MARKET="全部")(DATETIME='${date}')`;
-    const r = await fetch(url, { headers: EM_HEADERS, signal: AbortSignal.timeout(12000) });
-    if (r.ok) {
-      const j = await r.json();
-      for (const row of j?.result?.data || []) {
-        map[String(row.SECURITY_CODE)] = {
-          reason: row.SUSPEND_REASON || "",
-          start: (row.SUSPEND_START_DATE || "").slice(0, 10),
-          resume: (row.PREDICT_RESUME_DATE || "").slice(0, 10) || null,
-          expire: row.SUSPEND_EXPIRE || "",
-        };
+export function createSuspendFeedLoader({ request = fetch, getRedis = getRedisClient, today = todayCST, cacheWaitMs = CACHE_WAIT_MS } = {}) {
+  const cache = optionalCache(getRedis, cacheWaitMs);
+  const inFlight = new Map();
+  return function fetchSuspendFeed() {
+    const date = today();
+    if (inFlight.has(date)) return inFlight.get(date);
+    const pending = (async () => {
+      // 旧缓存可能将取数失败写成 {}；只读新版已验证、且对应当天的缓存。
+      const cacheKey = `suspend-feed:verified-v1:${date}`;
+      const cached = await cache.read(cacheKey);
+      if (cached && typeof cached === "object" && !Array.isArray(cached)) return cached;
+
+      const url =
+        "https://datacenter-web.eastmoney.com/api/data/v1/get" +
+        "?reportName=RPT_CUSTOM_SUSPEND_DATA_INTERFACE&columns=ALL&source=WEB&client=WEB" +
+        "&sortColumns=SUSPEND_START_DATE&sortTypes=-1&pageNumber=1&pageSize=500" +
+        `&filter=(MARKET="全部")(DATETIME='${date}')`;
+      try {
+        const r = await request(url, { headers: EM_HEADERS, signal: AbortSignal.timeout(12000) });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        if (j?.success !== true || !Array.isArray(j?.result?.data)) {
+          throw new Error("未返回有效的停复牌公告列表");
+        }
+        const map = {};
+        for (const row of j.result.data) {
+          if (!/^\d{6}$/.test(String(row.SECURITY_CODE))) throw new Error("停复牌公告股票代码异常");
+          map[String(row.SECURITY_CODE)] = {
+            reason: row.SUSPEND_REASON || "",
+            start: (row.SUSPEND_START_DATE || "").slice(0, 10),
+            resume: (row.PREDICT_RESUME_DATE || "").slice(0, 10) || null,
+            expire: row.SUSPEND_EXPIRE || "",
+          };
+        }
+        cache.write(cacheKey, map, FEED_TTL);
+        return map;
+      } catch (error) {
+        throw new Error(`停复牌公告获取失败：${error.message}`, { cause: error });
       }
-    }
-  } catch {
-    /* feed 拿不到就当无已公告停牌 */
-  }
-  try {
-    const redis = await getRedisClient();
-    await redis.set("suspend-feed", JSON.stringify(map), { EX: FEED_TTL });
-  } catch {
-    /* 忽略缓存写入失败 */
-  }
-  return map;
+    })();
+    inFlight.set(date, pending);
+    void pending.finally(() => inFlight.delete(date)).catch(() => {});
+    return pending;
+  };
 }
+
+const fetchSuspendFeed = createSuspendFeedLoader();
 
 // ── 主流程 ───────────────────────────────────────────────────────────────
 
@@ -307,7 +353,9 @@ export async function computeRisk(code, passedName = "", { loadDaily = fetchDail
   };
 }
 
-export function createSuspensionAlertHandler({ compute = computeRisk, getRedis = getRedisClient } = {}) {
+export function createSuspensionAlertHandler({ compute = computeRisk, getRedis = getRedisClient, cacheWaitMs = CACHE_WAIT_MS } = {}) {
+  const cache = optionalCache(getRedis, cacheWaitMs);
+  const inFlight = new Map();
   return async function suspensionAlertHandler(req, res) {
     const reply = (status, payload) => {
       res.statusCode = status;
@@ -323,26 +371,23 @@ export function createSuspensionAlertHandler({ compute = computeRisk, getRedis =
     }
 
     const name = requestUrl.searchParams.get("name") || "";
-    // Exclude results from the old raw-close and fixed-three-session engines.
+    // Exclude old engines and results which could ignore a failed announcement feed.
     // Name is part of the key because it can determine the ST threshold.
-    const cacheKey = `suspend-alert:reference-v3:${code}:${encodeURIComponent(name)}`;
+    const cacheKey = `suspend-alert:reference-v4:${code}:${encodeURIComponent(name)}`;
     try {
-      const redis = await getRedis();
-      const cached = await redis.get(cacheKey);
-      if (cached) return reply(200, JSON.parse(cached));
-    } catch {
-      /* Redis 不可用则直接现算 */
-    }
-
-    try {
-      const result = await compute(code, name);
-      try {
-        const redis = await getRedis();
-        await redis.set(cacheKey, JSON.stringify(result), { EX: RESULT_TTL });
-      } catch {
-        /* 忽略缓存写入失败 */
+      let pending = inFlight.get(cacheKey);
+      if (!pending) {
+        pending = (async () => {
+          const cached = await cache.read(cacheKey);
+          if (cached) return cached;
+          const result = await compute(code, name);
+          cache.write(cacheKey, result, RESULT_TTL);
+          return result;
+        })();
+        inFlight.set(cacheKey, pending);
+        void pending.finally(() => inFlight.delete(cacheKey)).catch(() => {});
       }
-      return reply(200, result);
+      return reply(200, await pending);
     } catch (error) {
       return reply(502, { error: error?.message || String(error) });
     }

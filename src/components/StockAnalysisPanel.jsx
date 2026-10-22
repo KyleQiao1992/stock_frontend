@@ -137,14 +137,14 @@ export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, co
           <span className="text-xs text-slate-500">{name} {code}</span>
         </div>
         {active === 'financial' ? financialReportContent : active === 'news' ? <div className="flex h-[520px] min-h-0 overflow-hidden"><StockNewsPanel code={code} market={market} /></div> : active === 'tradeSideHistory' ? tradeSideHistoryContent : <>
-          <p className="mb-4 text-xs leading-5 text-slate-500">{periodLabel(period)} · {data.definition.historyBars} 根历史计算 · 截至 {data.historyDates.at(-1) || '—'}；缩放不改变计算起点。</p>
+          <p className="mb-4 text-xs leading-5 text-slate-500">{periodLabel(period)} · 全部已加载 {data.dates.length} 根K线参与计算 · 截至 {data.dates.at(-1) || '—'}；缩放不改变计算起点。</p>
           {active === 'outlook' ? <ChanOutlook data={data} /> : <ChanEndpoints data={data} />}
           <details className="mb-4 rounded-xl border border-slate-200 p-3 text-xs leading-5 text-slate-500">
             <summary className="cursor-pointer font-medium text-slate-700">计算口径与范围</summary>
             <p className="mt-2">逐根处理K线包含和三K分型；按第62、65、77课旧笔口径，顶底分型之间至少有一根不属于任一分型的独立K线。笔被新K线破坏时回退重算。黄色折线连接笔端及当前动态极值，三角标记笔端参考，圆点标记分型。</p>
-            <p className="mt-2">线段采用第65、67、71、77、78课特征序列规则及第81课更正；前三笔须有价格重叠，已确认段由后续完成笔的破坏条件确认，端点与确认依据K分别记录。来源未明确最新K已收盘时，须等待后继同周期K才将前K计为已完成；来源明确未收盘的K不能用于确认。线段使用本次请求窗口的完整笔序列，不受主图最近50笔展示上限影响；这不代表已经识别递归中枢或更高走势级别。</p>
+            <p className="mt-2">线段采用第65、67、71、77、78课特征序列规则及第81课更正；前三笔须有价格重叠，已确认段由后续完成笔的破坏条件确认，端点与确认依据K分别记录。来源未明确最新K已收盘时，须等待后继同周期K才将前K计为已完成；来源明确未收盘的K不能用于确认。笔、分型、线段和滑动笔重叠区均使用全部已加载历史计算，不按固定根数或笔数截断；这不代表已经识别递归中枢或更高走势级别。</p>
             <p className="mt-2">蓝框为滑动笔重叠区：连续前三笔固定ZG/ZD，保持核心区间最多延伸九笔，按滑动窗口绘制；这是本地参考算法，不是原文按次级别走势递归定义的中枢。动态末端不参与笔端参考和重叠区。</p>
-            <p className="mt-2">计算只使用本次加载的本地历史窗口，窗口之前的数据未参与，起笔前的历史会裁去；窗口截断可能影响起笔及后续结构，缩放只改变可见范围。新行情可能修正近端结构。</p>
+            <p className="mt-2">计算使用全部已加载的有效K线，加载范围之前的数据未参与；首笔之前的K线用于初始化，不强行连笔。加载更早历史可能改变起笔及后续结构，缩放只改变可见范围。新行情可能修正近端结构。</p>
             <p className="mt-2">买卖点观察按第17、20、21、101课列出后续条件，不代表已识别或已确认；当前未执行走势级别、递归中枢、背驰及一二三类买卖点的自动识别。二类观察须从真实一类买卖点后的次级别走势出发，不能用任意前低或前高替代。</p>
           </details>
 

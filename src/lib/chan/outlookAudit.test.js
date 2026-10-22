@@ -161,14 +161,18 @@ test('outlook audit: the real panel exposes computation scope and does not rende
     const { default: StockAnalysisPanel } = await server.ssrLoadModule('/src/components/StockAnalysisPanel.jsx');
     for (const request of [...cases.map(([up, close]) => input(up, close)), { ...input(true, 14), zsList: [] }]) {
       const data = { outlook: buildReferenceOutlook(request),
-        definition: { historyBars: candles.length }, historyDates: candles.map((candle) => candle.time), trades: [] };
+        definition: { historyBars: candles.length }, dates: candles.map((candle) => candle.time),
+        historyDates: candles.map((candle) => candle.time), trades: [] };
       const markup = renderToStaticMarkup(React.createElement(StockAnalysisPanel, {
         data, enabled: true, tab: 'outlook', onTabChange() {}, code: 'AUDIT', period: '101',
       }));
       assert.match(markup, /计算口径与范围/);
       assert.match(markup, /第62、65、77课旧笔口径/);
       assert.match(markup, /不属于任一分型的独立K线/);
-      assert.match(markup, /窗口截断可能影响起笔及后续结构/);
+      assert.match(markup, /全部已加载.*根K线参与计算/);
+      assert.match(markup, /不按固定根数或笔数截断/);
+      assert.match(markup, /加载更早历史可能改变起笔及后续结构/);
+      assert.doesNotMatch(markup, /最近50笔展示上限/);
       assert.match(markup, /连续前三笔固定ZG\/ZD/);
       assert.match(markup, /最多延伸九笔/);
       assert.match(markup, /不是原文按次级别走势递归定义的中枢/);

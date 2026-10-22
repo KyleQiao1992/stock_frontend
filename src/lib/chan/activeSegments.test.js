@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeChan } from './index.js';
-import { analyzeReferenceCandles, MAX_BI_COUNT } from './referenceEngine.js';
+import { analyzeReferenceCandles } from './referenceEngine.js';
 
 const targets = [2, 0, 10, 4, 12, 5, 9, 3, 8, 2, 7, 4, 10, 6, 12, 5, 9, 3, 8, 2, 7, 4, 10];
 function rowsFromTargets(turns) {
@@ -115,36 +115,74 @@ test('a developing segment waits for three confirmed overlapping strokes and fol
   assert.deepEqual(afterRebound.segments, developing.segments);
 });
 
-test('the 50-stroke display cap never restarts segment construction or changes its pen source', () => {
+test('more than 50 strokes retain the entire pen, fractal, zone and segment history', () => {
   const turns = [2, ...Array.from({ length: 6 }, () => [0, 10, 4, 12, 5, 9, 3, 8, 2, 7, 4, 10, 6, 12]).flat()];
   const input = rowsFromTargets(turns);
   const result = analyze(input);
-  assert.equal(result.bi.length, MAX_BI_COUNT + 1);
-  assert.ok(result.segmentBi.length > result.bi.length);
-  assert.deepEqual(result.bi, result.segmentBi.slice(-(MAX_BI_COUNT + 1)));
+  assert.ok(result.bi.length > 51);
+  assert.deepEqual(result.bi, result.segmentBi);
+  assert.equal(result.bi[0].time, 9);
+  assert.ok(result.fx.some((point) => point.time < result.bi.at(-51).time));
+  assert.ok(result.zs.some((zone) => zone.sdt < result.bi.at(-51).time));
   assert.equal(result.segments[0].start.time, 9);
   assert.equal(result.segments[0].end.time, 33);
-  assert.ok(result.segments[0].end.time < result.bi[0].time);
+  assert.equal(result.segments[0].start.time, result.bi[0].time);
   const early = analyze(input.slice(0, 400));
   assert.deepEqual(result.segments[0], early.segments[0]);
   assert.equal(result.definition.segmentHistoryBars, input.length);
   assert.equal(result.definition.segmentHistoryStart, input[0].date);
+  assert.equal(result.definition.requestedBars, input.length);
   assert.ok(result.definition.historyBars < result.definition.segmentHistoryBars);
+  assert.equal(result.historyOffset, 7, 'only the unresolved prefix before the initial fractal is trimmed');
+  assert.deepEqual(result.analysisCandles, candles(input).slice(result.historyOffset)
+    .map((candle) => ({ ...candle, vol: candle.volume })));
 });
 
-test('segment history uses the requested period window and retains original chart coordinates', () => {
+test('more than 1200 loaded candles retain the same full structural history for every period', () => {
   const turns = [2, ...Array.from({ length: 12 }, () => [0, 10, 4, 12, 5, 9, 3, 8, 2, 7, 4, 10, 6, 12]).flat()];
   const input = rowsFromTargets(turns);
   const result = analyze(input);
-  const offset = input.length - 1200;
-  assert.equal(result.definition.segmentHistoryBars, 1200);
-  assert.equal(result.definition.segmentHistoryStart, input[offset].date);
+  assert.ok(input.length > 1200);
+  assert.equal(result.definition.segmentHistoryBars, input.length);
+  assert.equal(result.definition.segmentHistoryStart, input[0].date);
+  assert.equal(result.definition.requestedBars, input.length);
   for (const point of result.segmentBi) {
-    assert.ok(point.idx >= offset);
     assert.equal(point.time, point.idx + 1);
     assert.equal(point.price, input[point.idx][point.mark === 'G' ? 'high' : 'low']);
   }
   assert.ok(result.segments.length > 0);
+  assert.equal(result.segmentBi[0].time, 9);
+  for (const period of ['day', '101', 'week', '102', '15m', '15', '5m', '5']) {
+    const actual = analyzeChan(input, period);
+    for (const key of ['bi', 'fx', 'zs', 'segmentBi', 'segments', 'pending', 'pendingSegments']) {
+      assert.deepEqual(actual[key], result[key], `${period} must not discard old ${key}`);
+    }
+    assert.equal(actual.definition.requestedBars, input.length);
+  }
+});
+
+test('long day history remains causal beyond the old 300-candle and 50-stroke boundaries', () => {
+  const turns = [2, ...Array.from({ length: 6 }, () => [0, 10, 4, 12, 5, 9, 3, 8, 2, 7, 4, 10, 6, 12]).flat()];
+  const input = rowsFromTargets(turns);
+  const firstSeen = new Map();
+  let largestStrokeCount = 0;
+  for (let length = 1; length <= input.length; length++) {
+    const result = analyzeChan(input.slice(0, length), 'day');
+    largestStrokeCount = Math.max(largestStrokeCount, result.bi.length - 1);
+    assert.equal(result.definition.requestedBars, length);
+    if (result.bi.length) assert.equal(result.bi[0].time, 9);
+    for (const point of result.bi) {
+      assert.equal(point.price, input[point.idx][point.mark === 'G' ? 'high' : 'low']);
+      if (point.confirmed) assert.ok(point.confirmed_time <= length);
+    }
+    for (const segment of result.segments) {
+      if (!firstSeen.has(segment.id)) firstSeen.set(segment.id, length);
+      assert.equal(segment.confirmed_time, firstSeen.get(segment.id));
+      assert.ok(segment.confirmed_time <= length);
+    }
+  }
+  assert.ok(largestStrokeCount > 50);
+  assert.ok([...firstSeen.values()].some((length) => length > 300));
 });
 
 test('a cascading pen rollback retracts earlier confirmed endpoints instead of retaining orphan structure', () => {

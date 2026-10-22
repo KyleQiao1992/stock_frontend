@@ -10,7 +10,6 @@ import { buildFractalDetail } from './fractalDetail.js';
 
 // Lessons 62/77: three K per endpoint plus at least one independent K.
 export const MIN_BI_LENGTH = 7;
-export const MAX_BI_COUNT = 50;
 
 function newBar(candle, idx) {
   return { high: candle.high, low: candle.low, time: candle.time, from: idx, to: idx,
@@ -157,19 +156,18 @@ export function analyzeReferenceCandles(candles) {
     }
   }
 
-  // Keep one complete sequence for this request. The display cap must not reset
-  // the segment origin, or hide older strokes needed after a cascading rollback.
-  const displayedStrokes = strokes.slice(-MAX_BI_COUNT);
-  const raw = displayedStrokes.length
-    ? candles.filter((c) => c.time >= displayedStrokes[0].start.elements[0].time) : [...candles];
-  const allFx = displayedStrokes.flatMap((s) => s.fx.slice(1));
+  // Keep every surviving stroke. Only the unresolved prefix before the first
+  // stroke's left fractal neighbour is omitted from the structural candle view.
+  const raw = strokes.length
+    ? candles.filter((c) => c.time >= strokes[0].start.elements[0].time) : [...candles];
+  const allFx = strokes.flatMap((s) => s.fx.slice(1));
   for (const point of findFractals(unfinished)) {
     if (!allFx.length || point.time > allFx.at(-1).time) allFx.push(point);
   }
   const simple = ({ time, price, mark }) => ({ time, price, mark, idx: candles.findIndex((c) => c.time === time) });
   const drawableFx = [...new Map(allFx.map((p) => [p.time, p])).values()];
-  const biPoints = displayedStrokes.length
-    ? [...displayedStrokes.map((s) => s.start), displayedStrokes.at(-1).end] : [];
+  const biPoints = strokes.length
+    ? [...strokes.map((s) => s.start), strokes.at(-1).end] : [];
   const fx = drawableFx.map(simple);
   // A subsequent opposite stroke confirms its starting endpoint in the current
   // valid sequence only after its raw K evidence has completed. Record when that
@@ -183,7 +181,7 @@ export function analyzeReferenceCandles(candles) {
   });
   if (strokes.length) segmentBi.push({ ...simple(strokes.at(-1).end),
     confirmed: false, confirmed_time: null });
-  const bi = displayedStrokes.length ? segmentBi.slice(-(displayedStrokes.length + 1)) : [];
+  const bi = segmentBi;
   const fractalDetails = Object.fromEntries([['fx', drawableFx], ['bi', biPoints]].map(([kind, points]) => [
     kind, Object.fromEntries(points.map((point) => [point.time, buildFractalDetail(candles, point)])),
   ]));
@@ -203,14 +201,6 @@ export function analyzeReferenceCandles(candles) {
       idx: candles.findIndex((c) => c.time === extreme.time), extremeTime: extreme.time,
       confirmed: false, confirmed_time: null });
   }
-  return { candles: raw, fx, bi, segmentBi, pending, strokeCount: displayedStrokes.length,
+  return { candles: raw, fx, bi, segmentBi, pending, strokeCount: strokes.length,
     segmentStrokeCount: strokes.length, fractalDetails };
-}
-
-/** Match the reference client's requested history, then let the engine trim it. */
-export function referenceHistoryLimit(period) {
-  if (['week', '102'].includes(String(period))) return 260;
-  if (['5m', '5'].includes(String(period))) return 1200;
-  if (['15m', '15'].includes(String(period))) return 800;
-  return 300;
 }

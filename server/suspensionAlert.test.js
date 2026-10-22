@@ -419,12 +419,13 @@ async function invokeHandler(handler, name = '埃科光电') {
   return { ...response, headers };
 }
 
-test('handler ignores raw-close and fixed-three-session caches and separates corrected results by name', async () => {
+test('handler ignores old price/window/feed caches and separates corrected results by name', async () => {
   const name = 'ST 测试';
   const fixedThreeKey = `suspend-alert:reference-v2:688610:${encodeURIComponent(name)}`;
   const cached = new Map([
     ['suspend-alert:688610', JSON.stringify({ level: 'abnormal_or_near_serious' })],
     [fixedThreeKey, JSON.stringify({ level: 'normal' })],
+    [`suspend-alert:reference-v3:688610:${encodeURIComponent(name)}`, JSON.stringify({ level: 'announced_suspend' })],
   ]);
   const reads = [], writes = [], calculations = [];
   const redis = {
@@ -435,7 +436,7 @@ test('handler ignores raw-close and fixed-three-session caches and separates cor
     getRedis: async () => redis,
     compute: async (code, name) => { calculations.push({ code, name }); return { level: 'normal', code, name }; },
   });
-  const expectedKey = `suspend-alert:reference-v3:688610:${encodeURIComponent(name)}`;
+  const expectedKey = `suspend-alert:reference-v4:688610:${encodeURIComponent(name)}`;
   const fresh = await invokeHandler(handler, name);
   assert.equal(fresh.statusCode, 200);
   assert.equal(fresh.body.level, 'normal');
@@ -479,7 +480,7 @@ test('incomplete reference or benchmark data returns 502 and is never cached as 
   });
 });
 
-function tencentAfterEastmoneyFailure(raw, { adjustedOnly = false } = {}) {
+function tencentPrimary(raw, { adjustedOnly = false } = {}) {
   const calls = [];
   const request = async (url, options) => {
     const parsed = new URL(url);
@@ -499,17 +500,14 @@ function tencentAfterEastmoneyFailure(raw, { adjustedOnly = false } = {}) {
   return { calls, request };
 }
 
-test('daily loading falls through all three Eastmoney hosts to raw Tencent day and computes risk without qfq data', async () => {
+test('daily loading uses raw Tencent day immediately without contacting Eastmoney when healthy', async () => {
   const { raw } = realFixture();
   assert.equal(raw.stock.data[SYMBOL].qfqday, undefined);
-  const { calls, request } = tencentAfterEastmoneyFailure(raw);
+  const { calls, request } = tencentPrimary(raw);
   const stock = await fetchDailyKline('688610', { request });
   closeTo(stock.rows.at(-2).referenceClose, 80.57);
   assert.equal(stock.rows.at(-3).close, 113);
   assert.deepEqual(calls.map(({ url }) => url.origin), [
-    'https://push2his.eastmoney.com',
-    'https://79.push2his.eastmoney.com',
-    'https://82.push2his.eastmoney.com',
     'https://ifzq.gtimg.cn',
   ]);
   calls.length = 0;
@@ -523,7 +521,7 @@ test('daily loading falls through all three Eastmoney hosts to raw Tencent day a
   assert.equal(risk.metrics.dev10, -11.66);
   assert.equal(risk.metrics.dev30, -14.1);
   assert.equal(risk.metrics.abnEventCount10, 0);
-  assert.equal(calls.length, 8);
+  assert.equal(calls.length, 2);
   const tencentCalls = calls.filter(({ url }) => url.hostname === 'ifzq.gtimg.cn');
   assert.equal(tencentCalls.length, 2);
   for (const { url, options } of tencentCalls) {
@@ -532,17 +530,19 @@ test('daily loading falls through all three Eastmoney hosts to raw Tencent day a
     assert.deepEqual(param.slice(1), ['day', '', '', '60']);
     assert.ok(options.signal instanceof AbortSignal);
   }
-  for (const { url } of calls.filter(({ url }) => url.hostname.endsWith('eastmoney.com'))) {
-    assert.equal(url.searchParams.get('fqt'), '0');
-  }
 });
 
-test('daily loading rejects Tencent qfq-only fallback after every Eastmoney host fails', async () => {
+test('daily loading rejects Tencent qfq-only data if all Eastmoney alternatives also fail', async () => {
   const { raw } = realFixture();
-  const { calls, request } = tencentAfterEastmoneyFailure(raw, { adjustedOnly: true });
+  const { calls, request } = tencentPrimary(raw, { adjustedOnly: true });
   await assert.rejects(fetchDailyKline('688610', { request }), /腾讯日K.*不复权日K/);
   assert.equal(calls.length, 4);
-  assert.deepEqual(calls.at(-1).url.searchParams.get('param').split(',').slice(1), ['day', '', '', '60']);
+  assert.deepEqual(calls[0].url.searchParams.get('param').split(',').slice(1), ['day', '', '', '60']);
+  assert.deepEqual(calls.slice(1).map(({ url }) => url.origin), [
+    'https://push2his.eastmoney.com',
+    'https://79.push2his.eastmoney.com',
+    'https://82.push2his.eastmoney.com',
+  ]);
 });
 
 test('daily loading scopes Tencent action parsing to the requested recent snapshot', async () => {
@@ -551,7 +551,7 @@ test('daily loading scopes Tencent action parsing to the requested recent snapsh
     tencentLine('2026-08-27', 100),
     tencentLine('2026-08-28', 100, { cqr: '2026-08-28', FHcontent: '10配3股配股价5元' }),
   );
-  const { request } = tencentAfterEastmoneyFailure(raw);
+  const { request } = tencentPrimary(raw);
   const stock = await fetchDailyKline('688610', { request, limit: 31 });
   assert.equal(stock.rows.length, 31);
   assert.equal(stock.rows[0].date, '2026-08-31');

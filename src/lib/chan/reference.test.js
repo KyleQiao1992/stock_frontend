@@ -5,7 +5,7 @@ import { referenceFractals } from './referenceFractal.js';
 import { buildZs } from './referenceZs.js';
 import { compareReference, firstDifference } from './referenceParity.js';
 import { analyzeChan, visibleOffset } from './index.js';
-import { analyzeReferenceCandles, referenceHistoryLimit } from './referenceEngine.js';
+import { analyzeReferenceCandles } from './referenceEngine.js';
 
 const directory = new URL('./fixtures/reference/', import.meta.url);
 const fixtures = readdirSync(directory).filter((name) => name.endsWith('.json')).sort()
@@ -164,9 +164,18 @@ test('300 original Tencent bars preserve raw coordinates after rule-driven trimm
   assert.equal(visibleOffset(result, rows.slice(-80)), 220);
 });
 
-test('reference history request length is independent of chart zoom and uses the real period mapping', () => {
-  for (const [period, count] of [['day',300],['101',300],['week',260],['102',260],['60m',300],['30m',300],['15m',800],['5m',1200]]) {
-    assert.equal(referenceHistoryLimit(period), count);
+test('every period analyzes all valid loaded candles and reports that actual input scope', () => {
+  const source = JSON.parse(readFileSync(new URL('./fixtures/input/sh603818-day-300.json', import.meta.url), 'utf8'));
+  const input = epochRows(source.candles);
+  const invalid = { ...input[0], volume: NaN };
+  for (const period of ['day', '101', 'week', '102', '60m', '30m', '15m', '15', '5m', '5']) {
+    const result = analyzeChan([invalid, ...input, invalid], period);
+    assert.equal(result.definition.requestedBars, input.length);
+    assert.equal(result.definition.analysisScope, 'all-loaded');
+    assert.equal(result.definition.segmentHistoryBars, input.length);
+    assert.equal(result.definition.segmentHistoryStart, input[0].date);
+    assert.deepEqual(result.dates, input.map((row) => row.date));
+    assertProductionInvariants(result, input);
   }
 });
 
@@ -178,4 +187,7 @@ test('incremental engine does not mutate input candles, and empty history cannot
   assert.deepEqual(empty.biLine, []);
   assert.deepEqual(empty.zs, []);
   assert.equal(empty.outlook.ok, false);
+  assert.equal(empty.definition.requestedBars, 0);
+  assert.equal(empty.definition.segmentHistoryBars, 0);
+  assert.equal(empty.definition.segmentHistoryStart, null);
 });

@@ -5,6 +5,8 @@ import StockAnalysisPanel from "./StockAnalysisPanel";
 import TradeSideHistoryPanel from "./TradeSideHistoryPanel";
 import MarketIndexStrip from "./MarketIndexStrip";
 import { fetchTradeSideHistory, formatTradeQuoteTime } from "../lib/tradeSideHistory.js";
+import { createStockDetailsLoader } from "../lib/stockDetailsLoader.js";
+import { createTencentKlineHostSelector, TENCENT_KLINE_HOSTS } from "../lib/tencentKlineHosts.js";
 import { tencentAshareVolumeToLots } from "../lib/tencentAshareVolume.js";
 import { fetchAshareMinuteKline } from "../lib/ashareMinuteKline.js";
 import { fetchAshareFourHourKline } from "../lib/ashareFourHourKline.js";
@@ -16,7 +18,7 @@ import ChanControls from "./ChanControls";
 import { analyzeChan } from "../lib/chan/index.js";
 import { isCurrentMarketSnapshot, marketSnapshotSourceLabel, formatMarketSnapshotTime } from "../lib/marketSnapshotQuality.js";
 import { todayMarketPresentation } from "../lib/todayMarketPresentation.js";
-import { Component, Fragment, lazy, Suspense, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Component, Fragment, lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertCircle,
@@ -51,6 +53,10 @@ import { THEME_OPTIONS } from "@/theme";
 
 const THEME_ICONS = { light: Sun, dark: Moon, system: Monitor };
 const AgentMarkdownMessage = lazy(() => import("./AgentMarkdownMessage"));
+const requestTencentKlineHost = createTencentKlineHostSelector([
+  "https://proxy.finance.qq.com/ifzqgtimg",
+  ...TENCENT_KLINE_HOSTS,
+]);
 
 const PERIOD_OPTIONS = [
   { value: "5", label: "5分钟", ashareOnly: true },
@@ -425,13 +431,13 @@ async function fetchMinuteChart({ code, symbol = toTencentSymbol(code), name, pe
   };
 }
 
-function buildTencentKlineUrl({ code, period, adjust, limit, varName }) {
+function buildTencentKlineUrl({ code, period, adjust, limit, varName, host }) {
   const symbol = toTencentSymbol(code);
   const ktype = periodToTencent(period);
   const adj = adjustToTencent(adjust);
   const param = `${symbol},${ktype},,,${limit}${adj ? `,${adj}` : ""}`;
   const endpoint = adj ? "fqkline/get" : "kline/kline";
-  return `https://ifzq.gtimg.cn/appstock/app/${endpoint}?_var=${encodeURIComponent(varName)}&param=${encodeURIComponent(param)}`;
+  return `${host}/appstock/app/${endpoint}?_var=${encodeURIComponent(varName)}&param=${encodeURIComponent(param)}`;
 }
 
 function parseTencentKlineResponse(res, { code, period, adjust }) {
@@ -482,39 +488,38 @@ async function fetchTencentKline({ code, period, adjust, limit }) {
   const errors = [];
 
   for (const currentLimit of limits) {
-    const varName = `tencent_kline_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const url = buildTencentKlineUrl({ code, period, adjust, limit: currentLimit, varName });
-
     try {
-      const res = await loadScriptVariable(url, varName);
-      const klines = parseTencentKlineResponse(res, { code, period, adjust });
-      return {
-        code,
-        name: extractTencentName(res, code),
-        ...extractTencentQuoteMeta(res, code),
-        klines,
-        sourceInfo: `Tencent script, lmt=${currentLimit}`,
-      };
+      return await requestTencentKlineHost(async (host) => {
+        const varName = `tencent_kline_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+        const url = buildTencentKlineUrl({ code, period, adjust, limit: currentLimit, varName, host });
+        const failures = [];
+        // 先在相同复权参数下检查腾讯的另一入口，避免对失效域名反复缩减根数重试。
+        for (const [transport, loadPayload] of [
+          ["script", () => loadScriptVariable(url, varName)],
+          ["fetch", () => loadTencentText(url)],
+        ]) {
+          try {
+            const res = await loadPayload();
+            const klines = parseTencentKlineResponse(res, { code, period, adjust });
+            return {
+              code,
+              name: extractTencentName(res, code),
+              ...extractTencentQuoteMeta(res, code),
+              klines,
+              sourceInfo: `Tencent ${transport}, host=${host}, lmt=${currentLimit}`,
+            };
+          } catch (error) {
+            failures.push(`${transport}: ${error?.message || error}`);
+          }
+        }
+        throw new Error(failures.join("；"));
+      });
     } catch (e) {
-      errors.push(`script lmt=${currentLimit}: ${e?.message || e}`);
-    }
-
-    try {
-      const res = await loadTencentText(url);
-      const klines = parseTencentKlineResponse(res, { code, period, adjust });
-      return {
-        code,
-        name: extractTencentName(res, code),
-        ...extractTencentQuoteMeta(res, code),
-        klines,
-        sourceInfo: `Tencent fetch, lmt=${currentLimit}`,
-      };
-    } catch (e) {
-      errors.push(`fetch lmt=${currentLimit}: ${e?.message || e}`);
+      errors.push(`lmt=${currentLimit}: ${e?.message || e}`);
     }
   }
 
-  throw new Error(`腾讯行情也失败：${errors.slice(-2).join("；")}`);
+  throw new Error(`腾讯行情也失败：${errors.join("；")}`);
 }
 
 function extractTencentQuoteMeta(res, code, explicitSymbol) {
@@ -4882,6 +4887,7 @@ function AgentChatPanel({ marketCodes }) {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   sendMessage();
@@ -5004,6 +5010,7 @@ function FactorDetailPanel({ status = "production" }) {
   const [endDate, setEndDate] = useState(todayStr);
   const [query, setQuery] = useState(null); // {factors, startDate, endDate} — set on button click
   const [page, setPage] = useState(1);
+  const [retry, setRetry] = useState(0);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -5011,6 +5018,8 @@ function FactorDetailPanel({ status = "production" }) {
   const [favoriteGroups, setFavoriteGroups] = useState(["默认"]); // 收藏夹列表（含默认）
   const [selectedFavGroups, setSelectedFavGroups] = useState([]); // 回测时选中的收藏夹（默认全选）
   const dropdownRef = useRef(null);
+  const requestKey = JSON.stringify([status, query, page, retry]);
+  const currentResult = result?.requestKey === requestKey ? result : null;
 
   useEffect(() => {
     let alive = true;
@@ -5050,15 +5059,18 @@ function FactorDetailPanel({ status = "production" }) {
         const resultPayload = query.mode === "favorites"
           ? await fetchFavoritesBacktest({ market: "ashare", page, groups: query.groups })
           : await fetchFactorDetail({ factors: query.factors, startDate: query.startDate, endDate: query.endDate, page });
-        if (active) setResult(resultPayload);
+        if (active) setResult({ ...resultPayload, requestKey });
       } catch (e) {
-        if (active && e.name !== "AbortError") setError(e?.message || "加载失败");
+        if (active && e.name !== "AbortError") {
+          setResult(null);
+          setError(e?.message || "加载失败");
+        }
       } finally {
         if (active) setLoading(false);
       }
     })();
     return () => { active = false; };
-  }, [query, page]);
+  }, [query, page, retry, requestKey]);
 
   useEffect(() => {
     if (!dropdownOpen) return;
@@ -5104,14 +5116,18 @@ function FactorDetailPanel({ status = "production" }) {
       if (selectedFavGroups.length === 0) return; // 一个夹都没选，不查询
       // 全选时传空数组 → 后端按全部收藏夹回测。
       const groups = selectedFavGroups.length === favoriteGroups.length ? [] : selectedFavGroups;
+      setLoading(true);
+      setError(null);
       setQuery({ mode: "favorites", groups });
       return;
     }
     if (factors.length === 0) return;
+    setLoading(true);
+    setError(null);
     setQuery({ mode: "factors", factors, startDate, endDate });
   }
 
-  const totalPages = result ? Math.ceil(result.total / result.pageSize) : 0;
+  const totalPages = currentResult ? Math.ceil(currentResult.total / currentResult.pageSize) : 0;
   const showFactorCol = query && query.mode !== "favorites" && query.factors.length > 1;
   const isFavoritesResult = query && query.mode === "favorites";
 
@@ -5247,16 +5263,19 @@ function FactorDetailPanel({ status = "production" }) {
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-xl bg-slate-50 px-4 py-2.5 text-xs text-slate-400 leading-5">
         <span className="min-w-0 break-words">收益率 = ( 第 N 交易日收盘价 &minus; 信号日收盘价 ) &divide; 信号日收盘价 &times; 100%</span>
-        {result && result.stats && (
-          <FactorStatsSummary stats={result.stats} startDate={result.startDate} endDate={result.endDate} total={result.total} />
+        {!loading && currentResult?.stats && (
+          <FactorStatsSummary stats={currentResult.stats} startDate={currentResult.startDate} endDate={currentResult.endDate} total={currentResult.total} />
         )}
       </div>
 
       {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">{error}</div>
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-600">
+          <span role="alert" className="min-w-0 break-words">{error}</span>
+          <button type="button" disabled={loading} onClick={() => { setError(null); setLoading(true); setRetry((value) => value + 1); }} className="rounded-lg border border-red-200 px-3 py-1.5 disabled:opacity-40">重试查询</button>
+        </div>
       )}
 
-      {result && (
+      {!loading && currentResult && (
         <>
           <div className="overflow-x-auto rounded-2xl border border-slate-100 bg-white shadow-sm">
             <table className="w-full text-sm">
@@ -5272,14 +5291,14 @@ function FactorDetailPanel({ status = "production" }) {
                 </tr>
               </thead>
               <tbody>
-                {result.rows.length === 0 ? (
+                {currentResult.rows.length === 0 ? (
                   <tr>
                     <td colSpan={showFactorCol ? 11 : 10} className="py-12 text-center text-sm text-slate-400">
                       {isFavoritesResult ? "收藏夹为空，先去收藏一些股票吧" : "该时间段暂无信号数据"}
                     </td>
                   </tr>
                 ) : (
-                  result.rows.map((row, i) => (
+                  currentResult.rows.map((row, i) => (
                     <tr key={`${row.signalDate}-${row.factorName}-${row.stockCode}-${i}`} className={`border-b border-slate-50 transition-colors hover:bg-slate-100/60 ${i % 2 === 0 ? "bg-white" : "bg-slate-50"}`}>
                       <td className="px-3 py-2 text-slate-500 whitespace-nowrap">{row.signalDate}</td>
                       {showFactorCol && (
@@ -5308,31 +5327,19 @@ function FactorDetailPanel({ status = "production" }) {
             </table>
           </div>
 
-          <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>共 {result.total} 条</span>
-            {totalPages > 1 && (
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={page <= 1}
-                  onClick={() => setPage((p) => p - 1)}
-                  className="rounded-lg border border-slate-200 px-3 py-1.5 disabled:opacity-40 hover:bg-slate-50"
-                >
-                  上一页
-                </button>
-                <span>{page} / {totalPages}</span>
-                <button
-                  type="button"
-                  disabled={page >= totalPages}
-                  onClick={() => setPage((p) => p + 1)}
-                  className="rounded-lg border border-slate-200 px-3 py-1.5 disabled:opacity-40 hover:bg-slate-50"
-                >
-                  下一页
-                </button>
-              </div>
-            )}
-          </div>
         </>
+      )}
+      {!loading && query && (currentResult || error) && (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
+          <span>{currentResult ? `共 ${currentResult.total} 条` : `第 ${page} 页尚未加载成功`}</span>
+          {(totalPages > 1 || page > 1) && (
+            <div className="flex items-center gap-2">
+              <button type="button" disabled={page <= 1} onClick={() => { setError(null); setLoading(true); setPage((value) => value - 1); }} className="rounded-lg border border-slate-200 px-3 py-1.5 disabled:opacity-40 hover:bg-slate-50">上一页</button>
+              <span>{currentResult ? `${page} / ${totalPages}` : `第 ${page} 页`}</span>
+              <button type="button" disabled={!currentResult || page >= totalPages} onClick={() => { setError(null); setLoading(true); setPage((value) => value + 1); }} className="rounded-lg border border-slate-200 px-3 py-1.5 disabled:opacity-40 hover:bg-slate-50">下一页</button>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -5439,26 +5446,58 @@ const TREND_GAP = 30;
 const TREND_MACD_H = 150;
 const TREND_H = TREND_MARGIN.top + TREND_MAIN_H + TREND_GAP + TREND_MACD_H + TREND_MARGIN.bottom;
 
-function IndexTrendChart({ rows, maPeriod, displayCount, name }) {
+function IndexTrendChart({ rows, maPeriod, displayCount, name, chanData, chanOptions, onZoom, expanded = false }) {
+  const [selectedFractal, setSelectedFractal] = useState(null);
+  const containerRef = useRef(null);
+  const svgRef = useRef(null);
+  const [expandedSize, setExpandedSize] = useState({ width: TREND_W, height: TREND_H });
+  useEffect(() => {
+    if (!expanded) return undefined;
+    const container = containerRef.current;
+    const updateSize = () => {
+      const width = Math.round(container.clientWidth);
+      if (!width) return;
+      const height = Math.max(300, Math.round(window.innerHeight - container.getBoundingClientRect().top - 90));
+      setExpandedSize((previous) => previous.width === width && previous.height === height ? previous : { width, height });
+    };
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(container);
+    window.addEventListener("resize", updateSize);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateSize);
+    };
+  }, [expanded]);
+  const width = expanded ? expandedSize.width : TREND_W;
+  const height = expanded ? expandedSize.height : TREND_H;
+  const mainH = expanded ? (height - TREND_MARGIN.top - TREND_MARGIN.bottom - TREND_GAP) * 2 / 3 : TREND_MAIN_H;
+  const macdH = expanded ? mainH / 2 : TREND_MACD_H;
+  const full = useMemo(() => Array.isArray(rows) ? rows.filter((r) => r && Number.isFinite(r.close)) : [], [rows]);
+  // 指标与缠论均基于固定历史计算，缩放只投影可见窗口。
+  const indicators = useMemo(() => ({
+    ma: movingAverage(full, maPeriod),
+    ma120: movingAverage(full, 120),
+    macd: calcMACDSeries(full),
+  }), [full, maPeriod]);
+  const fractalDetail = chanOptions?.enabled && selectedFractal?.data === chanData
+    ? chanData?.fractalDetails?.[selectedFractal.kind]?.[selectedFractal.time] : null;
+  const selectFractal = (point, kind) => setSelectedFractal({ data: chanData, time: point.time, kind });
   const chart = useMemo(() => {
-    const full = Array.isArray(rows) ? rows.filter((r) => r && Number.isFinite(r.close)) : [];
     if (full.length < 2) return null;
     // 先用完整数据算指标，再截取展示窗口，确保可见区第一根就有 MA/MACD 值（MA60 需 60 根预热，MACD 约 34 根）。
-    const maFull = movingAverage(full, maPeriod);
-    const ma120Full = movingAverage(full, 120);
-    const macdFull = calcMACDSeries(full);
     const start = Math.max(0, full.length - (displayCount || full.length));
     const safe = full.slice(start);
-    const ma = maFull.slice(start);
-    const ma120 = ma120Full.slice(start);
-    const macd = macdFull.slice(start);
+    const ma = indicators.ma.slice(start);
+    const ma120 = indicators.ma120.slice(start);
+    const macd = indicators.macd.slice(start);
     if (safe.length < 2) return null;
 
-    const plotW = TREND_W - TREND_MARGIN.left - TREND_MARGIN.right;
+    const plotW = width - TREND_MARGIN.left - TREND_MARGIN.right;
     const mainTop = TREND_MARGIN.top;
-    const mainBottom = mainTop + TREND_MAIN_H;
+    const mainBottom = mainTop + mainH;
     const macdTop = mainBottom + TREND_GAP;
-    const macdBottom = macdTop + TREND_MACD_H;
+    const macdBottom = macdTop + macdH;
 
     let yMin = Infinity;
     let yMax = -Infinity;
@@ -5477,9 +5516,9 @@ function IndexTrendChart({ rows, maPeriod, displayCount, name }) {
     yMax += pad;
 
     const xStep = plotW / safe.length;
-    const candleW = Math.max(1.4, Math.min(7, xStep * 0.62));
+    const candleW = Math.min(xStep * 0.8, Math.max(1.4, Math.min(28, xStep * 0.62)));
     const x = (i) => TREND_MARGIN.left + i * xStep + xStep / 2;
-    const y = (price) => mainTop + ((yMax - price) / Math.max(yMax - yMin, 1e-6)) * TREND_MAIN_H;
+    const y = (price) => mainTop + ((yMax - price) / Math.max(yMax - yMin, 1e-6)) * mainH;
 
     const maPath = ma
       .map((v, i) => (Number.isFinite(v) ? `${i && Number.isFinite(ma[i - 1]) ? "L" : "M"}${x(i)},${y(v)}` : null))
@@ -5604,7 +5643,7 @@ function IndexTrendChart({ rows, maPeriod, displayCount, name }) {
     const mPad = (mMax - mMin) * 0.1 || 1;
     mMin -= mPad;
     mMax += mPad;
-    const my = (v) => macdTop + ((mMax - v) / Math.max(mMax - mMin, 1e-6)) * TREND_MACD_H;
+    const my = (v) => macdTop + ((mMax - v) / Math.max(mMax - mMin, 1e-6)) * macdH;
     const zeroY = my(0);
     const difPath = macd
       .map((m, i) => (Number.isFinite(m.dif) ? `${i && Number.isFinite(macd[i - 1]?.dif) ? "L" : "M"}${x(i)},${my(m.dif)}` : null))
@@ -5641,19 +5680,46 @@ function IndexTrendChart({ rows, maPeriod, displayCount, name }) {
     return {
       safe, ma, macd, x, y, my, zeroY, candleW, mainBottom, macdTop, macdBottom,
       maPath, ma120Path, maCrosses, belowPaths, bullishPaths, difPath, deaPath, difBelowPaths, priceTicks, dateTicks,
-      lastMa, lastMa120, lastMacd,
+      lastMa, lastMa120, lastMacd, margin: TREND_MARGIN, plotW, mainH,
     };
-  }, [rows, maPeriod, displayCount]);
+  }, [full, indicators, maPeriod, displayCount, width, mainH, macdH]);
+
+  const hasChart = Boolean(chart);
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!hasChart || !svg || typeof onZoom !== "function") return undefined;
+    let accumulated = 0;
+    let lastTime = 0;
+    const handleWheel = (event) => {
+      if (!event.deltaY || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+      event.preventDefault();
+      // 统一鼠标、触控板及按行/页上报的滚动量；反向或停顿后不沿用上一次残量。
+      const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? svg.clientHeight : 1);
+      const now = performance.now();
+      if (now - lastTime > 200 || Math.sign(delta) !== Math.sign(accumulated)) accumulated = 0;
+      accumulated += delta;
+      lastTime = now;
+      if (Math.abs(accumulated) < 48) return;
+      onZoom(accumulated > 0 ? 1 : -1);
+      accumulated = 0;
+    };
+    // React 的被动 wheel 监听不能阻止页面滚动，图内使用原生非被动监听。
+    svg.addEventListener("wheel", handleWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", handleWheel);
+  }, [hasChart, onZoom]);
 
   if (!chart) {
     return <div className="flex h-[360px] items-center justify-center text-sm text-slate-400">暂无数据</div>;
   }
 
   return (
-    <svg viewBox={`0 0 ${TREND_W} ${TREND_H}`} className="block w-full">
+    <div ref={containerRef}>
+    <svg ref={svgRef} viewBox={`0 0 ${width} ${height}`} className="block w-full"
+      title="向上滚动减少显示根数，向下滚动增加显示根数"
+      data-index-trend-chart={name} aria-label={`${name}日K与MACD趋势图`}>
       {/* 面板边框 */}
-      <rect x={TREND_MARGIN.left} y={TREND_MARGIN.top} width={TREND_W - TREND_MARGIN.left - TREND_MARGIN.right} height={TREND_MAIN_H} fill="none" stroke="var(--chart-grid)" />
-      <rect x={TREND_MARGIN.left} y={chart.macdTop} width={TREND_W - TREND_MARGIN.left - TREND_MARGIN.right} height={TREND_MACD_H} fill="none" stroke="var(--chart-grid)" />
+      <rect x={TREND_MARGIN.left} y={TREND_MARGIN.top} width={chart.plotW} height={mainH} fill="none" stroke="var(--chart-grid)" />
+      <rect x={TREND_MARGIN.left} y={chart.macdTop} width={chart.plotW} height={macdH} fill="none" stroke="var(--chart-grid)" />
 
       {/* 中长期多头阴影：MA(短) 在 MA120 之上（金叉到死叉）的区间，红色填充两线之间“宜做多”。 */}
       {chart.bullishPaths.map((d, i) => (
@@ -5668,10 +5734,12 @@ function IndexTrendChart({ rows, maPeriod, displayCount, name }) {
       {/* 价格刻度线 + 标签 */}
       {chart.priceTicks.map((t, i) => (
         <g key={`pt-${i}`}>
-          <line x1={TREND_MARGIN.left} x2={TREND_W - TREND_MARGIN.right} y1={t.y} y2={t.y} stroke="var(--chart-grid-soft)" />
-          <text x={TREND_W - TREND_MARGIN.right + 4} y={t.y + 3} fontSize="11" fill="var(--chart-muted)">{t.v.toFixed(0)}</text>
+          <line x1={TREND_MARGIN.left} x2={width - TREND_MARGIN.right} y1={t.y} y2={t.y} stroke="var(--chart-grid-soft)" />
+          <text x={width - TREND_MARGIN.right + 4} y={t.y + 3} fontSize="11" fill="var(--chart-muted)">{t.v.toFixed(0)}</text>
         </g>
       ))}
+
+      <ChanOverlay layer="zones" data={chanData} options={chanOptions} rows={chart.safe} chart={chart} />
 
       {/* K 线：红涨（实心）/ 绿跌（空心），与主图保持一致 */}
       {chart.safe.map((r, i) => {
@@ -5684,7 +5752,7 @@ function IndexTrendChart({ rows, maPeriod, displayCount, name }) {
         const top = Math.min(yOpen, yClose);
         const bodyH = Math.max(0.8, Math.abs(yClose - yOpen));
         return (
-          <g key={r.date}>
+          <g key={r.date} data-index-candle={r.date}>
             <line x1={chart.x(i)} x2={chart.x(i)} y1={yHigh} y2={yLow} stroke={color} strokeWidth="0.7" />
             <rect
               x={chart.x(i) - chart.candleW / 2}
@@ -5698,6 +5766,9 @@ function IndexTrendChart({ rows, maPeriod, displayCount, name }) {
           </g>
         );
       })}
+
+      <ChanOverlay layer="lines" data={chanData} options={chanOptions} rows={chart.safe} chart={chart}
+        onSelectFractal={selectFractal} />
 
       {/* MA 线（与主图 MA60 同色） */}
       <path d={chart.maPath} fill="none" stroke="#009688" strokeWidth="1.4" />
@@ -5725,18 +5796,19 @@ function IndexTrendChart({ rows, maPeriod, displayCount, name }) {
 
       {/* 日期标签 */}
       {chart.dateTicks.map((t, i) => (
-        <text key={`dt-${i}`} x={t.x} y={TREND_H - 6} fontSize="11" fill="var(--chart-muted)" textAnchor="middle">{t.label}</text>
+        <text key={`dt-${i}`} x={t.x} y={height - 6} fontSize={width < 600 ? 8 : 11} fill="var(--chart-muted)" textAnchor="middle">{t.label}</text>
       ))}
 
       {/* MACD：0 轴下方阴影 + 柱 + DIF/DEA */}
       {chart.difBelowPaths.map((d, i) => (
         <path key={`mb-${i}`} d={d} fill="var(--chart-down)" opacity="0.10" />
       ))}
-      <line x1={TREND_MARGIN.left} x2={TREND_W - TREND_MARGIN.right} y1={chart.zeroY} y2={chart.zeroY} stroke="var(--chart-grid-soft)" strokeDasharray="4 4" />
+      <line x1={TREND_MARGIN.left} x2={width - TREND_MARGIN.right} y1={chart.zeroY} y2={chart.zeroY} stroke="var(--chart-grid-soft)" strokeDasharray="4 4" />
       {chart.macd.map((m, i) =>
         Number.isFinite(m.hist) ? (
           <line
             key={`h-${i}`}
+            data-index-macd={chart.safe[i].date}
             x1={chart.x(i)}
             x2={chart.x(i)}
             y1={chart.zeroY}
@@ -5754,7 +5826,7 @@ function IndexTrendChart({ rows, maPeriod, displayCount, name }) {
       <text
         x={TREND_MARGIN.left + 4}
         y={TREND_MARGIN.top + 15}
-        fontSize="14"
+        fontSize={width < 600 ? 10 : 14}
         fontWeight="600"
         stroke="var(--chart-surface)"
         strokeWidth="3"
@@ -5769,20 +5841,55 @@ function IndexTrendChart({ rows, maPeriod, displayCount, name }) {
       </text>
 
       {/* MACD 副图图例：参数 + 当前 DIF / DEA / MACD（柱）值。 */}
-      <text x={TREND_MARGIN.left + 4} y={chart.macdTop + 15} fontSize="13" stroke="var(--chart-surface)" strokeWidth="3" paintOrder="stroke">
+      <text x={TREND_MARGIN.left + 4} y={chart.macdTop + 15} fontSize={width < 600 ? 9 : 13} stroke="var(--chart-surface)" strokeWidth="3" paintOrder="stroke">
         <tspan fill="var(--chart-ink-2)">MACD(12,26,9)  </tspan>
         <tspan fill="var(--chart-ink)">DIF：{chart.lastMacd?.dif != null ? chart.lastMacd.dif.toFixed(2) : "--"}  </tspan>
         <tspan fill="#b59f00">DEA：{chart.lastMacd?.dea != null ? chart.lastMacd.dea.toFixed(2) : "--"}  </tspan>
         <tspan fill="var(--chart-up)">MACD：{chart.lastMacd?.hist != null ? chart.lastMacd.hist.toFixed(2) : "--"}</tspan>
       </text>
     </svg>
+    {chanOptions?.enabled && chanData && (
+      <div aria-label="指数缠论图例" className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+        {chanOptions.bi && <span><span style={{ color: "var(--chan-bi)" }}>━</span> 笔 · 黄色实线末端为动态极值</span>}
+        {chanOptions.segment && <span><span style={{ color: "var(--chan-segment)" }}>━</span> 已确认线段 · 虚线为发展中参考</span>}
+        {chanOptions.zs && <span>色框：滑动笔重叠区（非递归中枢）</span>}
+        {(chanOptions.bi || chanOptions.fx) && <span>点击圆点或三角查看分型</span>}
+        <span>缠论计算：全部已加载 {chanData.dates.length} 根日K · 截至 {full.at(-1)?.date}</span>
+      </div>
+    )}
+    {fractalDetail && <ChanFractalDetail detail={fractalDetail} kind={selectedFractal.kind} onClose={() => setSelectedFractal(null)} />}
+    </div>
   );
 }
 
-function IndexTrendCard({ index, tab, year = "latest" }) {
+function IndexTrendCard({ index, tab, year = "latest", chanOptions, onChanOptionsChange }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [zoom, setZoom] = useState(null);
+  const [fullscreenView, setFullscreenView] = useState(null);
+  const fullscreenRef = useRef(null);
+  const fullscreenButtonRef = useRef(null);
+  const wasFullscreenRef = useRef(false);
+  const viewKey = `${tab.value}:${year}`;
+  const fullscreen = fullscreenView === viewKey;
+
+  useEffect(() => {
+    if (!fullscreen) {
+      if (wasFullscreenRef.current) fullscreenButtonRef.current?.focus({ preventScroll: true });
+      wasFullscreenRef.current = false;
+      return undefined;
+    }
+    wasFullscreenRef.current = true;
+    const dialog = fullscreenRef.current;
+    const previousOverflow = document.body.style.overflow;
+    dialog.showModal();
+    document.body.style.overflow = "hidden";
+    return () => {
+      dialog.close();
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [fullscreen]);
 
   // 回看历史年份时要取到足够早的数据：从该年到今年的交易日 + 预热缓冲。
   const fetchLimit = useMemo(() => {
@@ -5812,19 +5919,16 @@ function IndexTrendCard({ index, tab, year = "latest" }) {
     };
   }, [index.secid, index.tencentSymbol, index.name, fetchLimit]);
 
-  // 展示窗口 + 预热缓冲：图表内部只渲染最后 displayCount 根，但喂入的数据多带 MA+MACD 预热，
-  // 这样可见区第一根就有 MA/MACD 值，均线从最左边开始。
-  const warmup = tab.ma + 40;
-  const { feedRows, displayCount, hasYearData } = useMemo(() => {
+  // 截至所选窗口末日的完整前缀用于指标和缠论；历史年严格排除之后的行情。
+  const { feedRows, maxDisplayCount, hasYearData } = useMemo(() => {
     const all = data?.klines || [];
-    if (!all.length) return { feedRows: [], displayCount: 0, hasYearData: true };
+    if (!all.length) return { feedRows: EMPTY_LIST, maxDisplayCount: 0, hasYearData: true };
 
     if (year === "latest") {
-      const disp = tab.ma >= 60 ? 250 : 140;
-      return { feedRows: all.slice(-(disp + warmup)), displayCount: Math.min(disp, all.length), hasYearData: true };
+      return { feedRows: all, maxDisplayCount: all.length, hasYearData: true };
     }
 
-    // 指定年份：取该年全部交易日，前面再补一段预热。
+    // 历史年可见窗口只在当年内缩放，之前的行情仅用于计算。
     const prefix = String(year);
     let firstIdx = -1;
     let lastIdx = -1;
@@ -5834,22 +5938,31 @@ function IndexTrendCard({ index, tab, year = "latest" }) {
         lastIdx = i;
       }
     }
-    if (firstIdx === -1) return { feedRows: [], displayCount: 0, hasYearData: false };
+    if (firstIdx === -1) return { feedRows: EMPTY_LIST, maxDisplayCount: 0, hasYearData: false };
     return {
-      feedRows: all.slice(Math.max(0, firstIdx - warmup), lastIdx + 1),
-      displayCount: lastIdx - firstIdx + 1,
+      feedRows: all.slice(0, lastIdx + 1),
+      maxDisplayCount: lastIdx - firstIdx + 1,
       hasYearData: true,
     };
-  }, [data, tab.ma, warmup, year]);
+  }, [data, year]);
+  const defaultDisplayCount = Math.min(year === "latest" ? (tab.ma >= 60 ? 250 : 140) : maxDisplayCount, maxDisplayCount);
+  const displayCount = Math.min(zoom?.key === viewKey ? zoom.count : defaultDisplayCount, maxDisplayCount);
+  const zoomOptions = getDisplayCountOptions(maxDisplayCount, displayCount);
+  const chanData = useMemo(() => analyzeChan(feedRows, "101"), [feedRows]);
+  const ready = !loading && !error && hasYearData && maxDisplayCount >= 2;
+  const changeZoom = useCallback((direction) => setZoom((current) => {
+    const currentCount = Math.min(current?.key === viewKey ? current.count : defaultDisplayCount, maxDisplayCount);
+    const count = stepDisplayCount(currentCount, direction, maxDisplayCount);
+    return count === currentCount ? current : { key: viewKey, count };
+  }), [viewKey, defaultDisplayCount, maxDisplayCount]);
 
   const latest = feedRows[feedRows.length - 1];
 
   // 结论按窗口最后一根（最新年份为今天，历史年份为该年最后一个交易日）判定多头三条件。
   const trend = useMemo(() => evalTrend(feedRows, tab.ma), [feedRows, tab.ma]);
 
-  return (
-    <Card className="rounded-2xl border-slate-200">
-      <CardContent className="p-4">
+  const content = (
+      <CardContent className={fullscreen ? "mx-auto max-w-[1800px] p-4 sm:p-6" : "p-4"}>
         <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
             <span className="whitespace-nowrap text-base font-semibold text-slate-800">{index.name}</span>
@@ -5884,16 +5997,58 @@ function IndexTrendCard({ index, tab, year = "latest" }) {
           </div>
         ) : null}
 
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          {fullscreen && <ChanControls options={chanOptions} onChange={onChanOptionsChange} />}
+          <div role="group" aria-label={`${index.name}图表缩放`} className="ml-auto flex flex-wrap items-center gap-1 text-xs text-slate-600">
+            <span className="mr-1 tabular-nums text-slate-500" aria-live="polite">显示 {displayCount} / {maxDisplayCount} 根</span>
+            <button type="button" aria-label="放大K线" title="放大K线（减少显示根数）"
+              disabled={!ready || displayCount <= zoomOptions[0]} onClick={() => changeZoom(-1)}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1.5 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40">
+              <Plus className="h-3.5 w-3.5" />放大
+            </button>
+            <button type="button" aria-label="缩小K线" title="缩小K线（增加显示根数）"
+              disabled={!ready || displayCount >= maxDisplayCount} onClick={() => changeZoom(1)}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1.5 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40">
+              <Minus className="h-3.5 w-3.5" />缩小
+            </button>
+            <button type="button" aria-label="重置缩放" title="恢复默认显示范围"
+              disabled={!ready || displayCount === defaultDisplayCount} onClick={() => setZoom(null)}
+              className="rounded-lg px-2 py-1.5 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40">重置</button>
+            <button type="button" ref={fullscreen ? undefined : fullscreenButtonRef}
+              aria-label={fullscreen ? "退出全屏图表" : "全屏查看图表"} aria-pressed={fullscreen}
+              disabled={!ready} onClick={() => setFullscreenView(fullscreen ? null : viewKey)}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1.5 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40">
+              {fullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+              {fullscreen ? "退出全屏" : "全屏"}
+            </button>
+          </div>
+        </div>
+
         {loading ? (
           <div className="flex h-[360px] items-center justify-center text-sm text-slate-400">加载中…</div>
         ) : error ? (
-          <div className="flex h-[360px] items-center justify-center px-4 text-center text-sm text-rose-500">{error}</div>
+          <div role="alert" className="flex min-h-[360px] min-w-0 items-center justify-center px-4 py-6 text-center text-sm text-rose-500 [overflow-wrap:anywhere]">{error}</div>
         ) : !hasYearData ? (
           <div className="flex h-[360px] items-center justify-center px-4 text-center text-sm text-slate-400">{year} 年暂无该指数数据</div>
         ) : (
-          <IndexTrendChart rows={feedRows} maPeriod={tab.ma} displayCount={displayCount} name={index.name} />
+          <IndexTrendChart rows={feedRows} maPeriod={tab.ma} displayCount={displayCount} name={index.name}
+            chanData={chanData} chanOptions={chanOptions} onZoom={changeZoom} expanded={fullscreen} />
         )}
       </CardContent>
+  );
+  return (
+    <Card className="min-w-0 rounded-2xl border-slate-200" data-index-trend-card={index.code}>
+      {fullscreen ? (
+        <dialog ref={fullscreenRef} aria-label={`${index.name}全屏趋势图`}
+          onCancel={(event) => {
+            if (event.target !== event.currentTarget) return;
+            event.preventDefault();
+            setFullscreenView(null);
+          }}
+          className="fixed inset-0 m-0 h-[100dvh] max-h-none w-screen max-w-none overflow-y-auto border-0 bg-white p-0 text-slate-900 backdrop:bg-slate-950/60">
+          {content}
+        </dialog>
+      ) : content}
     </Card>
   );
 }
@@ -7544,6 +7699,7 @@ function HeatmapTooltip({ hover, box, metricLabel }) {
 function MarketTrendPageLayout({ onOpenStock }) {
   const [trendTab, setTrendTab] = useState("heatmap");
   const [trendYear, setTrendYear] = useState("latest");
+  const [chanOptions, setChanOptions] = useState({ enabled: true, bi: true, segment: true, zs: true, fx: true });
   const activeTab = TREND_TABS.find((t) => t.value === trendTab) || TREND_TABS[0];
 
   return (
@@ -7569,6 +7725,8 @@ function MarketTrendPageLayout({ onOpenStock }) {
 
         {/* 只有均线趋势子 tab 需要年份回看；今日盘面/资金流分化/热力图都是当下快照。 */}
         {activeTab.ma ? (
+          <div className="flex flex-wrap items-center gap-3">
+          <ChanControls options={chanOptions} onChange={setChanOptions} />
           <label className="flex items-center gap-2 text-sm text-slate-600">
             <span>年份</span>
             <select
@@ -7581,6 +7739,7 @@ function MarketTrendPageLayout({ onOpenStock }) {
               ))}
             </select>
           </label>
+          </div>
         ) : null}
       </div>
 
@@ -7606,7 +7765,8 @@ function MarketTrendPageLayout({ onOpenStock }) {
       ) : (
         <div className="grid gap-4 2xl:grid-cols-2">
           {TREND_INDICES.map((index) => (
-            <IndexTrendCard key={index.code} index={index} tab={activeTab} year={trendYear} />
+            <IndexTrendCard key={index.code} index={index} tab={activeTab} year={trendYear}
+              chanOptions={chanOptions} onChanOptionsChange={setChanOptions} />
           ))}
         </div>
       )}
@@ -8583,7 +8743,11 @@ function WatchlistPanel({
                 </div>
               );
             })
-          ) : (
+          ) : loading ? (
+            <div role="status" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+              {isRecommendationMode ? "正在读取推荐列表…" : "正在生成自选列表…"}
+            </div>
+          ) : !error && (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
               {isRecommendationMode ? `今天没有符合要求的${factorLabelFromName(recommendationFactor)}。` : "输入股票代码后，这里会生成收藏卡片。"}
             </div>
@@ -8853,8 +9017,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     us: "",
   });
   const [watchlistItemsMap, setWatchlistItemsMap] = useState({ ashare: [], hk: [], us: [] });
-  const [watchlistLoading, setWatchlistLoading] = useState(false);
-  const [watchlistError, setWatchlistError] = useState("");
+  const [watchlistLoadingMap, setWatchlistLoadingMap] = useState({ ashare: false, hk: false, us: false });
+  const [watchlistErrorMap, setWatchlistErrorMap] = useState({ ashare: "", hk: "", us: "" });
   const [favoriteItemsMap, setFavoriteItemsMap] = useState({ ashare: [], hk: [], us: [] });
   const [favoriteLoadingMap, setFavoriteLoadingMap] = useState({ ashare: false, hk: false, us: false });
   const [favoriteErrorMap, setFavoriteErrorMap] = useState({ ashare: "", hk: "", us: "" });
@@ -8863,8 +9027,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const [activeFavoriteGroupMap, setActiveFavoriteGroupMap] = useState({ ashare: "默认", hk: "默认", us: "默认" });
   const [favoritesPanelOpen, setFavoritesPanelOpen] = useState(false);
   const [recommendationItemsMap, setRecommendationItemsMap] = useState({ ashare: [], us: [] });
-  const [recommendationLoading, setRecommendationLoading] = useState(false);
-  const [recommendationError, setRecommendationError] = useState("");
+  const [recommendationLoadingMap, setRecommendationLoadingMap] = useState({ ashare: false, us: false });
+  const [recommendationErrorMap, setRecommendationErrorMap] = useState({ ashare: "", us: "" });
   const [recommendationFactorMap, setRecommendationFactorMap] = useState({ ashare: "factor1", us: "factor1" });
   const [recommendationDateMap, setRecommendationDateMap] = useState({
     ashare: getDefaultRecommendationDate(),
@@ -8977,6 +9141,10 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const activeMetaFavorited = favoriteCodeSet.has(activeMetaCode);
   const manualWatchlistItems = watchlistItemsMap[market] || EMPTY_LIST;
   const recommendationItems = recommendationItemsMap[market] || EMPTY_LIST;
+  const watchlistLoading = watchlistLoadingMap[market] || false;
+  const watchlistError = watchlistErrorMap[market] || "";
+  const recommendationLoading = recommendationLoadingMap[market] || false;
+  const recommendationError = recommendationErrorMap[market] || "";
   const effectiveWatchlistStyle = market === "hk" ? "cards" : watchlistStyle;
   const watchlistItems = effectiveWatchlistStyle === "rows" ? recommendationItems : manualWatchlistItems;
   const watchlistLoadingState = effectiveWatchlistStyle === "rows" ? recommendationLoading : watchlistLoading;
@@ -9000,8 +9168,24 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const favoriteGroupTouchedRef = useRef({ ashare: false, hk: false, us: false });
   const marketRef = useRef(market);
   const marketCodesRef = useRef(marketCodes);
+  const watchlistRunRef = useRef({ ashare: 0, hk: 0, us: 0 });
+  const watchlistDraftRef = useRef({ ashare: 0, hk: 0, us: 0 });
+  const defaultWatchlistStartedRef = useRef({ ashare: false, hk: false, us: false });
+  const recommendationRunRef = useRef({ ashare: 0, us: 0 });
   const loadRunRef = useRef(0);
   const tradeSideRequestRef = useRef(0);
+  const [stockDetailsLoader] = useState(createStockDetailsLoader);
+  const [tradeSidePollLoader] = useState(createStockDetailsLoader);
+  const tradeSidePollRef = useRef(null);
+  const cancelTradeSidePoll = useCallback(() => {
+    tradeSidePollRef.current = null;
+    tradeSidePollLoader.cancel();
+  }, [tradeSidePollLoader]);
+  useEffect(() => () => {
+    stockDetailsLoader.cancel();
+    cancelTradeSidePoll();
+    tradeSideRequestRef.current += 1;
+  }, [stockDetailsLoader, cancelTradeSidePoll, market, period]);
   const usKlineCacheRef = useRef(new Map());
   const usPreloadRunRef = useRef(0);
 
@@ -9189,6 +9373,9 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   // 默认自选填充：优先展示收藏夹最新 10 只，收藏夹为空则从备选池随机取 5 只。
   async function loadDefaultWatchlist(targetMarket = market) {
     const requestedMarket = normalizeEquityMarket(targetMarket, normalizeEquityMarket(market));
+    const initialDraft = watchlistDraftRef.current[requestedMarket];
+    setWatchlistLoadingMap((prev) => ({ ...prev, [requestedMarket]: true }));
+    setWatchlistErrorMap((prev) => ({ ...prev, [requestedMarket]: "" }));
 
     let codes = [];
     try {
@@ -9208,6 +9395,10 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
       codes = pickRandomCodes(pool, 5);
     }
 
+    // Only an actual input edit cancels initial population. Validating an
+    // empty list must not discard the pending market initialization.
+    if (initialDraft !== watchlistDraftRef.current[requestedMarket]) return;
+
     // 同步输入框，保证「生成列表」复现一致。
     setWatchlistInputMap((prev) => ({ ...prev, [requestedMarket]: codes.join(",") }));
 
@@ -9224,19 +9415,22 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
 
   async function loadWatchlist(targetMarket = market, codesOverride = null) {
     const requestedMarket = normalizeEquityMarket(targetMarket, normalizeEquityMarket(market));
+    const runId = ++watchlistRunRef.current[requestedMarket];
+    const isCurrent = () => runId === watchlistRunRef.current[requestedMarket];
     const rawInput = codesOverride != null
       ? (Array.isArray(codesOverride) ? codesOverride.join(",") : codesOverride)
       : (watchlistInputMap[requestedMarket] || "");
     const codes = normalizeWatchlistCodes(rawInput, requestedMarket);
 
     if (!codes.length) {
-      setWatchlistError(requestedMarket === "ashare" ? "请先输入至少一个 6 位 A 股代码。" : requestedMarket === "hk" ? "请先输入至少一个有效的港股代码。" : "请先输入至少一个有效的美股代码。");
+      setWatchlistErrorMap((prev) => ({ ...prev, [requestedMarket]: requestedMarket === "ashare" ? "请先输入至少一个 6 位 A 股代码。" : requestedMarket === "hk" ? "请先输入至少一个有效的港股代码。" : "请先输入至少一个有效的美股代码。" }));
+      setWatchlistLoadingMap((prev) => ({ ...prev, [requestedMarket]: false }));
       setWatchlistItemsMap((prev) => ({ ...prev, [requestedMarket]: [] }));
       return;
     }
 
-    setWatchlistLoading(true);
-    setWatchlistError("");
+    setWatchlistLoadingMap((prev) => ({ ...prev, [requestedMarket]: true }));
+    setWatchlistErrorMap((prev) => ({ ...prev, [requestedMarket]: "" }));
     try {
       const activeMeta = requestedMarket === market && !isIndex ? meta : null;
       const results = await Promise.allSettled(
@@ -9256,6 +9450,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
         }),
       );
 
+      if (!isCurrent()) return;
       const nextItems = results
         .filter((item) => item.status === "fulfilled")
         .map((item) => item.value);
@@ -9265,33 +9460,37 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
         .map(({ code }) => code);
 
       setWatchlistItemsMap((prev) => ({ ...prev, [requestedMarket]: nextItems }));
-      setWatchlistError(failedCodes.length ? `以下代码暂时未能加载名称：${failedCodes.join("、")}` : "");
+      setWatchlistErrorMap((prev) => ({ ...prev, [requestedMarket]: failedCodes.length ? `以下代码暂时未能加载名称：${failedCodes.join("、")}` : "" }));
     } catch (e) {
-      setWatchlistError(getErrorMessage(e, "自选列表生成失败，请检查代码后重试。"));
+      if (isCurrent()) setWatchlistErrorMap((prev) => ({ ...prev, [requestedMarket]: getErrorMessage(e, "自选列表生成失败，请检查代码后重试。") }));
     } finally {
-      setWatchlistLoading(false);
+      if (isCurrent()) setWatchlistLoadingMap((prev) => ({ ...prev, [requestedMarket]: false }));
     }
   }
 
   async function loadRecommendations(targetMarket = market) {
     if (targetMarket === "hk") return;
     const requestedMarket = targetMarket === "us" ? "us" : "ashare";
+    const runId = ++recommendationRunRef.current[requestedMarket];
+    const isCurrent = () => runId === recommendationRunRef.current[requestedMarket];
     const factor = requestedMarket === "us" ? recommendationFactorMap.us : recommendationFactorMap.ashare;
     const date = requestedMarket === "us" ? recommendationDateMap.us : recommendationDateMap.ashare;
-    setRecommendationLoading(true);
-    setRecommendationError("");
+    setRecommendationLoadingMap((prev) => ({ ...prev, [requestedMarket]: true }));
+    setRecommendationErrorMap((prev) => ({ ...prev, [requestedMarket]: "" }));
 
     try {
       const payload = await fetchRecommendationList({ market: requestedMarket, factor, date });
+      if (!isCurrent()) return;
       const items = Array.isArray(payload?.items) ? payload.items : [];
       setRecommendationItemsMap((prev) => ({ ...prev, [requestedMarket]: items }));
       // Empty isn't an error — the factor just has no qualifying picks today.
       // The friendly "今天没有符合要求的因子X" placeholder covers this case.
     } catch (e) {
-      setRecommendationError(getErrorMessage(e, "推荐列表读取失败，请检查 Redis key 或数据格式。"));
+      if (!isCurrent()) return;
+      setRecommendationErrorMap((prev) => ({ ...prev, [requestedMarket]: getErrorMessage(e, "推荐列表读取失败，请检查 Redis key 或数据格式。") }));
       setRecommendationItemsMap((prev) => ({ ...prev, [requestedMarket]: [] }));
     } finally {
-      setRecommendationLoading(false);
+      if (isCurrent()) setRecommendationLoadingMap((prev) => ({ ...prev, [requestedMarket]: false }));
     }
   }
 
@@ -9418,19 +9617,33 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   }
 
   async function refreshTradeSideHistory() {
-    if (market !== 'ashare' || isIndex || !/^\d{6}$/.test(meta.code)) return;
+    if (market !== 'ashare' || market !== marketRef.current || period !== periodRef.current
+      || isIndex || !/^\d{6}$/.test(meta.code) || tradeSidePollRef.current) return;
     const code = meta.code;
-    const runId = loadRunRef.current;
     const requestId = ++tradeSideRequestRef.current;
+    const requestPeriod = periodRef.current;
+    const poll = {};
+    tradeSidePollRef.current = poll;
+    // A same-stock chart refresh must not invalidate this independent request.
+    const isCurrent = () => tradeSidePollRef.current === poll && requestId === tradeSideRequestRef.current
+      && marketRef.current === "ashare" && periodRef.current === requestPeriod;
     setTradeSideLoading(true);
     setTradeSideError('');
     try {
-      const payload = await fetchTradeSideHistory(code);
-      if (runId === loadRunRef.current && requestId === tradeSideRequestRef.current) applyTradeSideHistory(payload);
+      await tradeSidePollLoader.load({
+        tasks: { tradeSide: signal => fetchTradeSideHistory(code, { signal }) },
+        timeoutMs: 30_000,
+        isCurrent,
+        onSettled: (_key, outcome) => {
+          if (outcome.status === 'fulfilled') applyTradeSideHistory(outcome.value);
+          else setTradeSideError(getErrorMessage(outcome.reason, '内外盘历史加载失败'));
+        },
+      });
     } catch (error) {
-      if (runId === loadRunRef.current && requestId === tradeSideRequestRef.current) setTradeSideError(error.message || '内外盘历史加载失败');
+      if (isCurrent()) setTradeSideError(error.message || '内外盘历史加载失败');
     } finally {
-      if (runId === loadRunRef.current && requestId === tradeSideRequestRef.current) setTradeSideLoading(false);
+      if (isCurrent()) setTradeSideLoading(false);
+      if (tradeSidePollRef.current === poll) tradeSidePollRef.current = null;
     }
   }
 
@@ -9438,6 +9651,11 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     if (isStandaloneMarket || market !== marketRef.current) return;
     const requestPeriod = periodRef.current;
     const runId = ++loadRunRef.current;
+    const isCurrent = () => runId === loadRunRef.current && requestPeriod === periodRef.current && market === marketRef.current;
+    if (!refresh) {
+      stockDetailsLoader.cancel();
+      cancelTradeSidePoll();
+    }
     const rawTargetCode = typeof overrideCode === "string" ? overrideCode : currentCode;
     const targetIndex = market === "ashare" ? TREND_INDICES.find((index) => index.tencentSymbol === rawTargetCode.trim().toLowerCase()) : null;
     let targetCode = targetIndex?.code || normalizeCodeForMarket(rawTargetCode, market);
@@ -9470,6 +9688,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
           let normalized = onlyDigits(rawTargetCode);
           if (!isSixDigitCode(normalized)) {
             const matches = await fetchAshareSuggestions(rawTargetCode);
+            if (!isCurrent() || marketCodesRef.current.ashare !== rawTargetCode) return null;
             normalized = onlyDigits(matches[0]?.code);
             if (isSixDigitCode(normalized)) {
               setMarketCodes((prev) => ({ ...prev, ashare: normalized }));
@@ -9494,6 +9713,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
             let normalized = normalizeHkCode(rawTargetCode);
             if (!isValidHkCode(normalized)) {
               const matches = await fetchHkSuggestions(rawTargetCode);
+              if (!isCurrent() || marketCodesRef.current.hk !== rawTargetCode) return null;
               normalized = normalizeHkCode(matches[0]?.code);
               if (isValidHkCode(normalized)) {
                 setMarketCodes((prev) => ({ ...prev, hk: normalized }));
@@ -9525,7 +9745,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
             limit: Math.max(5000, Number(displayCount) + 120),
           });
         })();
-      if (runId !== loadRunRef.current || requestPeriod !== periodRef.current || market !== marketRef.current) return;
+      if (!result || !isCurrent()) return;
       setRawRows(result.klines);
       setLoadedPeriod(requestPeriod);
       setMeta({
@@ -9562,73 +9782,51 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
         setTradeSideLoading(true);
         setProfileLoading(true);
         setSuspensionRisk({ loading: true });
-        try {
-          const target = result.code || currentCode;
-          const [financeResult, tradeSideResult, profileResult, suspensionResult] = await Promise.allSettled([
-            apiFetch(`/api/ashare-finance?code=${encodeURIComponent(target)}`, {
-              method: "GET",
-              cache: "no-store",
-            }).then(async (res) => {
-              const payload = await res.json().catch(() => null);
-              if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+        // Chart loading is complete. Each detail owns its result/loading state,
+        // so a slow company profile cannot hold the risk badge or query button.
+        setLoading(false);
+        const target = result.code || currentCode;
+        const tradeSideRequestId = ++tradeSideRequestRef.current;
+        const getDetail = async (url, signal) => {
+          const response = await apiFetch(url, { method: "GET", cache: "no-store", signal });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) throw new Error(payload?.error || `HTTP ${response.status}`);
+          if (!payload) throw new Error("资料接口未返回有效数据");
+          return payload;
+        };
+        await stockDetailsLoader.load({
+          // Same-symbol minute refreshes do not cancel this group or change
+          // its identity; manual queries and instrument/period changes do.
+          isCurrent: () => market === marketRef.current && requestPeriod === periodRef.current,
+          tasks: {
+            finance: signal => getDetail(`/api/ashare-finance?code=${encodeURIComponent(target)}`, signal),
+            tradeSide: signal => fetchTradeSideHistory(target, { signal }),
+            profile: signal => getDetail(`/api/ashare-profile?code=${encodeURIComponent(target)}`, signal),
+            suspension: async signal => {
+              const payload = await getDetail(`/api/suspension-alert?code=${encodeURIComponent(target)}&name=${encodeURIComponent(result.name || "")}`, signal);
+              if (!payload.level) throw new Error("停牌风险接口未返回有效数据");
               return payload;
-            }),
-            fetchTradeSideHistory(target),
-            apiFetch(`/api/ashare-profile?code=${encodeURIComponent(target)}`, {
-              method: "GET",
-              cache: "no-store",
-            }).then(async (res) => {
-              const payload = await res.json().catch(() => null);
-              if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
-              return payload;
-            }),
-            apiFetch(`/api/suspension-alert?code=${encodeURIComponent(target)}&name=${encodeURIComponent(result.name || "")}`, {
-              method: "GET",
-              cache: "no-store",
-            }).then(async (res) => {
-              const payload = await res.json().catch(() => null);
-              if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
-              return payload;
-            }),
-          ]);
-
-          if (runId !== loadRunRef.current) return;
-
-          if (financeResult.status === "fulfilled") {
-            setFinancialInfo(financeResult.value);
-          } else {
-            setFinancialError(financeResult.reason instanceof Error ? financeResult.reason.message : "财报数据加载失败");
-          }
-
-          if (tradeSideResult.status === "fulfilled") {
-            applyTradeSideHistory(tradeSideResult.value);
-          } else {
-            setTradeSideError(tradeSideResult.reason instanceof Error ? tradeSideResult.reason.message : "内外盘历史加载失败");
-          }
-
-          if (profileResult.status === "fulfilled") {
-            setProfileInfo(profileResult.value);
-          } else {
-            setProfileError(profileResult.reason instanceof Error ? profileResult.reason.message : "公司概况数据加载失败");
-          }
-
-          if (suspensionResult.status === "fulfilled" && suspensionResult.value?.level) {
-            setSuspensionRisk(suspensionResult.value);
-          } else {
-            setSuspensionRisk({
-              error:
-                suspensionResult.status === "rejected" && suspensionResult.reason instanceof Error
-                  ? suspensionResult.reason.message
-                  : "停牌风险接口未返回有效数据（后端是否已重启并注册 /api/suspension-alert？）",
-            });
-          }
-        } finally {
-          if (runId === loadRunRef.current) {
-            setFinancialLoading(false);
-            setTradeSideLoading(false);
-            setProfileLoading(false);
-          }
-        }
+            },
+          },
+          onSettled: (key, outcome) => {
+            const fulfilled = outcome.status === "fulfilled";
+            if (key === "finance") {
+              if (fulfilled) setFinancialInfo(outcome.value);
+              else setFinancialError(getErrorMessage(outcome.reason, "财报数据加载失败"));
+              setFinancialLoading(false);
+            } else if (key === "tradeSide" && tradeSideRequestId === tradeSideRequestRef.current) {
+              if (fulfilled) applyTradeSideHistory(outcome.value);
+              else setTradeSideError(getErrorMessage(outcome.reason, "内外盘历史加载失败"));
+              setTradeSideLoading(false);
+            } else if (key === "profile") {
+              if (fulfilled) setProfileInfo(outcome.value);
+              else setProfileError(getErrorMessage(outcome.reason, "公司概况数据加载失败"));
+              setProfileLoading(false);
+            } else if (key === "suspension") {
+              setSuspensionRisk(fulfilled ? outcome.value : { error: getErrorMessage(outcome.reason, "停牌风险加载失败") });
+            }
+          },
+        });
       } else if (market === "us") {
         setFinancialLoading(false);
         setTradeSideLoading(false);
@@ -9642,14 +9840,14 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
           });
           const payload = await res.json().catch(() => null);
           if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
-          if (runId !== loadRunRef.current) return;
+          if (!isCurrent()) return;
           setProfileInfo(payload);
         } catch (profileErr) {
-          if (runId === loadRunRef.current) {
+          if (isCurrent()) {
             setProfileError(profileErr instanceof Error ? profileErr.message : "美股公司资料加载失败");
           }
         } finally {
-          if (runId === loadRunRef.current) setProfileLoading(false);
+          if (isCurrent()) setProfileLoading(false);
         }
       } else {
         setFinancialLoading(false);
@@ -9658,7 +9856,10 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
         setSuspensionRisk(null);
       }
     } catch (e) {
-      if (runId !== loadRunRef.current) return;
+      if (!isCurrent()) return;
+      stockDetailsLoader.cancel();
+      cancelTradeSidePoll();
+      tradeSideRequestRef.current += 1;
       setError(getErrorMessage(e, "行情加载失败，请稍后重试。"));
       setRawRows([]);
       setMeta({ ...nextMeta, code: targetCode });
@@ -9667,14 +9868,15 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
       setTradeSideLoading(false);
       setProfileLoading(false);
     } finally {
-      if (runId === loadRunRef.current) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }
 
   useEffect(() => {
     if (market !== 'ashare' || isIndex || loading || !/^\d{6}$/.test(meta.code)) return undefined;
+    const loadRun = loadRunRef.current;
     const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') void refreshTradeSideHistory();
+      if (loadRun === loadRunRef.current && document.visibilityState === 'visible') void refreshTradeSideHistory();
     }, tradeSideInfo?.history?.status === 'loading' ? 3_000 : 60_000);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -9719,13 +9921,14 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     const timer = window.setTimeout(() => {
       if (effectiveWatchlistStyle === "rows") {
         loadRecommendations(market);
-      } else {
+      } else if (!defaultWatchlistStartedRef.current[market]) {
+        defaultWatchlistStartedRef.current[market] = true;
         loadDefaultWatchlist(market);
       }
     }, 0);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [market, watchlistItems.length, effectiveWatchlistStyle]);
+  }, [market, watchlistItems.length, effectiveWatchlistStyle, recommendationFactor, recommendationDate]);
 
   useEffect(() => {
     if (market !== "us" || !usPreloadEnabled) {
@@ -9806,6 +10009,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                       if (active) return;
                       marketRef.current = tab.value;
                       loadRunRef.current += 1;
+                      stockDetailsLoader.cancel();
                       if (tab.value !== "ashare" && isMinutePeriod(periodRef.current)) {
                         periodRef.current = "101";
                         setPeriod("101");
@@ -9873,6 +10077,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                       setShowProfileMenu(false);
                       marketRef.current = "account";
                       loadRunRef.current += 1;
+                      stockDetailsLoader.cancel();
                       setMarket("account");
                       setError("");
                       setFinancialError("");
@@ -9939,9 +10144,20 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                   // Keep the browser's editing value intact. Uppercasing during IME
                   // composition cancels its marked range and can duplicate the commit.
                   const value = e.target.value;
+                  marketCodesRef.current = { ...marketCodesRef.current, [market]: value };
                   setMarketCodes((prev) => ({ ...prev, [market]: value }));
-                  if (market === "ashare") setAshareSuggestOpen(Boolean(e.target.value.trim()));
-                  if (market === "hk") setHkSuggestOpen(Boolean(e.target.value.trim()));
+                  if (market === "ashare") {
+                    setAshareSuggestions([]);
+                    setAshareSuggestOpen(false);
+                    setAshareSuggestLoading(false);
+                    setAshareSuggestIndex(0);
+                  }
+                  if (market === "hk") {
+                    setHkSuggestions([]);
+                    setHkSuggestOpen(false);
+                    setHkSuggestLoading(false);
+                    setHkSuggestIndex(0);
+                  }
                 }}
                 onFocus={() => {
                   if (market === "ashare") setAshareSuggestFocused(true);
@@ -10126,9 +10342,9 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
         )}
 
         {error && (
-          <div className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-700">
-            <AlertCircle className="h-5 w-5" />
-            <span>{error}</span>
+          <div role="alert" className="flex min-w-0 items-start gap-2 rounded-2xl border border-red-200 bg-red-50 p-4 text-red-700">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{error}</span>
           </div>
         )}
 
@@ -10493,14 +10709,27 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
               recommendationDate={recommendationDate}
               favoriteCodeSet={favoriteCodeSet}
               favoritePendingCodeSet={favoritePendingCodeSet}
-              onInputChange={(value) => setWatchlistInputMap((prev) => ({ ...prev, [market]: value }))}
+              onInputChange={(value) => {
+                defaultWatchlistStartedRef.current[market] = true;
+                watchlistDraftRef.current[market] += 1;
+                watchlistRunRef.current[market] += 1;
+                setWatchlistLoadingMap((prev) => ({ ...prev, [market]: false }));
+                setWatchlistErrorMap((prev) => ({ ...prev, [market]: "" }));
+                setWatchlistInputMap((prev) => ({ ...prev, [market]: value }));
+              }}
               onRefresh={() => (effectiveWatchlistStyle === "rows" ? loadRecommendations() : loadWatchlist())}
               onStyleChange={setWatchlistStyle}
               onRecommendationFactorChange={(value) => {
+                recommendationRunRef.current[market] += 1;
+                setRecommendationLoadingMap((prev) => ({ ...prev, [market]: false }));
+                setRecommendationErrorMap((prev) => ({ ...prev, [market]: "" }));
                 setRecommendationFactorMap((prev) => ({ ...prev, [market]: value }));
                 setRecommendationItemsMap((prev) => ({ ...prev, [market]: [] }));
               }}
               onRecommendationDateChange={(value) => {
+                recommendationRunRef.current[market] += 1;
+                setRecommendationLoadingMap((prev) => ({ ...prev, [market]: false }));
+                setRecommendationErrorMap((prev) => ({ ...prev, [market]: "" }));
                 setRecommendationDateMap((prev) => ({ ...prev, [market]: value }));
                 setRecommendationItemsMap((prev) => ({ ...prev, [market]: [] }));
               }}
