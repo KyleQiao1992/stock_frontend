@@ -7530,7 +7530,7 @@ function MarketHeatmapContent({ onOpenStock, historyQuery }) {
       </div>}
       <Card className="rounded-2xl border-slate-200">
         <CardContent className="p-3">
-          <div className="mb-2 flex items-center justify-between px-1 text-xs text-slate-400">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 px-1 text-xs text-slate-400">
             <span>
               {focusIndustry
                 ? `${focusIndustry.name} · ${historical ? (detail?.stocks?.length ?? "—") : focusIndustry.count} 只 · ${heatmapPct(focusIndustry.pct)}${detailLoading ? " · 成分股加载中…" : ""}`
@@ -8760,6 +8760,7 @@ function WatchlistPanel({
 }
 
 function FavoritesToolbar({
+  panelId,
   market,
   items,
   open,
@@ -8809,27 +8810,8 @@ function FavoritesToolbar({
     <>
       {open && <button type="button" aria-label="关闭收藏夹" className="fixed inset-0 z-30 cursor-default bg-transparent" onClick={onToggleOpen} />}
 
-      <div className="fixed bottom-4 right-3 z-40 flex flex-col gap-3 md:bottom-auto md:top-1/2 md:-translate-y-1/2">
-        <button
-          type="button"
-          onClick={onToggleOpen}
-          className={`group flex min-h-16 w-14 flex-col items-center justify-center rounded-2xl border px-2 py-3 text-xs shadow-lg backdrop-blur transition ${
-            open
-              ? "border-slate-900 bg-slate-900 text-white"
-              : "border-slate-200 bg-white/92 text-slate-600 hover:border-slate-300 hover:text-slate-900"
-          }`}
-          title={title}
-        >
-          <Star className="h-4 w-4" fill={open ? "currentColor" : "none"} />
-          <span className="mt-2 leading-4">收藏夹</span>
-          <span className={`mt-1 rounded-full px-1.5 py-0.5 text-[10px] ${open ? "bg-white/15 text-white" : "bg-slate-100 text-slate-500"}`}>
-            {items.length}
-          </span>
-        </button>
-      </div>
-
       {open && (
-        <div className="fixed bottom-24 right-3 z-40 w-[320px] max-w-[calc(100vw-1.5rem)] md:bottom-auto md:top-1/2 md:right-20 md:max-h-[70vh] md:-translate-y-1/2">
+        <div id={panelId} role="dialog" aria-label={title} className="fixed bottom-4 right-3 z-40 max-h-[calc(100dvh-2rem)] w-[320px] max-w-[calc(100vw-1.5rem)] overflow-y-auto md:bottom-auto md:top-1/2 md:max-h-[70vh] md:-translate-y-1/2">
           <Card className="overflow-hidden rounded-[28px] border-slate-200 bg-white/95 shadow-2xl backdrop-blur">
             <CardContent className="p-0">
               <div className="flex items-center justify-between border-b border-slate-100 px-4 py-4">
@@ -8997,6 +8979,7 @@ function FavoritesToolbar({
 export default function AShareTD9InteractiveChart({ onLogout, user, themePreference = "system", onThemeChange }) {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const profileMenuId = useId();
+  const favoritesPanelId = useId();
   const [market, setMarket] = useState("ashare");
   // 初始为空：挂载后默认选中自选/收藏夹里的第一只，不再写死茅台/MSFT。
   const [marketCodes, setMarketCodes] = useState({ ashare: "", hk: "", us: "" });
@@ -9996,8 +9979,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     <div className="min-h-screen bg-canvas p-4 text-slate-900">
       <div className="mx-auto max-w-[1600px] space-y-4">
         <div className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
-            <div className="inline-flex min-w-0 max-w-full flex-wrap rounded-2xl border border-slate-200 bg-slate-50 p-1 sm:rounded-full">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="inline-flex w-full min-w-0 max-w-full flex-wrap rounded-2xl border border-slate-200 bg-slate-50 p-1 sm:w-auto sm:rounded-full">
               {MARKET_TABS.filter((tab) => !tab.adminOnly || user?.role === "admin").map((tab) => {
                 const active = market === tab.value;
                 return (
@@ -10042,9 +10025,25 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                 );
               })}
             </div>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+          {!isStandaloneMarket && (
+            <button
+              type="button"
+              aria-label="收藏夹"
+              aria-expanded={favoritesPanelOpen}
+              aria-controls={favoritesPanelId}
+              onClick={() => setFavoritesPanelOpen((value) => !value)}
+              className={`inline-flex min-h-9 items-center gap-2 rounded-xl border px-3 py-1.5 text-xs transition ${favoritesPanelOpen ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:text-slate-900"}`}
+              title={market === "us" ? "我的美股收藏夹" : market === "hk" ? "我的港股收藏夹" : "我的股票收藏夹"}
+            >
+              <Star className="h-4 w-4" fill={favoritesPanelOpen ? "currentColor" : "none"} />
+              <span>收藏夹</span>
+              <span className={`rounded-full px-1.5 py-0.5 text-[10px] ${favoritesPanelOpen ? "bg-white/15 text-white" : "bg-slate-100 text-slate-500"}`}>{favoriteItems.length}</span>
+            </button>
+          )}
           {onLogout && (
             <div
-              className="relative ml-auto shrink-0"
+              className="relative shrink-0"
               onBlur={(event) => {
                 if (!event.currentTarget.contains(event.relatedTarget)) setShowProfileMenu(false);
               }}
@@ -10129,6 +10128,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
               )}
             </div>
           )}
+          </div>
           </div>
           {!isStandaloneMarket && <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-2 border-t border-slate-100 pt-3">
           <div className={`market-query-controls grid min-w-0 grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center ${market === "ashare" ? "" : "flex-1"}`}>
@@ -10605,7 +10605,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
               </CardContent>
             </Card>
             <div className="xl:min-w-0">
-              <div className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pr-1">
+              <div className="space-y-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:[scrollbar-gutter:stable] xl:pr-1">
                 <Card className="self-start rounded-2xl">
                   <CardContent className="p-4">
                   <div className="chart-panel-header mb-3 flex min-w-0 flex-col gap-3">
@@ -10775,6 +10775,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
         )}
         {!isStandaloneMarket && (
           <FavoritesToolbar
+            panelId={favoritesPanelId}
             market={market}
             items={favoriteItems}
             open={favoritesPanelOpen}

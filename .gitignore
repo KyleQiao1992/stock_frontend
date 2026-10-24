@@ -15,6 +15,11 @@ dist-ssr
 .env.*
 *.local
 
+# Browser reports and local authenticated browser state must never be committed.
+test-results/
+playwright-report/
+.auth/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

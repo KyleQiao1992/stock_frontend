@@ -1,0 +1,774 @@
+{
+  "scope": "Active pipeline source-rule audit; observations and bounded checks do not certify all original figures or live services.",
+  "auditedAt": "2026-10-23T14:42:06.279Z",
+  "sourceHashes": {
+    "src/lib/chan/index.js": "33b6e54174ba33b7ac9d893bb6bd3e881bb6e47d008aa1eedf30a441d0942c2f",
+    "src/lib/chan/referenceEngine.js": "7b42e393b018e69294ba7ebe30a20ba32d60bb812e124bb4ef3cec45995c8d93",
+    "src/lib/chan/segment.js": "04c501062ee58315384a588a173bb7d4d00b4324730594daf759c45ca57b6e88",
+    "src/lib/chan/referenceZs.js": "76c71b4d24a68638719ae99a3ebf482b9249139e704bc98754157e7f4f900839",
+    "src/components/ChanOverlay.jsx": "00fa4a2abc778aa9f11420cf745539dcb6eab27603f142cb8a3cd7c1c2d48ade"
+  },
+  "checks": [
+    {
+      "id": "F01",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000bf2.html",
+      "description": "Upward inclusion takes higher high and higher low",
+      "status": "pass",
+      "expected": [
+        11,
+        6
+      ],
+      "actual": [
+        11,
+        6
+      ]
+    },
+    {
+      "id": "F02",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000bf2.html",
+      "description": "Downward inclusion takes lower high and lower low",
+      "status": "pass",
+      "expected": [
+        12,
+        7
+      ],
+      "actual": [
+        12,
+        7
+      ]
+    },
+    {
+      "id": "F03",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000bf2.html",
+      "description": "Three processed K high/low fractal geometry",
+      "status": "pass",
+      "expected": [
+        [
+          "G",
+          2,
+          10
+        ]
+      ],
+      "actual": [
+        [
+          "G",
+          2,
+          10
+        ]
+      ]
+    },
+    {
+      "id": "F04",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000bf2.html",
+      "description": "Three processed K high/low fractal geometry",
+      "status": "pass",
+      "expected": [
+        [
+          "D",
+          2,
+          3
+        ]
+      ],
+      "actual": [
+        [
+          "D",
+          2,
+          3
+        ]
+      ]
+    },
+    {
+      "id": "B01",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000cih.html",
+      "description": "Old pen rejects six processed K without an independent K",
+      "status": "pass",
+      "expected": [],
+      "actual": []
+    },
+    {
+      "id": "B02",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000cih.html",
+      "description": "Old pen accepts two three-K fractals separated by one independent K",
+      "status": "pass",
+      "expected": [
+        [
+          2,
+          "D"
+        ],
+        [
+          6,
+          "G"
+        ]
+      ],
+      "actual": [
+        [
+          2,
+          "D"
+        ],
+        [
+          6,
+          "G"
+        ]
+      ]
+    },
+    {
+      "id": "L01",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000c16.html",
+      "description": "Ordinary no-gap top characteristic fractal",
+      "status": "pass",
+      "expected": [
+        [
+          3,
+          "feature_no_gap"
+        ]
+      ],
+      "actual": [
+        [
+          3,
+          "feature_no_gap"
+        ]
+      ]
+    },
+    {
+      "id": "L02",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000c16.html",
+      "description": "Gap case can confirm with reverse fractal without filling old gap",
+      "status": "pass",
+      "expected": [
+        [
+          3,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          6,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "actual": [
+        [
+          3,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          6,
+          "reverse_feature_fractal"
+        ]
+      ]
+    },
+    {
+      "id": "L03-up",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000c16.html",
+      "description": "Gap branch must be determined AFTER feature inclusion",
+      "status": "fail",
+      "expected": [],
+      "actual": [
+        {
+          "endIndex": 3,
+          "confirmation": "feature_no_gap",
+          "feature_gap": false
+        }
+      ],
+      "sign": 1,
+      "evidence": {
+        "prices": [
+          0,
+          100,
+          40,
+          120,
+          50,
+          115,
+          110,
+          114,
+          105
+        ],
+        "featureIntervalsLowHigh": [
+          [
+            40,
+            100
+          ],
+          [
+            50,
+            120
+          ],
+          [
+            110,
+            115
+          ],
+          [
+            105,
+            114
+          ]
+        ],
+        "standardIntervalsLowHigh": [
+          [
+            40,
+            100
+          ],
+          [
+            110,
+            120
+          ],
+          [
+            105,
+            114
+          ]
+        ],
+        "gapAfterInclusion": [
+          100,
+          110
+        ],
+        "reverseFeatureIntervalsLowHigh": [
+          [
+            50,
+            115
+          ],
+          [
+            110,
+            114
+          ]
+        ],
+        "expectedExplanation": "No confirmed segment: the standardized first two elements have a gap and the reverse sequence has no fractal."
+      }
+    },
+    {
+      "id": "L03-down",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000c16.html",
+      "description": "Gap branch must be determined AFTER feature inclusion",
+      "status": "fail",
+      "expected": [],
+      "actual": [
+        {
+          "endIndex": 3,
+          "confirmation": "feature_no_gap",
+          "feature_gap": false
+        }
+      ],
+      "sign": -1,
+      "evidence": {
+        "prices": [
+          0,
+          100,
+          40,
+          120,
+          50,
+          115,
+          110,
+          114,
+          105
+        ],
+        "featureIntervalsLowHigh": [
+          [
+            40,
+            100
+          ],
+          [
+            50,
+            120
+          ],
+          [
+            110,
+            115
+          ],
+          [
+            105,
+            114
+          ]
+        ],
+        "standardIntervalsLowHigh": [
+          [
+            40,
+            100
+          ],
+          [
+            110,
+            120
+          ],
+          [
+            105,
+            114
+          ]
+        ],
+        "gapAfterInclusion": [
+          100,
+          110
+        ],
+        "reverseFeatureIntervalsLowHigh": [
+          [
+            50,
+            115
+          ],
+          [
+            110,
+            114
+          ]
+        ],
+        "expectedExplanation": "No confirmed segment: the standardized first two elements have a gap and the reverse sequence has no fractal."
+      }
+    },
+    {
+      "id": "L04-up",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000c16.html",
+      "description": "Active OHLC pipeline must retain the gap case as unconfirmed",
+      "status": "fail",
+      "expected": [],
+      "actual": [
+        {
+          "start": 9,
+          "end": 33,
+          "confirmed_time": 82,
+          "confirmation": "feature_no_gap"
+        }
+      ],
+      "sign": 1,
+      "turns": [
+        20,
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        104,
+        112
+      ],
+      "barsPerLeg": 8,
+      "prefixLength": 82,
+      "confirmedPenEndpoints": [
+        {
+          "time": 9,
+          "price": 199.9,
+          "mark": "D",
+          "idx": 8,
+          "confirmed": true,
+          "confirmed_time": 18
+        },
+        {
+          "time": 17,
+          "price": 300.1,
+          "mark": "G",
+          "idx": 16,
+          "confirmed": true,
+          "confirmed_time": 26
+        },
+        {
+          "time": 25,
+          "price": 239.9,
+          "mark": "D",
+          "idx": 24,
+          "confirmed": true,
+          "confirmed_time": 34
+        },
+        {
+          "time": 33,
+          "price": 320.1,
+          "mark": "G",
+          "idx": 32,
+          "confirmed": true,
+          "confirmed_time": 42
+        },
+        {
+          "time": 41,
+          "price": 249.9,
+          "mark": "D",
+          "idx": 40,
+          "confirmed": true,
+          "confirmed_time": 50
+        },
+        {
+          "time": 49,
+          "price": 315.1,
+          "mark": "G",
+          "idx": 48,
+          "confirmed": true,
+          "confirmed_time": 58
+        },
+        {
+          "time": 57,
+          "price": 309.9,
+          "mark": "D",
+          "idx": 56,
+          "confirmed": true,
+          "confirmed_time": 66
+        },
+        {
+          "time": 65,
+          "price": 314.1,
+          "mark": "G",
+          "idx": 64,
+          "confirmed": true,
+          "confirmed_time": 74
+        },
+        {
+          "time": 73,
+          "price": 304.9,
+          "mark": "D",
+          "idx": 72,
+          "confirmed": true,
+          "confirmed_time": 82
+        }
+      ]
+    },
+    {
+      "id": "L04-down",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000c16.html",
+      "description": "Active OHLC pipeline must retain the gap case as unconfirmed",
+      "status": "fail",
+      "expected": [],
+      "actual": [
+        {
+          "start": 9,
+          "end": 33,
+          "confirmed_time": 82,
+          "confirmation": "feature_no_gap"
+        }
+      ],
+      "sign": -1,
+      "turns": [
+        20,
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        104,
+        112
+      ],
+      "barsPerLeg": 8,
+      "prefixLength": 82,
+      "confirmedPenEndpoints": [
+        {
+          "time": 9,
+          "price": 200.1,
+          "mark": "G",
+          "idx": 8,
+          "confirmed": true,
+          "confirmed_time": 18
+        },
+        {
+          "time": 17,
+          "price": 99.9,
+          "mark": "D",
+          "idx": 16,
+          "confirmed": true,
+          "confirmed_time": 26
+        },
+        {
+          "time": 25,
+          "price": 160.1,
+          "mark": "G",
+          "idx": 24,
+          "confirmed": true,
+          "confirmed_time": 34
+        },
+        {
+          "time": 33,
+          "price": 79.9,
+          "mark": "D",
+          "idx": 32,
+          "confirmed": true,
+          "confirmed_time": 42
+        },
+        {
+          "time": 41,
+          "price": 150.1,
+          "mark": "G",
+          "idx": 40,
+          "confirmed": true,
+          "confirmed_time": 50
+        },
+        {
+          "time": 49,
+          "price": 84.9,
+          "mark": "D",
+          "idx": 48,
+          "confirmed": true,
+          "confirmed_time": 58
+        },
+        {
+          "time": 57,
+          "price": 90.1,
+          "mark": "G",
+          "idx": 56,
+          "confirmed": true,
+          "confirmed_time": 66
+        },
+        {
+          "time": 65,
+          "price": 85.9,
+          "mark": "D",
+          "idx": 64,
+          "confirmed": true,
+          "confirmed_time": 74
+        },
+        {
+          "time": 73,
+          "price": 95.1,
+          "mark": "G",
+          "idx": 72,
+          "confirmed": true,
+          "confirmed_time": 82
+        }
+      ]
+    },
+    {
+      "id": "B03",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000cih.html",
+      "description": "Saved-sample top K extends above bottom K (finite sample, not proof)",
+      "status": "pass",
+      "expected": [],
+      "actual": [],
+      "endpointPairs": 242
+    },
+    {
+      "id": "B04",
+      "source": "https://blog.sina.com.cn/s/blog_486e105c01000cih.html",
+      "description": "Seeded search for top-K endpoint-range violation (one condition only)",
+      "status": "pass",
+      "expected": null,
+      "actual": null,
+      "seed": 771062,
+      "histories": 30000,
+      "barsPerHistory": 35,
+      "endpointPairs": 40149
+    }
+  ],
+  "summary": {
+    "passed": 10,
+    "failed": 4
+  },
+  "observations": {
+    "explicitUnclosedRightKStillEmitsFractalWithoutStatus": [
+      {
+        "time": 2,
+        "price": 10,
+        "mark": "G",
+        "idx": 1
+      }
+    ],
+    "firstPenAnchorCircleOmission": {
+      "pens": [
+        {
+          "time": 2,
+          "price": 1,
+          "mark": "D",
+          "idx": 1,
+          "confirmed": true,
+          "confirmed_time": 7
+        },
+        {
+          "time": 6,
+          "price": 6,
+          "mark": "G",
+          "idx": 5,
+          "confirmed": false,
+          "confirmed_time": null
+        }
+      ],
+      "circles": [
+        {
+          "time": 6,
+          "price": 6,
+          "mark": "G",
+          "idx": 5
+        }
+      ]
+    },
+    "unconfirmedEndpointIncludedInZone": [
+      {
+        "id": "zs-1-4",
+        "sdt": 1,
+        "edt": 4,
+        "zg": 10,
+        "zd": 4,
+        "zz": 7,
+        "bi_count": 3,
+        "algorithm": "sliding_window"
+      }
+    ],
+    "persistentOverlapProducesMultipleWindows": {
+      "prices": [
+        0,
+        10,
+        4,
+        12,
+        3,
+        11,
+        4,
+        13,
+        2,
+        12,
+        3,
+        11,
+        4,
+        12
+      ],
+      "zones": [
+        {
+          "id": "zs-1-10",
+          "sdt": 1,
+          "edt": 10,
+          "zg": 10,
+          "zd": 4,
+          "zz": 7,
+          "bi_count": 9,
+          "algorithm": "sliding_window"
+        },
+        {
+          "id": "zs-2-11",
+          "sdt": 2,
+          "edt": 11,
+          "zg": 10,
+          "zd": 4,
+          "zz": 7,
+          "bi_count": 9,
+          "algorithm": "sliding_window"
+        },
+        {
+          "id": "zs-3-12",
+          "sdt": 3,
+          "edt": 12,
+          "zg": 11,
+          "zd": 4,
+          "zz": 7.5,
+          "bi_count": 9,
+          "algorithm": "sliding_window"
+        },
+        {
+          "id": "zs-4-13",
+          "sdt": 4,
+          "edt": 13,
+          "zg": 11,
+          "zd": 4,
+          "zz": 7.5,
+          "bi_count": 9,
+          "algorithm": "sliding_window"
+        },
+        {
+          "id": "zs-5-14",
+          "sdt": 5,
+          "edt": 14,
+          "zg": 11,
+          "zd": 4,
+          "zz": 7.5,
+          "bi_count": 9,
+          "algorithm": "sliding_window"
+        }
+      ]
+    }
+  },
+  "fixtureReports": [
+    {
+      "filename": "hk00700-5m.json",
+      "bars": 884,
+      "strokes": 40,
+      "confirmedSegments": 3,
+      "slidingZones": 11,
+      "unconfirmedTailInZone": true
+    },
+    {
+      "filename": "hk00700-day.json",
+      "bars": 298,
+      "strokes": 17,
+      "confirmedSegments": 2,
+      "slidingZones": 3,
+      "unconfirmedTailInZone": true
+    },
+    {
+      "filename": "sh000001-day.json",
+      "bars": 268,
+      "strokes": 18,
+      "confirmedSegments": 3,
+      "slidingZones": 4,
+      "unconfirmedTailInZone": true
+    },
+    {
+      "filename": "sh510300-day.json",
+      "bars": 287,
+      "strokes": 18,
+      "confirmedSegments": 4,
+      "slidingZones": 9,
+      "unconfirmedTailInZone": true
+    },
+    {
+      "filename": "sh510300-week.json",
+      "bars": 260,
+      "strokes": 16,
+      "confirmedSegments": 1,
+      "slidingZones": 4,
+      "unconfirmedTailInZone": true
+    },
+    {
+      "filename": "sh600519-day.json",
+      "bars": 291,
+      "strokes": 13,
+      "confirmedSegments": 0,
+      "slidingZones": 5,
+      "unconfirmedTailInZone": true
+    },
+    {
+      "filename": "sh603818-15m.json",
+      "bars": 783,
+      "strokes": 26,
+      "confirmedSegments": 3,
+      "slidingZones": 8,
+      "unconfirmedTailInZone": true
+    },
+    {
+      "filename": "sh603818-30m.json",
+      "bars": 293,
+      "strokes": 14,
+      "confirmedSegments": 3,
+      "slidingZones": 6,
+      "unconfirmedTailInZone": true
+    },
+    {
+      "filename": "sh603818-5m.json",
+      "bars": 308,
+      "strokes": 11,
+      "confirmedSegments": 0,
+      "slidingZones": 3,
+      "unconfirmedTailInZone": true
+    },
+    {
+      "filename": "sh603818-60m.json",
+      "bars": 285,
+      "strokes": 15,
+      "confirmedSegments": 1,
+      "slidingZones": 4,
+      "unconfirmedTailInZone": true
+    },
+    {
+      "filename": "sh603818-day.json",
+      "bars": 286,
+      "strokes": 15,
+      "confirmedSegments": 1,
+      "slidingZones": 3,
+      "unconfirmedTailInZone": true
+    },
+    {
+      "filename": "sh603818-week.json",
+      "bars": 259,
+      "strokes": 23,
+      "confirmedSegments": 2,
+      "slidingZones": 7,
+      "unconfirmedTailInZone": true
+    },
+    {
+      "filename": "sz000001-day.json",
+      "bars": 285,
+      "strokes": 16,
+      "confirmedSegments": 1,
+      "slidingZones": 4,
+      "unconfirmedTailInZone": true
+    }
+  ]
+}

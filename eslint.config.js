@@ -19,10 +19,15 @@ export default defineConfig([
     },
   },
   {
-    files: ['server/**/*.js'],
+    files: ['server/**/*.js', 'playwright.config.mjs'],
     extends: [js.configs.recommended],
     languageOptions: {
       globals: globals.node,
     },
+  },
+  {
+    files: ['tests/e2e/**/*.mjs'],
+    extends: [js.configs.recommended],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
 ])
