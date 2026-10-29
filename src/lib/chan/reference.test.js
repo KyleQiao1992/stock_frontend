@@ -41,8 +41,21 @@ function assertProductionInvariants(result, rows) {
     assert.equal(endpoint.price, endpoint.mark === 'G'
       ? Math.max(...after.map((bar) => bar.high)) : Math.min(...after.map((bar) => bar.low)));
   }
-  const zoneShape = ({ sdt, edt, zg, zd, zz, bi_count }) => [sdt, edt, zg, zd, zz, bi_count];
-  assert.deepEqual(result.zs.map(zoneShape), buildZs(result.bi).map(zoneShape));
+  // The saved website still uses sliding pens; production now uses completed
+  // segments. Verify its source evidence directly, without reusing its builder.
+  for (const zone of result.zs) {
+    const first = result.segments.slice(zone.startIndex, zone.startIndex + 3);
+    assert.equal(first.length, 3);
+    assert.ok(first.every(segment => segment.confirmed === true));
+    assert.equal(zone.zg, Math.min(...first.map(s => s.high)));
+    assert.equal(zone.zd, Math.max(...first.map(s => s.low)));
+    assert.ok(zone.zg > zone.zd);
+    assert.ok(zone.confirmed_time >= Math.max(...first.map(s => s.confirmed_time)));
+    assert.ok(zone.confirmed_time <= rows.length);
+    assert.equal(zone.algorithm, 'confirmed_segment_sequence');
+    assert.deepEqual(zone.segment_ids,
+      result.segments.slice(zone.startIndex, zone.endIndex + 1).map(s => s.id));
+  }
   assert.deepEqual(result.historyDates, result.analysisCandles.map((bar) => rows[bar.time - 1].date));
 }
 
@@ -108,7 +121,7 @@ for (const { name, data } of fixtures) {
   });
 }
 
-test('outlook parity fails when the actual classification, boundary timestamp, condition or scenario score differs', () => {
+test('outlook parity fails when the actual classification, boundary timestamp, condition or scenarios differ', () => {
   const source = fixtures.find(({ name }) => name === 'sh603818-day.json').data;
   // This local fixture only isolates comparator behavior. Do not edit the saved
   // historical capture, or require its old pen policy to match production.
@@ -120,7 +133,7 @@ test('outlook parity fails when the actual classification, boundary timestamp, c
     (outlook) => { outlook.conclusion.kind_hint = 'B3'; },
     (outlook) => { outlook.levels.zs_zg_bar = '2026-04-01 @ 3.68'; },
     (outlook) => { outlook.conclusion.trigger_condition = '替换条件'; },
-    (outlook) => { outlook.scenarios[0].score = 8; },
+    (outlook) => { outlook.scenarios.push({ id: 'comparator-only', condition: '替换情景' }); },
   ]) {
     const fixture = structuredClone(comparatorFixture);
     change(fixture.outlook);
@@ -169,13 +182,16 @@ test('every period analyzes all valid loaded candles and reports that actual inp
   const input = epochRows(source.candles);
   const invalid = { ...input[0], volume: NaN };
   for (const period of ['day', '101', 'week', '102', '60m', '30m', '15m', '15', '5m', '5']) {
-    const result = analyzeChan([invalid, ...input, invalid], period);
+    const result = analyzeChan(input, period);
     assert.equal(result.definition.requestedBars, input.length);
     assert.equal(result.definition.analysisScope, 'all-loaded');
     assert.equal(result.definition.segmentHistoryBars, input.length);
     assert.equal(result.definition.segmentHistoryStart, input[0].date);
     assert.deepEqual(result.dates, input.map((row) => row.date));
     assertProductionInvariants(result, input);
+    const malformed = analyzeChan([invalid, ...input, invalid], period);
+    assert.equal(malformed.inputProblem.reason, 'invalid_candle');
+    assert.equal(malformed.zs.length, 0, 'invalid candles cannot be removed to join otherwise separated evidence');
   }
 });
 

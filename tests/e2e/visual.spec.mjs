@@ -3,12 +3,17 @@ import { PAGE_CASES } from './pages.mjs';
 
 const widths = [320, 390, 768, 1280, 1440, 1920];
 const analysisCases = new Set([
-  'ashare-financial', 'ashare-outlook', 'ashare-endpoints', 'ashare-news', 'ashare-trade-history',
+  'ashare-financial', 'ashare-outlook', 'ashare-external-outlook', 'ashare-endpoints', 'ashare-news', 'ashare-trade-history',
   'hk-news', 'hk-outlook', 'hk-endpoints', 'us-outlook', 'us-endpoints',
 ]);
 
 function analysisTargets(page, id) {
   const panel = page.getByRole('region', { name: '个股分析', exact: true });
+  if (id === 'ashare-external-outlook') {
+    const outlook = panel.locator('[aria-label="缠论结构研判"]');
+    return [outlook.locator(':scope > p').first(),
+      outlook.locator('section[aria-label="修正结构研判范围"] > p').last()];
+  }
   if (id.endsWith('-outlook')) {
     const outlook = panel.locator('[aria-label="缠论结构研判"]');
     return [outlook.locator('section[aria-label="结构事实"] p').first(), outlook.locator(':scope > p').last()];
@@ -94,6 +99,38 @@ async function captureAnalysisScroll(page, item, theme, width, testInfo) {
   }
 }
 
+async function captureFslScroll(page, item, theme, width, testInfo) {
+  const saved = await page.evaluateHandle(() => ({
+    x: scrollX, y: scrollY,
+    elements: [...document.querySelectorAll('*')].filter(element => element.scrollTop || element.scrollLeft)
+      .map(element => ({ element, x: element.scrollLeft, y: element.scrollTop })),
+  }));
+  const panel = page.locator('svg[data-kline-count] [data-fsl-panel]').first();
+  try {
+    // Narrow charts intentionally scroll horizontally. Actually bring both
+    // ends of the legend into the painted viewport, including desktop's
+    // independent vertical scroller, instead of relying on fullPage captures.
+    for (const [index, target] of [panel.locator('[data-fsl-value="swl"]'), panel.locator('[data-fsl-legend] text').last()].entries()) {
+      await target.scrollIntoViewIfNeeded();
+      const geometry = await scrollGeometry(target);
+      expect(geometry.inside, 'FSL数值及状态须实际进入可见窗口').toBe(true);
+      await assertLayout(page);
+      const name = `${item.id}-${theme}-${width}-fsl-${index}.png`;
+      await page.screenshot({ path: testInfo.outputPath(name), animations: 'disabled' });
+      await testInfo.attach(name, { path: testInfo.outputPath(name), contentType: 'image/png' });
+    }
+  } finally {
+    await saved.evaluate(state => {
+      for (const element of document.querySelectorAll('*')) {
+        if (element.scrollTop || element.scrollLeft) { element.scrollTop = 0; element.scrollLeft = 0; }
+      }
+      for (const { element, x, y } of state.elements) { element.scrollLeft = x; element.scrollTop = y; }
+      scrollTo(state.x, state.y);
+    });
+    await saved.dispose();
+  }
+}
+
 for (const item of PAGE_CASES) {
   test(`页面覆盖与布局：${item.id} ${item.title}`, async ({ page, request }, testInfo) => {
     test.setTimeout(150_000);
@@ -122,6 +159,7 @@ for (const item of PAGE_CASES) {
           await page.screenshot({ path: testInfo.outputPath(filename), fullPage: true, animations: 'disabled' });
           await testInfo.attach(filename, { path: testInfo.outputPath(filename), contentType: 'image/png' });
           if (analysisCases.has(item.id)) await captureAnalysisScroll(page, item, theme, width, testInfo);
+          if (['ashare', 'hk', 'us'].includes(item.id)) await captureFslScroll(page, item, theme, width, testInfo);
           if (item.id === 'ashare' && width === 390) {
             await page.screenshot({ path: testInfo.outputPath(`ashare-${theme}-390-viewport.png`), animations: 'disabled' });
           }

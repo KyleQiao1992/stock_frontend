@@ -157,7 +157,7 @@ export async function assertLayout(page) {
     for (const svg of document.querySelectorAll('svg[data-kline-period],svg[data-index-trend-chart]')) {
       const candidates = [...svg.querySelectorAll('text')].filter(text =>
         /^(?:MA\d+|BBI|(?:本根)?涨跌|成交量|当前九转|(?:5分钟|30分钟|4小时|日K|周K|月K) ·)/.test(text.textContent.trim())
-        || text.querySelector('tspan'));
+        || text.closest('[data-fsl-panel],[data-indicator-header]') || text.querySelector('tspan'));
       const labels = candidates.map(element => ({ label: element.textContent.trim(), rect: element.getBoundingClientRect(), box: element.getBBox() }));
       for (const item of labels) {
         if (item.box.x < -1 || item.box.x + item.box.width > svg.viewBox.baseVal.width + 1) issues.push(`chart label clipped: ${item.label}`);

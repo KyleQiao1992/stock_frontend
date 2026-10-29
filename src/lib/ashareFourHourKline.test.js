@@ -51,6 +51,29 @@ test('turnover amount is summed only when each child explicitly reports a real a
   assert.equal(aggregate(rows).klines[0].amount, 0);
 });
 
+test('explicitly adjusted children preserve negative and zero prices, while raw children remain positive', () => {
+  const rows = dayRows('2026-10-20', { start: -3 });
+  const original = structuredClone(rows);
+  for (const adjusted of [undefined, false, 'qfq', 'true', 1]) {
+    assert.throws(() => aggregate(rows, { adjusted }), /价格|异常/);
+  }
+  const { klines, sourceBarCount, discardedSourceBarCount } = aggregate(rows, { adjusted: true });
+  assert.equal(sourceBarCount, 8);
+  assert.equal(discardedSourceBarCount, 0);
+  assert.deepEqual(klines.map(({ open, close, high, low, volume }) => [open, close, high, low, volume]),
+    [[-3, 1.5, 2, -4, 15], [2, 4.5, 5, 1, 21]]);
+  assert.ok(klines.every(row => row.complete));
+  assert.deepEqual(rows, original, 'adjusted source prices and zero-valued children must not be rewritten or removed');
+});
+
+test('adjustment metadata does not permit malformed prices, geometry, quantities, times or completion', () => {
+  const rows = dayRows('2026-10-20', { start: -3 });
+  for (const patch of [{ open: NaN }, { close: Infinity }, { high: -4 }, { low: 0 },
+    { volume: -1 }, { amount: -1 }, { date: '2026-10-20 10:15' }, { complete: undefined }]) {
+    assert.throws(() => aggregate([{ ...rows[0], ...patch }, ...rows.slice(1)], { adjusted: true }), /异常/);
+  }
+});
+
 test('an initial pagination suffix may be dropped; interior missing children and whole sessions are errors', () => {
   const full = [...dayRows('2026-10-19'), ...dayRows('2026-10-20')];
   const result = aggregate(full.slice(2)); // Oldest 11:00/11:30/13:30 are the cut first window.
@@ -229,6 +252,30 @@ test('wrapper applies existing verified qfq before aggregation and never rescale
   assert.ok(Math.abs(result.klines[2].pct - (79.21 / 80.572 - 1) * 100) < 0.002); // No raw -30% ex-rights gap.
   assert.equal(source.calls.filter(call => call.path.endsWith('/fqkline/get')).length, 1);
   assert.equal(source.calls.filter(call => call.path.endsWith('/kline/kline')).length, 1);
+});
+
+test('wrapper carries verified qfq metadata when positive raw minutes become zero or negative after cash adjustment', async () => {
+  const action = { cqr: '2026-10-19', FHcontent: '10派100元' };
+  const raw = [
+    ['2026-10-16', 10, 10, 11, 9, 800],
+    ['2026-10-19', 2, 2, 3, 1, 1600, action],
+  ];
+  const qfq = [
+    ['2026-10-16', 0, 0, 1, -1, 800],
+    ['2026-10-19', 2, 2, 3, 1, 1600, action],
+  ];
+  const before = dayRows('2026-10-16').map(row => ({ ...row, open: 10, close: 10, high: 11, low: 9, volume: 100 }));
+  const after = dayRows('2026-10-19').map(row => ({ ...row, open: 2, close: 2, high: 3, low: 1, volume: 200 }));
+  for (const adjust of [undefined, '1']) {
+    const source = minuteLoader({ symbol: 'sh603818', minutes: sourceRows([...before, ...after]), raw, qfq });
+    const { klines } = await fetchAshareFourHourKline({ symbol: 'sh603818', code: '603818', adjust,
+      loadJson: source.loadJson, now: CLOSED_NOW });
+    assert.equal(klines.length, 4);
+    assert.deepEqual(klines.map(({ open, close, high, low, volume }) => [open, close, high, low, volume]),
+      [[0, 0, 1, -1, 500], [0, 0, 1, -1, 300], [2, 2, 3, 1, 1000], [2, 2, 3, 1, 600]]);
+    assert.ok(klines.every(row => row.complete));
+    assert.equal(source.calls.filter(call => call.path.endsWith('/fqkline/get')).length, 1);
+  }
 });
 
 test('wrapper preserves minute-source and adjustment errors rather than substituting daily data', async () => {

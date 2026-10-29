@@ -2,6 +2,7 @@ import { test, expect, control, login, requests } from './support.mjs';
 import { FIXTURE_DAY } from './fixtures.mjs';
 import { heatmapTilesReady, heatmapCaptionReady } from './pages.mjs';
 import { writeFile } from 'node:fs/promises';
+import { zoneLifecycleAmbiguousEndpointsRows, zoneLifecycleAmbiguousRetestRows } from '../../src/lib/chan/fixtures/zoneLifecycle.js';
 
 const button = (page, name) => page.getByRole('button', { name, exact: true });
 const historyPath = '/api/market-heatmap';
@@ -217,6 +218,54 @@ test('四大指数年份和中长期/中短期切换更新窗口、MA周期与�
     expect(historyCalls.some(item => item.query.secid === secid && item.query.lmt === '1040' && item.query.klt === '101')).toBe(true);
   }
 });
+
+for (const sign of [1, -1]) for (const kind of ['formation', 'lifecycle']) {
+  test(`指数图 ${sign === 1 ? '向上' : '向下'}中枢${kind === 'formation' ? '形成' : '后续状态'}的端点K不确定性`, async ({ page, request }, testInfo) => {
+    // Tencent index response has no closed flag; the successor candle proves
+    // the previous one closed. These are synthetic OHLC rows processed by the
+    // real analyzeChan pipeline, not fabricated chart or algorithm results.
+    const rows = kind === 'formation'
+      ? zoneLifecycleAmbiguousEndpointsRows(115, sign)
+      : zoneLifecycleAmbiguousRetestRows(379, sign);
+    const data = rows.map(row => [row.date, row.open, row.close, row.high, row.low, row.volume]);
+    await control(request, { routeRules: [{
+      path: indexProviderPath, method: 'GET', search: { param: 'sh000001,day,,,500' },
+      scriptVariableParam: '_var', status: 200, body: { code: 0, data: { sh000001: { day: data } } },
+    }] });
+    await login(page);
+    await button(page, '趋势大盘').click();
+    await button(page, '中长期多头趋势').click();
+    await page.getByRole('combobox', { name: '缠论引擎' }).selectOption('original');
+    const card = page.locator('[data-index-trend-card="000001"]');
+    const chart = card.locator('svg[data-index-trend-chart]');
+    const legend = card.getByLabel('指数缠论图例');
+    await expect(chart).toBeVisible();
+    await expect(chart.locator('[data-index-candle]').last()).toHaveAttribute('data-index-candle', rows.at(-1).date);
+    await expect(chart.locator('[data-chan-segment]')).toHaveCount(kind === 'formation' ? 3 : 14);
+    if (kind === 'formation') {
+      await expect(chart.locator('[data-chan-zone]')).toHaveCount(0);
+    } else {
+      const zone = chart.locator('[data-chan-zone="zs-9-81"]');
+      await expect(zone).toHaveAttribute('data-chan-zone-status', 'uncertain');
+      await expect(zone).toHaveAttribute('stroke-dasharray', '5 3');
+      await expect(zone).not.toHaveAttribute('data-chan-zone-closed-time', /\d/);
+    }
+    await legend.scrollIntoViewIfNeeded();
+    const expectedDate = rows[kind === 'formation' ? 8 : 296].date;
+    await expect(legend).toContainText(`从 ${expectedDate} 起，K线内高低价的先后顺序无法确定`);
+    await expect(legend).toContainText('后续中枢边界或状态需要更细粒度行情核实');
+    await testInfo.attach(`index-uncertainty-${kind}-${sign}`, { body: await card.screenshot(), contentType: 'image/png' });
+
+    // The same data and warning must survive the index's full-screen view.
+    await card.getByRole('button', { name: '全屏查看图表' }).click();
+    const dialog = page.getByRole('dialog', { name: '上证指数全屏趋势图' });
+    await expect(dialog.getByLabel('指数缠论图例')).toContainText(`从 ${expectedDate} 起，K线内高低价的先后顺序无法确定`);
+    await dialog.getByRole('button', { name: '退出全屏图表' }).click();
+    await expect(card.getByLabel('指数缠论图例')).toContainText('后续中枢边界或状态需要更细粒度行情核实');
+    const calls = await requests(request, indexProviderPath);
+    expect(calls.some(item => item.query.param === 'sh000001,day,,,500' && item.status === 200)).toBe(true);
+  });
+}
 
 test('指数历史年份慢响应晚到后，最新短期窗口仍保持正确日期和MA20', async ({ page, request }) => {
   await login(page);

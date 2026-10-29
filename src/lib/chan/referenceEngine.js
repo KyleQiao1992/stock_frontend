@@ -77,6 +77,14 @@ function checkBi(bars) {
   const included = (start.high > end.high && start.low < end.low)
     || (start.high < end.high && start.low > end.low);
   if (included || !hasIndependentBar || leg.length < MIN_BI_LENGTH) return { remaining: bars };
+  // A connected pen's processed K ranges must stay between its endpoint
+  // extremes. A short reversal may have crossed the shared starting point;
+  // in that case the previous pen has to be reconsidered as well.
+  const center = bars.slice(bars.indexOf(start.elements[1]), bars.indexOf(end.elements[1]) + 1);
+  const invalidStart = center.some(b => start.mark === 'D' ? b.low < start.low : b.high > start.high);
+  if (invalidStart) return { remaining: bars, invalidStart: true };
+  const invalidEnd = center.some(b => start.mark === 'D' ? b.high > end.high : b.low < end.low);
+  if (invalidEnd) return { remaining: bars };
   return {
     remaining: bars.filter((b) => b.time >= end.elements[0].time),
     stroke: {
@@ -140,12 +148,33 @@ export function analyzeReferenceCandles(candles) {
           unfinished = result.remaining;
         }
       } else {
-        const result = checkBi(unfinished);
+        let result = checkBi(unfinished);
+        while (result.invalidStart && strokes.length) {
+          // Restore the overlapping processed candles and reconsider each
+          // affected prior pen on this same observation, without dropping K.
+          const removed = strokes.pop();
+          unfinished = [...removed.bars.slice(0, -2),
+            ...unfinished.filter(b => b.time >= removed.bars.at(-2).time)];
+          if (strokes.length) result = checkBi(unfinished);
+          else {
+            const fx = findFractals(unfinished);
+            let start = fx[0];
+            for (const point of fx) {
+              if (point.mark === start.mark
+                && (start.mark === 'D' ? point.low < start.low : point.high > start.high)) start = point;
+            }
+            result = start ? checkBi(unfinished.filter(b => b.time >= start.elements[0].time))
+              : { remaining: unfinished };
+          }
+        }
         unfinished = result.remaining;
         if (result.stroke) strokes.push({ ...result.stroke, formed_time: candle.time });
         const last = strokes.at(-1);
-        const broken = last.direction === 'up' ? unfinished.at(-1).high > last.high
-          : unfinished.at(-1).low < last.low;
+        if (!last) continue;
+        // Recovered history can already contain a later extreme; looking only
+        // at the newest candle can restore an invalid old endpoint.
+        const broken = unfinished.some(b => b.time > last.end.time
+          && (last.direction === 'up' ? b.high > last.high : b.low < last.low));
         if (broken) {
           // Preserve the two-bar overlap. Re-merge and re-evaluate on the next update.
           unfinished = [...last.bars.slice(0, -2),
@@ -186,21 +215,33 @@ export function analyzeReferenceCandles(candles) {
     kind, Object.fromEntries(points.map((point) => [point.time, buildFractalDetail(candles, point)])),
   ]));
   const pending = [];
+  const pendingUncertainty = [];
   if (bi.length) {
     const up = strokes.at(-1).direction === 'down';
-    // The next leg begins at the actual final endpoint, not its left fractal
-    // neighbour. Read all raw candles so no capped/merged source can hide an
-    // intermediate extremum or move it to a date where the price never traded.
-    const elements = candles.filter((c) => c.time >= bi.at(-1).time);
-    let extreme = elements[0];
-    for (const candle of elements.slice(1)) {
+    const start = bi.at(-1);
+    const endpointCandle = candles.find((c) => c.time === start.time);
+    // The other extreme of the endpoint K might occur before the turn. OHLC
+    // alone cannot put it after the endpoint. Later K lines have an observable
+    // ordering and can establish an actual tail price and date.
+    const later = candles.filter((c) => c.time > start.time);
+    let extreme = later[0];
+    for (const candle of later.slice(1)) {
       if (up ? candle.high > extreme.high : candle.low < extreme.low) extreme = candle;
     }
-    pending.push(bi.at(-1), { time: extreme.time,
-      price: up ? extreme.high : extreme.low, mark: up ? 'G' : 'D',
-      idx: candles.findIndex((c) => c.time === extreme.time), extremeTime: extreme.time,
-      confirmed: false, confirmed_time: null });
+    const knownPrice = extreme ? (up ? extreme.high : extreme.low) : null;
+    const possiblePrice = up ? endpointCandle.high : endpointCandle.low;
+    if (!extreme || (up ? possiblePrice > knownPrice : possiblePrice < knownPrice)) {
+      pendingUncertainty.push({ reason: 'endpoint_order', endpoint_time: start.time,
+        endpoint_price: start.price, direction: up ? 'up' : 'down',
+        guaranteed_time: extreme?.time ?? null, guaranteed_price: knownPrice,
+        possible_price: possiblePrice });
+    }
+    if (extreme && (up ? knownPrice > start.price : knownPrice < start.price)) {
+      pending.push(start, { time: extreme.time, price: knownPrice, mark: up ? 'G' : 'D',
+        idx: candles.findIndex((c) => c.time === extreme.time), extremeTime: extreme.time,
+        confirmed: false, confirmed_time: null });
+    }
   }
-  return { candles: raw, fx, bi, segmentBi, pending, strokeCount: strokes.length,
+  return { candles: raw, fx, bi, segmentBi, pending, pendingUncertainty, strokeCount: strokes.length,
     segmentStrokeCount: strokes.length, fractalDetails };
 }

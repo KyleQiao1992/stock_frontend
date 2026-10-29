@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Card, CardContent } from './ui/card';
 import StockNewsPanel from './StockNewsPanel';
+import ChanRecursiveStatus from './ChanRecursiveStatus';
+import ChanUncertaintyNotice from './ChanUncertaintyNotice';
 import { periodLabel } from '../lib/klinePeriod.js';
 
 const price = (n) => Number.isFinite(n) ? n.toFixed(2) : '—';
@@ -29,6 +31,23 @@ function ChanSegments({ data }) {
 }
 function ChanOutlook({ data }) {
   const outlook = data.outlook;
+  if (data.inputProblem) return <p className="py-6 text-sm text-amber-600">{`行情第 ${data.inputProblem.index + 1} 根 K 线${data.inputProblem.date ? `（${data.inputProblem.date}）` : ''}数据无效，缠论计算已停止。`}</p>;
+  if (data.definition?.engine === 'external') {
+    const latest = data.zs.at(-1);
+    return <div aria-label="缠论结构研判" className="space-y-3 text-sm leading-6 text-slate-700">
+      <h3 className="font-semibold text-slate-900">修正结构参考</h3>
+      <p>使用本项目的笔与特征序列线段，以已完成笔的价格区间构造笔中枢参考；不是递归走势中枢。</p>
+      {latest ? <p>最近笔构造参考中枢：{data.dates[latest.sdt - 1]} 至 {data.dates[latest.edt - 1]}，ZD {price(latest.zd)} / ZG {price(latest.zg)}，{latest.stroke_count} 笔。{latest.status === 'uncertain' ? '后续状态无法确定' : latest.status === 'closed' ? '已结束' : latest.phase === 'leaving' ? '离开后等待回试确认' : '延伸中'}；形成确认依据K：{data.dates[latest.confirmed_time - 1]}{latest.closed_time ? `；结束确认依据K：${data.dates[latest.closed_time - 1]}` : ''}。</p>
+        : !(data.zsUncertainty?.length) && <p>当前历史没有识别到笔中枢。</p>}
+      <ChanUncertaintyNotice data={data} />
+      <p>确认依据K按本次历史窗口复算，不等于系统首次观测时刻；历史结构可能随新行情回退重算。</p>
+      <ChanSegments data={data} />
+      <section aria-label="修正结构研判范围" className="space-y-2 rounded-xl border border-slate-200 p-3">
+        <p>尚无与当前修正结构相匹配的第三方走势、背驰及买卖点结果。</p>
+        <p>原第三方结果依赖不同的笔和线段，因此不能作为当前图的信号。</p>
+      </section>
+    </div>;
+  }
   if (!outlook?.ok) return <p className="py-6 text-sm text-slate-500">当前历史中尚无可绘制的笔结构。</p>;
   const { conclusion: c, levels, scenarios = [] } = outlook;
   const signal = c.latest_signal;
@@ -48,7 +67,7 @@ function ChanOutlook({ data }) {
         <p>{c.structure_fact || c.summary}</p>
         <div className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-3">
           {[
-            ['现价', price(levels.close)], ['相对滑动笔重叠区', levels.vs_zs_label || '尚无滑动笔重叠区'],
+            ['现价', price(levels.close)], ['相对中枢', levels.vs_zs_label || '尚无已确认线段中枢'],
             ['ZG 上沿', price(levels.zs_zg), levels.zs_zg_bar],
             ['ZD 下沿', price(levels.zs_zd), levels.zs_zd_bar],
             ['末笔高', price(levels.last_bi_high), levels.last_bi_high_bar],
@@ -60,8 +79,9 @@ function ChanOutlook({ data }) {
           </div>)}
         </div>
         {levels.zs_range && <div className="mt-3 rounded-xl bg-slate-100 p-3 text-xs">
-          <div className="text-slate-500">当前滑动笔重叠区</div><p>{levels.zs_range}</p>
-          <p className="text-slate-500">{levels.zs_bi_count} 笔 · {levels.active_zs_id}</p>
+          <div className="text-slate-500">{levels.zs_status === 'uncertain' ? '最近已确认的中枢' : levels.zs_status === 'closed' ? '最近已结束的中枢' : '当前中枢'}</div><p>{levels.zs_range}</p>
+          <p className="text-slate-500">{levels.zs_segment_count} 段 · 本图最小级别 · {levels.zs_status === 'uncertain' ? '后续状态无法确定' : levels.zs_status === 'closed' ? '已结束' : levels.zs_phase === 'leaving' ? '等待回试确认' : '延伸中'}</p>
+          <p className="text-slate-500">形成确认依据K：{levels.zs_confirmed_time}{levels.zs_closed_time ? `；结束确认依据K：${levels.zs_closed_time}` : ''}</p>
         </div>}
       </section>
       {signal && <section aria-label="已确认信号" className="mt-4 border-t border-slate-200 pt-3">
@@ -105,6 +125,15 @@ function ChanOutlook({ data }) {
 }
 function ChanEndpoints({ data }) {
   const [filter, setFilter] = useState('all');
+  if (data.inputProblem) return <p className="py-6 text-sm text-amber-600">{`行情第 ${data.inputProblem.index + 1} 根 K 线数据无效，缠论计算已停止。`}</p>;
+  if (data.definition?.engine === 'external') return <div className="text-sm text-slate-700">
+    <p className="mb-3 text-xs text-slate-500">本项目笔端参考，不含动态末端；新行情可能引起笔回退重算。</p>
+    <ol className="max-h-[420px] divide-y divide-slate-200 overflow-y-auto">
+      {data.bi.map((point, i) => <li key={`${point.time}-${i}`} className="flex items-center justify-between gap-4 py-3">
+        <span>{point.mark === 'D' ? '笔低' : '笔高'}</span><span className="font-mono">{price(point.price)}</span><time>{data.dates[point.time - 1]}</time>
+      </li>)}
+    </ol>
+  </div>;
   const items = data.trades.filter((item) => filter === 'all' || item.side === filter);
   return <div>
     <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -137,15 +166,22 @@ export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, co
           <span className="text-xs text-slate-500">{name} {code}</span>
         </div>
         {active === 'financial' ? financialReportContent : active === 'news' ? <div className="flex h-[520px] min-h-0 overflow-hidden"><StockNewsPanel code={code} market={market} /></div> : active === 'tradeSideHistory' ? tradeSideHistoryContent : <>
-          <p className="mb-4 text-xs leading-5 text-slate-500">{periodLabel(period)} · 全部已加载 {data.dates.length} 根K线参与计算 · 截至 {data.dates.at(-1) || '—'}；缩放不改变计算起点。</p>
+          <p className="mb-4 text-xs leading-5 text-slate-500">{data.inputProblem ? '行情包含无效K线，无法安全计算缠论结构。' : `${periodLabel(period)} · 全部已加载 ${data.dates.length} 根K线参与计算 · 截至 ${data.dates.at(-1) || '—'}；缩放不改变计算起点。`}</p>
           {active === 'outlook' ? <ChanOutlook data={data} /> : <ChanEndpoints data={data} />}
+          {active === 'outlook' && <ChanRecursiveStatus data={data} />}
           <details className="mb-4 rounded-xl border border-slate-200 p-3 text-xs leading-5 text-slate-500">
             <summary className="cursor-pointer font-medium text-slate-700">计算口径与范围</summary>
+            {data.definition?.engine === 'external' ? <>
+              <p className="mt-2">笔与线段使用本项目算法，笔有破坏回退与极值检查；线段使用特征序列规则，确认依据K按本次历史复算，后续可能回退。笔构造参考中枢由三笔的实际价格区间形成，延伸时核心保持不变；结束与确认时间另行记录。端点K线内高低先后不明而影响判断时标记不确定。</p>
+              <p className="mt-2">本图没有递归构造更高级别走势中枢。尚无与当前修正结构匹配的第三方走势、背驰及买卖点结果；此处展示的笔中枢仅供参考。</p>
+            </> : <>
             <p className="mt-2">逐根处理K线包含和三K分型；按第62、65、77课旧笔口径，顶底分型之间至少有一根不属于任一分型的独立K线。笔被新K线破坏时回退重算。黄色折线连接笔端及当前动态极值，三角标记笔端参考，圆点标记分型。</p>
-            <p className="mt-2">线段采用第65、67、71、77、78课特征序列规则及第81课更正；前三笔须有价格重叠，已确认段由后续完成笔的破坏条件确认，端点与确认依据K分别记录。来源未明确最新K已收盘时，须等待后继同周期K才将前K计为已完成；来源明确未收盘的K不能用于确认。笔、分型、线段和滑动笔重叠区均使用全部已加载历史计算，不按固定根数或笔数截断；这不代表已经识别递归中枢或更高走势级别。</p>
-            <p className="mt-2">蓝框为滑动笔重叠区：连续前三笔固定ZG/ZD，保持核心区间最多延伸九笔，按滑动窗口绘制；这是本地参考算法，不是原文按次级别走势递归定义的中枢。动态末端不参与笔端参考和重叠区。</p>
+            <p className="mt-2">线段采用第65、67、71、77、78课特征序列规则及第81课更正；前三笔须有价格重叠，已确认段由后续完成笔的破坏条件确认，端点与确认依据K分别记录。来源未明确最新K已收盘时，须等待后继同周期K才将前K计为已完成；来源明确未收盘的K不能用于确认。笔、分型、线段和中枢均使用全部已加载历史计算，不按固定根数或笔数截断。</p>
+            <p className="mt-2">色框为本图最小级别的线段中枢：三个连续已确认线段的实际价格区间有正宽重叠才形成，上沿ZG取三段最高价的最小值，下沿ZD取三段最低价的最大值。后续延伸保持核心区间，没有九段上限；发展中线段不参与构枢。K线周期不等于中枢级别，尚未递归构造更高级别。</p>
+            <p className="mt-2">本版将触边视为延伸；首次回试严格在核心外、同向Z段不触枢或连续两段不触枢可确认结束。端点K线内高低先后影响判断时，后续状态标为不确定。离开段可参与后续新枢的前三段。形成与结束均单独记录确认依据K，不回填到线段端点冒充当时已知的信号。</p>
             <p className="mt-2">计算使用全部已加载的有效K线，加载范围之前的数据未参与；首笔之前的K线用于初始化，不强行连笔。加载更早历史可能改变起笔及后续结构，缩放只改变可见范围。新行情可能修正近端结构。</p>
             <p className="mt-2">买卖点观察按第17、20、21、101课列出后续条件，不代表已识别或已确认；当前未执行走势级别、递归中枢、背驰及一二三类买卖点的自动识别。二类观察须从真实一类买卖点后的次级别走势出发，不能用任意前低或前高替代。</p>
+            </>}
           </details>
 
         </>}

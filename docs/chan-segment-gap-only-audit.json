@@ -1,0 +1,1025 @@
+{
+  "scope": "Temporary proposal only. Finite source-derived cases and structural properties; not certification of the original theory.",
+  "variant": "gap-only",
+  "sourceUnchanged": true,
+  "hashes": {
+    "segment.js": "04c501062ee58315384a588a173bb7d4d00b4324730594daf759c45ca57b6e88",
+    "referenceEngine.js": "7b42e393b018e69294ba7ebe30a20ba32d60bb812e124bb4ef3cec45995c8d93",
+    "index.js": "33b6e54174ba33b7ac9d893bb6bd3e881bb6e47d008aa1eedf30a441d0942c2f",
+    "strictSegment.test.js": "f838f95079627a1ece31f83d7c79fadf8268ac8f0c05fe0336a49b757b29e8b2",
+    "activeSegments.test.js": "428ab3e888fe3c3ca6ce6fa1e8246cd4730e0a2ba05a65cec5f55652f55791ec"
+  },
+  "edits": [
+    {
+      "before": "if (!gap) return { end, confirmedIndex: index + 1, mode: 'feature_no_gap', gap: false };",
+      "after": "if (overlaps(left, middle)) return { end, confirmedIndex: index + 1, mode: 'feature_no_gap', gap: false };"
+    }
+  ],
+  "cases": [
+    {
+      "id": "merged-gap-waits",
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105
+      ],
+      "sign": 1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [],
+      "baseline": [
+        [
+          0,
+          3,
+          8,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [],
+      "baselinePass": false,
+      "proposalPass": true
+    },
+    {
+      "id": "merged-gap-waits",
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105
+      ],
+      "sign": -1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [],
+      "baseline": [
+        [
+          0,
+          3,
+          8,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [],
+      "baselinePass": false,
+      "proposalPass": true
+    },
+    {
+      "id": "merged-gap-resumes",
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        121
+      ],
+      "sign": 1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [],
+      "baseline": [
+        [
+          0,
+          3,
+          8,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [],
+      "baselinePass": false,
+      "proposalPass": true
+    },
+    {
+      "id": "merged-gap-resumes",
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        121
+      ],
+      "sign": -1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [],
+      "baseline": [
+        [
+          0,
+          3,
+          8,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [],
+      "baselinePass": false,
+      "proposalPass": true
+    },
+    {
+      "id": "merged-gap-lower-local-top",
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40
+      ],
+      "sign": 1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [],
+      "baseline": [
+        [
+          0,
+          3,
+          8,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [
+        [
+          0,
+          7,
+          10,
+          "first_stroke_break"
+        ]
+      ],
+      "baselinePass": false,
+      "proposalPass": false
+    },
+    {
+      "id": "merged-gap-lower-local-top",
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40
+      ],
+      "sign": -1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [],
+      "baseline": [
+        [
+          0,
+          3,
+          8,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [
+        [
+          0,
+          7,
+          10,
+          "first_stroke_break"
+        ]
+      ],
+      "baselinePass": false,
+      "proposalPass": false
+    },
+    {
+      "id": "merged-gap-eventually-confirms",
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40,
+        112,
+        45,
+        114
+      ],
+      "sign": 1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [
+        [
+          0,
+          3,
+          13,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          10,
+          13,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "baseline": [
+        [
+          0,
+          3,
+          8,
+          "feature_no_gap"
+        ],
+        [
+          3,
+          10,
+          13,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [
+        [
+          0,
+          7,
+          10,
+          "first_stroke_break"
+        ],
+        [
+          7,
+          10,
+          13,
+          "feature_no_gap"
+        ]
+      ],
+      "baselinePass": false,
+      "proposalPass": false
+    },
+    {
+      "id": "merged-gap-eventually-confirms",
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40,
+        112,
+        45,
+        114
+      ],
+      "sign": -1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [
+        [
+          0,
+          3,
+          13,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          10,
+          13,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "baseline": [
+        [
+          0,
+          3,
+          8,
+          "feature_no_gap"
+        ],
+        [
+          3,
+          10,
+          13,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [
+        [
+          0,
+          7,
+          10,
+          "first_stroke_break"
+        ],
+        [
+          7,
+          10,
+          13,
+          "feature_no_gap"
+        ]
+      ],
+      "baselinePass": false,
+      "proposalPass": false
+    },
+    {
+      "id": "ordinary-no-gap",
+      "prices": [
+        0,
+        10,
+        4,
+        12,
+        5,
+        9,
+        3
+      ],
+      "sign": 1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [
+        [
+          0,
+          3,
+          6,
+          "feature_no_gap"
+        ]
+      ],
+      "baseline": [
+        [
+          0,
+          3,
+          6,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [
+        [
+          0,
+          3,
+          6,
+          "feature_no_gap"
+        ]
+      ],
+      "baselinePass": true,
+      "proposalPass": true
+    },
+    {
+      "id": "ordinary-no-gap",
+      "prices": [
+        0,
+        10,
+        4,
+        12,
+        5,
+        9,
+        3
+      ],
+      "sign": -1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [
+        [
+          0,
+          3,
+          6,
+          "feature_no_gap"
+        ]
+      ],
+      "baseline": [
+        [
+          0,
+          3,
+          6,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [
+        [
+          0,
+          3,
+          6,
+          "feature_no_gap"
+        ]
+      ],
+      "baselinePass": true,
+      "proposalPass": true
+    },
+    {
+      "id": "first-break",
+      "prices": [
+        0,
+        10,
+        4,
+        12,
+        3,
+        8,
+        2
+      ],
+      "sign": 1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [
+        [
+          0,
+          3,
+          6,
+          "first_stroke_break"
+        ]
+      ],
+      "baseline": [
+        [
+          0,
+          3,
+          6,
+          "first_stroke_break"
+        ]
+      ],
+      "proposal": [
+        [
+          0,
+          3,
+          6,
+          "first_stroke_break"
+        ]
+      ],
+      "baselinePass": true,
+      "proposalPass": true
+    },
+    {
+      "id": "first-break",
+      "prices": [
+        0,
+        10,
+        4,
+        12,
+        3,
+        8,
+        2
+      ],
+      "sign": -1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [
+        [
+          0,
+          3,
+          6,
+          "first_stroke_break"
+        ]
+      ],
+      "baseline": [
+        [
+          0,
+          3,
+          6,
+          "first_stroke_break"
+        ]
+      ],
+      "proposal": [
+        [
+          0,
+          3,
+          6,
+          "first_stroke_break"
+        ]
+      ],
+      "baselinePass": true,
+      "proposalPass": true
+    },
+    {
+      "id": "gap-without-price-fill",
+      "prices": [
+        0,
+        4,
+        2,
+        10,
+        7,
+        9,
+        6,
+        8,
+        7,
+        9
+      ],
+      "sign": 1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [
+        [
+          0,
+          3,
+          9,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          6,
+          9,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "baseline": [
+        [
+          0,
+          3,
+          9,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          6,
+          9,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "proposal": [
+        [
+          0,
+          3,
+          9,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          6,
+          9,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "baselinePass": true,
+      "proposalPass": true
+    },
+    {
+      "id": "gap-without-price-fill",
+      "prices": [
+        0,
+        4,
+        2,
+        10,
+        7,
+        9,
+        6,
+        8,
+        7,
+        9
+      ],
+      "sign": -1,
+      "expectedBasis": "Source-derived specification; see docs/chan-segment-implementation-spec.md.",
+      "expected": [
+        [
+          0,
+          3,
+          9,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          6,
+          9,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "baseline": [
+        [
+          0,
+          3,
+          9,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          6,
+          9,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "proposal": [
+        [
+          0,
+          3,
+          9,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          6,
+          9,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "baselinePass": true,
+      "proposalPass": true
+    },
+    {
+      "id": "active-closed-ohlc",
+      "sign": 1,
+      "count": 82,
+      "turns": [
+        20,
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40,
+        112,
+        45,
+        114,
+        100,
+        113
+      ],
+      "barsPerLeg": 8,
+      "expected": [],
+      "baseline": [
+        [
+          "segment-9-33",
+          82,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [],
+      "baselinePass": false,
+      "proposalPass": true
+    },
+    {
+      "id": "active-closed-ohlc",
+      "sign": 1,
+      "count": 121,
+      "turns": [
+        20,
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40,
+        112,
+        45,
+        114,
+        100,
+        113
+      ],
+      "barsPerLeg": 8,
+      "expected": [],
+      "baseline": [
+        [
+          "segment-9-33",
+          82,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [
+        [
+          "segment-9-65",
+          98,
+          "first_stroke_break"
+        ]
+      ],
+      "baselinePass": false,
+      "proposalPass": false
+    },
+    {
+      "id": "active-closed-ohlc",
+      "sign": 1,
+      "count": 122,
+      "turns": [
+        20,
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40,
+        112,
+        45,
+        114,
+        100,
+        113
+      ],
+      "barsPerLeg": 8,
+      "expected": [
+        [
+          "segment-9-33",
+          122,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          "segment-33-89",
+          122,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "baseline": [
+        [
+          "segment-9-33",
+          82,
+          "feature_no_gap"
+        ],
+        [
+          "segment-33-89",
+          122,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [
+        [
+          "segment-9-65",
+          98,
+          "first_stroke_break"
+        ],
+        [
+          "segment-65-89",
+          122,
+          "feature_no_gap"
+        ]
+      ],
+      "baselinePass": false,
+      "proposalPass": false
+    },
+    {
+      "id": "active-closed-ohlc",
+      "sign": -1,
+      "count": 82,
+      "turns": [
+        20,
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40,
+        112,
+        45,
+        114,
+        100,
+        113
+      ],
+      "barsPerLeg": 8,
+      "expected": [],
+      "baseline": [
+        [
+          "segment-9-33",
+          82,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [],
+      "baselinePass": false,
+      "proposalPass": true
+    },
+    {
+      "id": "active-closed-ohlc",
+      "sign": -1,
+      "count": 121,
+      "turns": [
+        20,
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40,
+        112,
+        45,
+        114,
+        100,
+        113
+      ],
+      "barsPerLeg": 8,
+      "expected": [],
+      "baseline": [
+        [
+          "segment-9-33",
+          82,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [
+        [
+          "segment-9-65",
+          98,
+          "first_stroke_break"
+        ]
+      ],
+      "baselinePass": false,
+      "proposalPass": false
+    },
+    {
+      "id": "active-closed-ohlc",
+      "sign": -1,
+      "count": 122,
+      "turns": [
+        20,
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40,
+        112,
+        45,
+        114,
+        100,
+        113
+      ],
+      "barsPerLeg": 8,
+      "expected": [
+        [
+          "segment-9-33",
+          122,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          "segment-33-89",
+          122,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "baseline": [
+        [
+          "segment-9-33",
+          82,
+          "feature_no_gap"
+        ],
+        [
+          "segment-33-89",
+          122,
+          "feature_no_gap"
+        ]
+      ],
+      "proposal": [
+        [
+          "segment-9-65",
+          98,
+          "first_stroke_break"
+        ],
+        [
+          "segment-65-89",
+          122,
+          "feature_no_gap"
+        ]
+      ],
+      "baselinePass": false,
+      "proposalPass": false
+    },
+    {
+      "id": "old-retraction-fixture-invalid-confirmation",
+      "seed": 1283762,
+      "expected": [
+        [],
+        []
+      ],
+      "baseline": [
+        [
+          [
+            "segment-13-142",
+            199,
+            "first_stroke_break"
+          ]
+        ],
+        []
+      ],
+      "proposal": [
+        [
+          [
+            "segment-13-142",
+            199,
+            "first_stroke_break"
+          ]
+        ],
+        []
+      ],
+      "baselinePass": false,
+      "proposalPass": false
+    },
+    {
+      "id": "upstream-retraction-preserved",
+      "seed": 27,
+      "expected": [
+        [
+          [
+            "segment-35-99",
+            147,
+            "feature_no_gap"
+          ],
+          [
+            "segment-99-129",
+            184,
+            "first_stroke_break"
+          ]
+        ],
+        [
+          [
+            "segment-35-99",
+            147,
+            "feature_no_gap"
+          ]
+        ]
+      ],
+      "baseline": [
+        [
+          [
+            "segment-35-99",
+            147,
+            "feature_no_gap"
+          ],
+          [
+            "segment-99-129",
+            184,
+            "first_stroke_break"
+          ]
+        ],
+        [
+          [
+            "segment-35-99",
+            147,
+            "feature_no_gap"
+          ]
+        ]
+      ],
+      "proposal": [
+        [
+          [
+            "segment-35-99",
+            147,
+            "feature_no_gap"
+          ],
+          [
+            "segment-99-129",
+            184,
+            "first_stroke_break"
+          ]
+        ],
+        [
+          [
+            "segment-35-99",
+            147,
+            "feature_no_gap"
+          ]
+        ]
+      ],
+      "baselinePass": true,
+      "proposalPass": true
+    }
+  ],
+  "properties": {
+    "seed": 67177881,
+    "inputs": 2000,
+    "endpoints": 31,
+    "baselinePrefixFailures": 0,
+    "proposalPrefixFailures": 0,
+    "mirrorFailures": 0,
+    "positiveScaleFailures": 0
+  },
+  "existingTests": {
+    "exitCode": 0,
+    "error": null,
+    "summary": [
+      "# tests 28",
+      "# pass 28",
+      "# fail 0",
+      "# skipped 0",
+      "# duration_ms 452.882542"
+    ],
+    "failures": [],
+    "failureDetails": [],
+    "stderr": ""
+  },
+  "pageTests": "Not run: no production/UI change. Real backend and online not verified."
+}

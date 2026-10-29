@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { analyzeChan } from '../src/lib/chan/index.js';
 import { analyzeReferenceCandles, findReferenceFractals, mergeReferenceBar } from '../src/lib/chan/referenceEngine.js';
 import { buildSegments } from '../src/lib/chan/segment.js';
-import { buildZs } from '../src/lib/chan/referenceZs.js';
+import { buildZs as buildReferenceZs } from '../src/lib/chan/referenceZs.js';
 
 const source = lesson => ({
   62: 'https://blog.sina.com.cn/s/blog_486e105c01000bf2.html',
@@ -110,7 +110,7 @@ for (const filename of readdirSync(fixtureDirectory).filter(name => name.endsWit
     if (!(top.high > bottom.high)) invalidEndpointPairs.push({ filename, index: i, top, bottom });
   }
   fixtureReports.push({ filename, bars: rows.length, strokes: Math.max(0, result.bi.length - 1),
-    confirmedSegments: result.segments.length, slidingZones: result.zs.length,
+    confirmedSegments: result.segments.length, segmentCenters: result.zs.length,
     unconfirmedTailInZone: result.bi.at(-1)?.confirmed === false
       && result.zs.some(z => z.edt === result.bi.at(-1).time) });
 }
@@ -146,7 +146,7 @@ const unconfirmedZonePoints = endpoints([0, 10, 4, 12]);
 unconfirmedZonePoints.at(-1).confirmed = false;
 const persistentOverlapPrices = [0, 10, 4, 12, 3, 11, 4, 13, 2, 12, 3, 11, 4, 12];
 const sourceFiles = ['src/lib/chan/index.js', 'src/lib/chan/referenceEngine.js', 'src/lib/chan/segment.js',
-  'src/lib/chan/referenceZs.js', 'src/components/ChanOverlay.jsx'];
+  'src/lib/chan/zs.js', 'src/lib/chan/referenceZs.js', 'src/components/ChanOverlay.jsx'];
 const report = {
   scope: 'Active pipeline source-rule audit; observations and bounded checks do not certify all original figures or live services.',
   auditedAt: new Date().toISOString(),
@@ -158,9 +158,12 @@ const report = {
     explicitUnclosedRightKStillEmitsFractalWithoutStatus: openFractal,
     firstPenAnchorCircleOmission: { pens: analyzeReferenceCandles(candles(seven)).bi,
       circles: analyzeReferenceCandles(candles(seven)).fx },
-    unconfirmedEndpointIncludedInZone: buildZs(unconfirmedZonePoints),
-    persistentOverlapProducesMultipleWindows: { prices: persistentOverlapPrices,
-      zones: buildZs(endpoints(persistentOverlapPrices)) },
+    inactiveReferenceAlgorithm: {
+      scope: 'Historical website comparison only; the active chart uses confirmed segments via zs.js.',
+      unconfirmedEndpointIncludedInZone: buildReferenceZs(unconfirmedZonePoints),
+      persistentOverlapProducesMultipleWindows: { prices: persistentOverlapPrices,
+        zones: buildReferenceZs(endpoints(persistentOverlapPrices)) },
+    },
   },
   fixtureReports,
 };

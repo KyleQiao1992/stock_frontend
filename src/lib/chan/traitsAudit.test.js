@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { classifyTopFractal, topFractalTraitDescription } from './topFractalTraits.js';
 import { classifyBottomFractal, bottomFractalTraitDescription } from './bottomFractalTraits.js';
 import { analyzeChan } from './index.js';
+import { analyzeReferenceCandles } from './referenceEngine.js';
 
 const bar = (open, high, low, close) => ({ open, high, low, close });
 const copy = (raw) => raw.map((candle) => ({ ...candle }));
@@ -94,12 +95,15 @@ test('traits audit: the production snapshot rejects impossible finite OHLC witho
     const raw = reflect(strong);
     raw[1].open = mark === 'G' ? raw[1].high + 5 : raw[1].low - 5;
     const rows = raw.map((candle, i) => ({ ...candle, volume: 100, date: `2026-09-0${i + 1}` }));
-    const result = analyzeChan(rows);
+    const result = analyzeReferenceCandles(rows.map((candle, i) => ({ ...candle, time: i + 1, vol: candle.volume })));
     assert.equal(result.fx.length, 1, 'the existing high/low engine still supplies the geometric snapshot');
     const snapshot = result.fractalDetails.fx[result.fx[0].time];
     assert.equal(snapshot.isValid, true, 'geometric validity alone is not OHLC integrity');
     assert.deepEqual(snapshot[property], { applicable: false, reason: 'invalid-ohlc' });
     assert.equal(snapshot.rawCandles[1].open, raw[1].open);
+    const production = analyzeChan(rows);
+    assert.equal(production.inputProblem.reason, 'invalid_candle');
+    assert.equal(production.fx.length, 0, 'production must not plot a geometry from invalid source data');
   }
 });
 

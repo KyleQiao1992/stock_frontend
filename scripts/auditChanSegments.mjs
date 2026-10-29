@@ -40,8 +40,8 @@ for (const file of names) {
   reports.push(result);
 }
 
-// Explicitly closed, synthetic input isolates the separately documented effect
-// of rolling the requested history origin beyond 300 day bars.
+// All loaded history must remain available beyond the former 300-bar cutoff.
+// Moving the origin is now an explicit caller action, tested separately below.
 const turns = [2, ...Array.from({ length: 4 }, () => [0, 10, 4, 12, 5, 9, 3, 8, 2, 7, 4, 10, 6, 12]).flat()];
 const prices = turns.flatMap((price, index) => index
   ? Array.from({ length: 8 }, (_, step) => turns[index - 1] + (price - turns[index - 1]) * (step + 1) / 8)
@@ -49,26 +49,45 @@ const prices = turns.flatMap((price, index) => index
 const synthetic = prices.map((price, index) => ({ date: `K${index + 1}`, open: 100 + price,
   close: 100 + price, high: 100.2 + price, low: 99.8 + price, volume: 100, complete: true }));
 let previous = new Map();
+let beyondOldLimit = 0;
 const changedOriginExamples = [];
 for (let length = 300; length <= synthetic.length; length++) {
   const data = analyzeChan(synthetic.slice(0, length), 'day');
-  for (const segment of data.segments) if (!previous.has(segment.id) && segment.confirmed_time < length && length > 300) {
-    if (changedOriginExamples.length < 3) changedOriginExamples.push({
-      observedAt: length, windowStart: data.definition.segmentHistoryStart,
-      id: segment.id, basisK: segment.confirmed_time,
-    });
+  assert.equal(data.definition.segmentHistoryBars, length);
+  assert.equal(data.definition.segmentHistoryStart, synthetic[0].date);
+  for (const segment of data.segments) {
+    if (length > 300 && !previous.has(segment.id)) {
+      assert.equal(segment.confirmed_time, length, 'appending to full history cannot introduce backdated evidence');
+      beyondOldLimit++;
+    }
   }
   previous = new Map(data.segments.map((segment) => [segment.id, segment.confirmed_time]));
 }
-assert.ok(changedOriginExamples.length > 0, 'must exercise actual window-origin reconstruction');
+assert.ok(beyondOldLimit > 0, 'must exercise new segment confirmations beyond the old 300-bar boundary');
+// Explicit windows have local ordinal coordinates. Compare their underlying
+// source dates, never their local segment IDs or local evidence index alone.
+for (let length = 301; length <= synthetic.length; length++) {
+  const window = synthetic.slice(length - 300, length);
+  const data = analyzeChan(window, 'day');
+  assert.equal(data.definition.segmentHistoryBars, window.length);
+  assert.equal(data.definition.segmentHistoryStart, window[0].date);
+  if (changedOriginExamples.length < 3 && data.segments.length) {
+    const segment = data.segments[0];
+    changedOriginExamples.push({ observedAt: length, windowStart: window[0].date,
+      startDate: data.dates[segment.start.time - 1], endDate: data.dates[segment.end.time - 1],
+      evidenceDate: data.dates[segment.confirmed_time - 1] });
+  }
+}
+assert.ok(changedOriginExamples.length > 0, 'must exercise explicit window-origin reconstruction');
 const report = { scope: '有限保存样本的因果回放；不验证全部原图、理论证明、交易收益或线上行情',
   completionInput: '保存样本不伪造complete字段；最新unknown待后继K，证据时刻记后继K',
   prefixes, reports,
-  rollingWindow: { explicitlyClosedSynthetic: true, period: 'day', limit: 300,
-    interpretation: '确认依据K来自本次窗口复算，不是该段跨窗口首次观测时刻', changedOriginExamples },
+  fullHistory: { explicitlyClosedSynthetic: true, period: 'day', oldLimit: 300, beyondOldLimit },
+  rollingWindow: { explicitCallerSlice: true, period: 'day', limit: 300,
+    interpretation: '显式截取窗口的局部编号不能用来判定跨窗口的首次观测时刻', changedOriginExamples },
 };
 if (process.argv.includes('--report')) {
   await writeFile(new URL('../docs/chan-segment-causal-audit-results.json', import.meta.url), `${JSON.stringify(report, null, 2)}\n`);
 }
 console.log(`Segment causal replay passed: ${reports.length} saved histories, ${prefixes} prefixes, no premature evidence times or continuous timing drift.`);
-console.log(`Rolling-window reconstruction reproduced: ${changedOriginExamples.length} recorded historical-basis examples; these are not first-observation or trading-signal times.`);
+console.log(`Full-history confirmations beyond the old 300-bar cutoff: ${beyondOldLimit}; explicit caller-window examples: ${changedOriginExamples.length}.`);

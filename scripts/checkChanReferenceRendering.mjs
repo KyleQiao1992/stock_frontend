@@ -32,8 +32,8 @@ try {
     const texts = [conclusion.title, conclusion.is_hypothesis ? '位置观察' : '等待结构', conclusion.status_label,
       conclusion.structure_fact, conclusion.observation, conclusion.invalidation, data.outlook.watch_note,
       levels.last_bi_high_bar, levels.last_bi_low_bar, levels.zs_zg_bar, levels.zs_zd_bar,
-      levels.vs_zs_label, levels.zs_range, levels.active_zs_id, data.outlook.disclaimer,
-      '结构事实', '当前观察', '参考变化', '买卖点观察 · 接下来三种情景'];
+      levels.vs_zs_label, levels.zs_range, data.outlook.disclaimer,
+      '结构事实', '当前观察', '参考变化', ...(scenarios.length ? ['买卖点观察 · 接下来三种情景'] : [])];
     for (const scenario of scenarios) {
       texts.push(scenario.name, scenario.bias,
         scenario.explain, scenario.condition, scenario.path, scenario.invalid);
@@ -44,8 +44,9 @@ try {
     assert.equal(panel.includes('依当前结构吻合度赋分'), false);
     assert.equal(panel.includes('待核验'), false);
     assert.equal(panel.includes('买卖点需另行核验'), false);
-    assert.equal((panel.match(/data-chan-watch-intro/g) || []).length, 1);
-    assert.equal((panel.match(/data-chan-signal-watch=/g) || []).length, 6);
+    assert.equal((panel.match(/data-chan-watch-intro/g) || []).length, scenarios.length ? 1 : 0);
+    assert.equal((panel.match(/data-chan-signal-watch=/g) || []).length, scenarios.length ? 6 : 0);
+    assert.equal(panel.includes('滑动笔重叠区'), false);
     assert.ok(panel.indexOf(escaped(conclusion.title)) < panel.indexOf('计算口径与范围'));
     outlookCount++;
     for (const visible of [80, 120, allRows.length]) {
@@ -78,7 +79,9 @@ try {
       const zones = [...zoneHtml.matchAll(/<rect\b[^>]*data-chan-zone[^>]*>/g)].map((m) => attrs(m[0]));
       assert.deepEqual(zones.map((z) => [Number(z.x), Number(z.y), Number(z.width), Number(z.height)]),
         data.zs.map((z) => [x(z.sdt), chart.y(z.zg), x(z.edt) - x(z.sdt), chart.y(z.zd) - chart.y(z.zg)]), `${name}/${visible}: zone rectangles`);
-      const active = data.zs.reduce((latest, z) => !latest || z.edt > latest.edt ? z : latest, null);
+      const active = data.zs.findLast((z) => z.status === 'active');
+      assert.deepEqual(zones.map((z) => z['data-chan-zone']), data.zs.map((z) => z.id));
+      assert.deepEqual(zones.map((z) => z['data-chan-zone-status']), data.zs.map((z) => z.status));
       assert.deepEqual(zones.map((z) => Number(z['stroke-width'])), data.zs.map((z) => z === active ? 2 : 1));
       count++;
     }

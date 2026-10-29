@@ -2,6 +2,10 @@
 
 核查日期：2026-10-21。对象是当前本地工作区，包括已有未提交修改；不代表线上部署状态。本文描述代码实际执行的规则，不把实现约定称为原著唯一标准。
 
+2026-10-27更新：以下为历史快照。现主图 `chan-old-bi-segment-zs-v3` 以 `zs.js` 的连续已确认线段构造最低层中枢，替代三至九笔滑动重叠；更高级别递归仍未实现。当前规则与验收见[中枢实施规格](./chan-zhongshu-implementation-spec.md)。
+
+2026-10-24更新：线段采用 `chan-segment-standard-gap-v3`，普通分支按合并后特征元素重算缺口，首笔破坏捷径增加候选外包资格，并保存确认依据。下文是此前实现快照；线段最新规则及验收限制以[实施规格第9节](./chan-segment-implementation-spec.md)为准。
+
 ## 实际入口与结构关系
 
 主图及趋势图调用 `src/lib/chan/index.js` 的 `analyzeChan`。当前规则标识为 `chan-old-bi-sliding-overlap-v2`。

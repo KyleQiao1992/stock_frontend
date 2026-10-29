@@ -1,148 +1,5 @@
 import { parseTencentQuoteIndicators } from "./tencentQuoteIndicators.js";
 
-function parseNasdaqNumber(value) {
-  const cleaned = String(value || "")
-    .replaceAll("$", "")
-    .replaceAll(",", "")
-    .trim();
-  const number = Number(cleaned);
-  return Number.isFinite(number) ? number : null;
-}
-
-function toIsoDate(value) {
-  const [month, day, year] = String(value || "").split("/");
-  if (!month || !day || !year) return "";
-  return `${year.padStart(4, "0")}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-}
-
-function addYears(date, years) {
-  const next = new Date(date);
-  next.setFullYear(next.getFullYear() + years);
-  return next;
-}
-
-function formatDate(date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function formatEasternDate(date) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(date);
-}
-
-function extractDateFromNasdaqTimestamp(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  const parsed = new Date(raw);
-  if (!Number.isNaN(parsed.getTime())) return formatEasternDate(parsed);
-
-  const datePart = raw.match(/^[A-Z][a-z]{2}\s+\d{1,2},\s+\d{4}/)?.[0] || "";
-  if (!datePart) return "";
-  const fallback = new Date(datePart);
-  if (Number.isNaN(fallback.getTime())) return "";
-  return formatEasternDate(fallback);
-}
-
-function parseDayRange(value) {
-  const [first, second] = String(value || "").split("/");
-  const a = parseNasdaqNumber(first);
-  const b = parseNasdaqNumber(second);
-  if (!Number.isFinite(a) || !Number.isFinite(b)) return { high: null, low: null };
-  return { high: Math.max(a, b), low: Math.min(a, b) };
-}
-
-function aggregateRows(rows, period) {
-  if (period === "101") return rows;
-
-  const buckets = new Map();
-  for (const row of rows) {
-    const date = new Date(`${row.date}T00:00:00Z`);
-    if (Number.isNaN(date.getTime())) continue;
-
-    let key;
-    if (period === "102") {
-      const day = date.getUTCDay() || 7;
-      const monday = new Date(date);
-      monday.setUTCDate(date.getUTCDate() - day + 1);
-      key = formatDate(monday);
-    } else {
-      key = row.date.slice(0, 7);
-    }
-
-    const bucket = buckets.get(key);
-    if (!bucket) {
-      buckets.set(key, { ...row });
-      continue;
-    }
-
-    bucket.close = row.close;
-    bucket.high = Math.max(bucket.high, row.high);
-    bucket.low = Math.min(bucket.low, row.low);
-    bucket.volume += row.volume;
-    bucket.amount += row.amount;
-    bucket.date = row.date;
-  }
-
-  return Array.from(buckets.values());
-}
-
-async function loadUsQuoteSnapshot(symbol) {
-  const headers = {
-    Accept: "application/json,text/plain,*/*",
-    "User-Agent":
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    Referer: "https://www.nasdaq.com/",
-  };
-
-  const [infoRes, summaryRes] = await Promise.all([
-    fetch(`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/info?assetclass=stocks`, { headers }),
-    fetch(`https://api.nasdaq.com/api/quote/${encodeURIComponent(symbol)}/summary?assetclass=stocks`, { headers }),
-  ]);
-
-  if (!infoRes.ok) throw new Error(`Nasdaq info HTTP ${infoRes.status}`);
-  if (!summaryRes.ok) throw new Error(`Nasdaq summary HTTP ${summaryRes.status}`);
-
-  const infoPayload = await infoRes.json();
-  const summaryPayload = await summaryRes.json();
-  const primary = infoPayload?.data?.primaryData || {};
-  const summary = summaryPayload?.data?.summaryData || {};
-  const quoteDate = extractDateFromNasdaqTimestamp(primary?.lastTradeTimestamp);
-  const close = parseNasdaqNumber(primary?.lastSalePrice);
-  const volume = parseNasdaqNumber(primary?.volume) || 0;
-  const previousClose = parseNasdaqNumber(summary?.PreviousClose?.value);
-  const range = parseDayRange(summary?.TodayHighLow?.value || infoPayload?.data?.keyStats?.dayrange?.value);
-
-  if (!quoteDate || !Number.isFinite(close) || !Number.isFinite(previousClose)) {
-    return null;
-  }
-
-  const open = previousClose;
-  const high = Number.isFinite(range.high) ? Math.max(range.high, close, open) : Math.max(close, open);
-  const low = Number.isFinite(range.low) ? Math.min(range.low, close, open) : Math.min(close, open);
-  const change = close - previousClose;
-  const pct = previousClose !== 0 ? (change / previousClose) * 100 : 0;
-
-  return {
-    date: quoteDate,
-    open,
-    close,
-    high,
-    low,
-    volume,
-    amount: close * volume,
-    amplitude: low !== 0 ? ((high - low) / low) * 100 : 0,
-    pct,
-    change,
-    turnover: 0,
-    marketStatus: infoPayload?.data?.marketStatus || "",
-    isIntradayEstimate: true,
-  };
-}
-
 function periodToTencentKtype(period) {
   if (String(period) === "102") return "week";
   if (String(period) === "103") return "month";
@@ -155,22 +12,47 @@ function adjustToTencentFq(adjust) {
   return "";
 }
 
+function parseOptionalNumber(value) {
+  if (value == null || (typeof value === "string" && !value.trim())) return null;
+  if (!["number", "string"].includes(typeof value)) return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function validDate(value) {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function invalidRow(index) {
+  return Object.assign(new Error(`invalid US K线 OHLC/date/volume row ${index + 1}`), { code: "US_KLINE_INVALID" });
+}
+
 function parseTencentUsRows(arr) {
-  const rows = arr
-    .map((item) => ({
-      date: item[0],
-      open: Number(item[1]),
-      close: Number(item[2]),
-      high: Number(item[3]),
-      low: Number(item[4]),
-      volume: Number(item[5]),
+  let previousDate = "";
+  const rows = arr.map((item, index) => {
+    if (!Array.isArray(item)) throw invalidRow(index);
+    const [date, rawOpen, rawClose, rawHigh, rawLow, rawVolume] = item;
+    const open = parseOptionalNumber(rawOpen), close = parseOptionalNumber(rawClose);
+    const high = parseOptionalNumber(rawHigh), low = parseOptionalNumber(rawLow);
+    const volume = parseOptionalNumber(rawVolume);
+    if (!validDate(date) || (previousDate && date <= previousDate)
+        || ![open, close, high, low].every(value => Number.isFinite(value) && value > 0)
+        || low > Math.min(open, close) || high < Math.max(open, close)
+        || volume === null || volume < 0) {
+      throw invalidRow(index);
+    }
+    previousDate = date;
+    return {
+      date, open, close, high, low, volume,
       amount: 0,
       amplitude: 0,
       pct: 0,
       change: 0,
       turnover: 0,
-    }))
-    .filter((r) => r.date && [r.open, r.close, r.high, r.low].every(Number.isFinite));
+    };
+  });
 
   let prevClose = null;
   for (const row of rows) {
@@ -195,7 +77,8 @@ async function loadUsKlineFromTencent({ normalized, period, adjust, boundedLimit
   for (const suffix of suffixes) {
     const sym = `us${normalized}${suffix}`;
     const param = `${sym},${ktype},,,${boundedLimit}${fq ? `,${fq}` : ""}`;
-    const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${encodeURIComponent(param)}`;
+    const endpoint = fq ? "fqkline/get" : "kline/kline";
+    const url = `https://web.ifzq.gtimg.cn/appstock/app/${endpoint}?param=${encodeURIComponent(param)}`;
     try {
       const res = await fetch(url, {
         headers: {
@@ -212,7 +95,8 @@ async function loadUsKlineFromTencent({ normalized, period, adjust, boundedLimit
       }
       const payload = await res.json();
       const node = payload?.data?.[sym];
-      const arr = (fq && Array.isArray(node?.[`${fq}${ktype}`])) ? node[`${fq}${ktype}`] : node?.[ktype];
+      // Exact field required: do not silently substitute unadjusted prices.
+      const arr = node?.[fq ? `${fq}${ktype}` : ktype];
       if (!Array.isArray(arr) || arr.length === 0) {
         errors.push(`${sym}: empty`);
         continue;
@@ -236,96 +120,15 @@ async function loadUsKlineFromTencent({ normalized, period, adjust, boundedLimit
       // A full series is a confident match; stop early.
       if (best.klines.length >= Math.min(boundedLimit, 20)) break;
     } catch (e) {
+      // An exchange candidate with a corrupt history cannot safely be replaced
+      // with a short, potentially different-exchange stub.
+      if (e?.code === "US_KLINE_INVALID") throw e;
       errors.push(`${sym}: ${e?.message || e}`);
     }
   }
 
   if (best) return best;
   throw new Error(`tencent US source failed: ${errors.slice(-3).join("; ")}`);
-}
-
-async function loadUsKlineFromNasdaq({ normalized, period, boundedLimit }) {
-  const now = new Date();
-  const from = formatDate(addYears(now, -8));
-  const to = formatDate(now);
-  const apiUrl =
-    `https://api.nasdaq.com/api/quote/${encodeURIComponent(normalized)}/historical?` +
-    `assetclass=stocks&fromdate=${from}&todate=${to}&limit=9999`;
-
-  const upstream = await fetch(apiUrl, {
-    headers: {
-      Accept: "application/json,text/plain,*/*",
-      "User-Agent":
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-      Referer: "https://www.nasdaq.com/",
-    },
-  });
-
-  if (!upstream.ok) {
-    throw new Error(`Nasdaq HTTP ${upstream.status}`);
-  }
-
-  const payload = await upstream.json();
-  const rawRows = payload?.data?.tradesTable?.rows;
-  if (!Array.isArray(rawRows) || rawRows.length === 0) {
-    throw new Error("Nasdaq returned empty historical rows.");
-  }
-
-  const dailyRows = rawRows
-    .map((item) => {
-      const close = parseNasdaqNumber(item.close);
-      const open = parseNasdaqNumber(item.open);
-      const high = parseNasdaqNumber(item.high);
-      const low = parseNasdaqNumber(item.low);
-      const volume = parseNasdaqNumber(item.volume) || 0;
-      if (![open, close, high, low].every(Number.isFinite)) return null;
-      return {
-        date: toIsoDate(item.date),
-        open,
-        close,
-        high,
-        low,
-        volume,
-        amount: close * volume,
-        amplitude: 0,
-        pct: 0,
-        change: 0,
-        turnover: 0,
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.date.localeCompare(b.date));
-
-  let prevClose = null;
-  for (const row of dailyRows) {
-    row.change = Number.isFinite(prevClose) ? row.close - prevClose : 0;
-    row.pct = Number.isFinite(prevClose) && prevClose !== 0 ? (row.change / prevClose) * 100 : 0;
-    row.amplitude = row.low !== 0 ? ((row.high - row.low) / row.low) * 100 : 0;
-    prevClose = row.close;
-  }
-
-  let sourceInfo = `Nasdaq proxy, rows=${dailyRows.length}`;
-  try {
-    const intradayRow = await loadUsQuoteSnapshot(normalized);
-    const latestHistorical = dailyRows[dailyRows.length - 1] || null;
-    if (intradayRow && (!latestHistorical || intradayRow.date > latestHistorical.date)) {
-      dailyRows.push(intradayRow);
-      sourceInfo += ", intraday-merged";
-    } else if (intradayRow && latestHistorical && intradayRow.date === latestHistorical.date) {
-      dailyRows[dailyRows.length - 1] = intradayRow;
-      sourceInfo += ", intraday-replaced";
-    }
-  } catch {
-    // Keep the historical series usable even when the quote snapshot is unavailable.
-  }
-
-  const rows = aggregateRows(dailyRows, period).slice(-boundedLimit);
-  return {
-    code: normalized,
-    name: normalized,
-    sourceInfo: sourceInfo.replace(/rows=\d+/, `rows=${rows.length}`),
-    klines: rows,
-  };
 }
 
 // Tencent US valuation fields share these positions with A-shares; other fields differ.
@@ -350,10 +153,10 @@ async function loadUsQuoteMeta(normalized) {
   const fields = body ? body.split("~") : [];
   if (fields.length < 46) throw new Error("Tencent quote unavailable"); // e.g. v_pv_none_match
 
-  const turnoverRate = Number(fields[38]);
-  const peRatio = Number(fields[39]);
-  const floatCapYi = Number(fields[44]);
-  const totalCapYi = Number(fields[45]);
+  const turnoverRate = parseOptionalNumber(fields[38]);
+  const peRatio = parseOptionalNumber(fields[39]);
+  const floatCapYi = parseOptionalNumber(fields[44]);
+  const totalCapYi = parseOptionalNumber(fields[45]);
   return {
     ...parseTencentQuoteIndicators(fields, "us"),
     quoteTime: fields[30] || "",
@@ -366,30 +169,25 @@ async function loadUsQuoteMeta(normalized) {
 
 async function loadUsKline({ symbol, period = "101", limit = 600, adjust = "1" }) {
   const normalized = String(symbol || "")
-    .toUpperCase()
-    .replace(/[^A-Z0-9.-]/g, "")
-    .slice(0, 12);
+    .trim()
+    .toUpperCase();
 
   if (!/^[A-Z][A-Z0-9.-]{0,11}$/.test(normalized)) {
     throw new Error("Invalid US stock symbol.");
   }
+  if (!["101", "102", "103"].includes(String(period))) throw new Error("Unsupported US K线 period");
+  if (!["0", "1", "2"].includes(String(adjust))) throw new Error("Unsupported US K线 复权 setting");
 
   const boundedLimit = Math.min(Math.max(Number(limit) || 600, 30), 2000);
 
-  // Prefer Tencent (reliable from CN servers); fall back to Nasdaq if it is empty/unreachable.
+  // The Nasdaq historical endpoint's adjustment basis is not verified.  It
+  // cannot replace either adjusted or raw Tencent history without changing the
+  // requested data semantics, even if its response happens to have valid OHLC.
   const klinePromise = (async () => {
     try {
       return await loadUsKlineFromTencent({ normalized, period, adjust, boundedLimit });
     } catch (tencentError) {
-      try {
-        return await loadUsKlineFromNasdaq({ normalized, period, boundedLimit });
-      } catch (nasdaqError) {
-        throw new Error(
-          `US kline unavailable. tencent: ${tencentError?.message || tencentError}; ` +
-            `nasdaq: ${nasdaqError?.message || nasdaqError}`,
-          { cause: nasdaqError },
-        );
-      }
+      throw new Error(`US K线不可用: ${tencentError?.message || tencentError}; Nasdaq 历史数据复权口径尚未核实`, { cause: tencentError });
     }
   })();
 

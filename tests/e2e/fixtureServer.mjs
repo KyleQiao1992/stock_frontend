@@ -156,10 +156,19 @@ export async function startFixtureServer({ port = 0, initialState = {} } = {}) {
           ? apiFixture({ data: fixtureData, url, body, method: req.method, headers: req.headers, state })
           : remoteFixture({ data: fixtureData, url, method: req.method });
         let response;
-        if (rule && (Object.hasOwn(rule, 'body') || rule.status !== undefined)) response = responseOverride({
-          status: rule.status || 200, body: Object.hasOwn(rule, 'body') ? rule.body : { ok: false, error: '模拟接口失败' },
-          ...(rule.contentType ? { contentType: rule.contentType } : {}), ...(rule.headers ? { headers: rule.headers } : {}),
-        });
+        if (rule && (Object.hasOwn(rule, 'body') || rule.status !== undefined)) {
+          let ruleBody = Object.hasOwn(rule, 'body') ? rule.body : { ok: false, error: '模拟接口失败' };
+          let ruleContentType = rule.contentType;
+          if (rule.scriptVariableParam) {
+            const variable = url.searchParams.get(rule.scriptVariableParam);
+            if (!variable || !/^[A-Za-z_$][\w$]*$/.test(variable)) throw Object.assign(new Error('Invalid fixture script variable'), { status: 400 });
+            ruleBody = `window[${JSON.stringify(variable)}]=${JSON.stringify(ruleBody)};`;
+            ruleContentType = 'application/javascript; charset=utf-8';
+          }
+          response = responseOverride({ status: rule.status || 200, body: ruleBody,
+            ...(ruleContentType ? { contentType: ruleContentType } : {}), ...(rule.headers ? { headers: rule.headers } : {}),
+          });
+        }
         else if (Object.hasOwn(state.failPaths, url.pathname) && state.failPaths[url.pathname]) {
           const failure = state.failPaths[url.pathname];
           response = typeof failure === 'object' ? responseOverride(failure, 503) : errorResponse(typeof failure === 'number' ? failure : 503, typeof failure === 'string' ? failure : '模拟数据源请求失败（隔离测试）');
@@ -207,6 +216,14 @@ export async function startFixtureServer({ port = 0, initialState = {} } = {}) {
             return source.replace(connect, '// HMR transport is intentionally disabled in isolated E2E.');
           }
           if (!id.startsWith(sourceRoot) || !/\.[cm]?[jt]sx?(?:\?|$)/.test(id)) return null;
+          // Explicit mutation test only: prove the index notice regression test
+          // fails if that production notice is removed. Never enabled by default.
+          if (process.env.E2E_FAULT_REMOVE_INDEX_UNCERTAINTY === '1'
+              && id.replaceAll('\\', '/').split('?')[0].endsWith('/components/AShareTD9InteractiveChart.jsx')) {
+            const needle = '<ChanUncertaintyNotice data={chanData} />';
+            if (source.split(needle).length !== 2) throw new Error('Expected exactly one index uncertainty notice to mutate');
+            source = source.replace(needle, '');
+          }
           return source.replace(/https?:\/\/([A-Za-z0-9._-]+)(?::\d+)?/g, (_url, host) => `${origin}/__audit/remote/${host}`);
         },
       }, react(), tailwindcss()],

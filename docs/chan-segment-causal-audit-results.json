@@ -6,16 +6,16 @@
     {
       "file": "hk00700-5m.json",
       "prefixes": 884,
-      "appearances": 4,
-      "withdrawals": 1,
-      "reappearances": 1,
+      "appearances": 3,
+      "withdrawals": 0,
+      "reappearances": 0,
       "timingChanges": 0,
       "violations": []
     },
     {
       "file": "hk00700-day.json",
       "prefixes": 298,
-      "appearances": 2,
+      "appearances": 0,
       "withdrawals": 0,
       "reappearances": 0,
       "timingChanges": 0,
@@ -60,9 +60,9 @@
     {
       "file": "sh603818-15m.json",
       "prefixes": 783,
-      "appearances": 4,
-      "withdrawals": 1,
-      "reappearances": 1,
+      "appearances": 0,
+      "withdrawals": 0,
+      "reappearances": 0,
       "timingChanges": 0,
       "violations": []
     },
@@ -105,7 +105,7 @@
     {
       "file": "sh603818-week.json",
       "prefixes": 259,
-      "appearances": 2,
+      "appearances": 1,
       "withdrawals": 0,
       "reappearances": 0,
       "timingChanges": 0,
@@ -121,29 +121,38 @@
       "violations": []
     }
   ],
-  "rollingWindow": {
+  "fullHistory": {
     "explicitlyClosedSynthetic": true,
     "period": "day",
+    "oldLimit": 300,
+    "beyondOldLimit": 3
+  },
+  "rollingWindow": {
+    "explicitCallerSlice": true,
+    "period": "day",
     "limit": 300,
-    "interpretation": "确认依据K来自本次窗口复算，不是该段跨窗口首次观测时刻",
+    "interpretation": "显式截取窗口的局部编号不能用来判定跨窗口的首次观测时刻",
     "changedOriginExamples": [
       {
-        "observedAt": 308,
-        "windowStart": "K9",
-        "id": "segment-17-73",
-        "basisK": 106
+        "observedAt": 301,
+        "windowStart": "K2",
+        "startDate": "K9",
+        "endDate": "K33",
+        "evidenceDate": "K66"
       },
       {
-        "observedAt": 316,
-        "windowStart": "K17",
-        "id": "segment-25-49",
-        "basisK": 82
+        "observedAt": 302,
+        "windowStart": "K3",
+        "startDate": "K9",
+        "endDate": "K33",
+        "evidenceDate": "K66"
       },
       {
-        "observedAt": 316,
-        "windowStart": "K17",
-        "id": "segment-49-73",
-        "basisK": 106
+        "observedAt": 303,
+        "windowStart": "K4",
+        "startDate": "K9",
+        "endDate": "K33",
+        "evidenceDate": "K66"
       }
     ]
   }

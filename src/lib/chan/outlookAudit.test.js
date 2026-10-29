@@ -8,7 +8,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer } from 'vite';
 import react from '@vitejs/plugin-react';
-import { buildReferenceOutlook } from './referenceOutlook.js';
+import { buildReferenceOutlook, buildSegmentOutlook } from './referenceOutlook.js';
 
 const candles = [
   { time: '2026-10-12', open: 13, high: 16, low: 12, close: 14 },
@@ -33,6 +33,21 @@ const cases = [
   [true, 18, 'above', '上方'], [true, 14, 'inside', '内部'], [true, 11, 'below', '下方'],
   [false, 18, 'above', '上方'], [false, 14, 'inside', '内部'], [false, 11, 'below', '下方'],
 ];
+
+test('outlook reports endpoint-order uncertainty instead of asserting an absent or extending center', () => {
+  const uncertainty = [{ kind: 'formation', reason: 'endpoint_order' }];
+  const missing = buildSegmentOutlook({ ...input(true, 14), zsList: [], zsUncertainty: uncertainty });
+  assert.match(missing.conclusion.structure_fact, /无法确定/);
+  assert.match(missing.conclusion.observation, /K线.*先后顺序/);
+  assert.equal(missing.levels.vs_zs_label, '无法确定中枢是否形成');
+  assert.equal(missing.conclusion.confirmed_signal, null);
+  const formed = { ...zone, status: 'uncertain', phase: 'uncertain', segment_count: 3,
+    confirmed_time: '2026-10-14', id: 'zs-test' };
+  const later = buildSegmentOutlook({ ...input(true, 14), zsList: [formed], zsUncertainty: uncertainty });
+  assert.match(later.conclusion.observation, /无法确定/);
+  assert.match(later.levels.zs_range, /最近已确认/);
+  assert.equal(later.levels.zs_status, 'uncertain');
+});
 
 for (const [up, close, position, label] of cases) {
   test(`outlook audit: ${up ? 'up' : 'down'}-${position} retains six conditional watches without claiming a detected class`, () => {
@@ -160,7 +175,8 @@ test('outlook audit: the real panel exposes computation scope and does not rende
   try {
     const { default: StockAnalysisPanel } = await server.ssrLoadModule('/src/components/StockAnalysisPanel.jsx');
     for (const request of [...cases.map(([up, close]) => input(up, close)), { ...input(true, 14), zsList: [] }]) {
-      const data = { outlook: buildReferenceOutlook(request),
+      const data = { outlook: buildSegmentOutlook({ ...request, zsList: request.zsList.map(z => ({ ...z,
+        id: 'zs-panel-fixture', segment_count: 3, status: 'active', phase: 'extending', confirmed_time: candles.at(-1).time })) }),
         definition: { historyBars: candles.length }, dates: candles.map((candle) => candle.time),
         historyDates: candles.map((candle) => candle.time), trades: [] };
       const markup = renderToStaticMarkup(React.createElement(StockAnalysisPanel, {
@@ -173,9 +189,10 @@ test('outlook audit: the real panel exposes computation scope and does not rende
       assert.match(markup, /不按固定根数或笔数截断/);
       assert.match(markup, /加载更早历史可能改变起笔及后续结构/);
       assert.doesNotMatch(markup, /最近50笔展示上限/);
-      assert.match(markup, /连续前三笔固定ZG\/ZD/);
-      assert.match(markup, /最多延伸九笔/);
-      assert.match(markup, /不是原文按次级别走势递归定义的中枢/);
+      assert.match(markup, /三个连续已确认线段的实际价格区间有正宽重叠才形成/);
+      assert.match(markup, /延伸保持核心区间，没有九段上限/);
+      assert.match(markup, /K线周期不等于中枢级别，尚未递归构造更高级别/);
+      assert.doesNotMatch(markup, /滑动笔重叠区|最多延伸九笔|undefined/);
       assert.match(markup, /当前未执行走势级别、递归中枢、背驰及一二三类买卖点的自动识别/);
       assert.doesNotMatch(markup, /评分|吻合度赋分|近期无一二三类|参考站划线口径|待核验|买卖点需另行核验|后续核验项目/);
       assert.doesNotMatch(markup, /aria-label="已确认信号"/);

@@ -17,6 +17,14 @@ export async function chartReady(page) {
   await expect(chart).toBeVisible();
   await expect.poll(async () => Number(await chart.getAttribute('data-kline-count'))).toBeGreaterThan(0);
   await expect(chart.locator('g[data-kline-time]').first()).toBeVisible();
+  // All market/chart entries must render data in the new FSL panel too.
+  await expect(chart.locator('[data-fsl-line="swl"]')).toHaveAttribute('d', /^M.+L/);
+  await expect(chart.locator('[data-fsl-line="sws"]')).toHaveAttribute('d', /^M.+L/);
+  await expect(chart.locator('[data-fsl-legend]')).toHaveAttribute('data-swl', /^\d/);
+  await expect(chart.locator('[data-fsl-legend]')).toHaveAttribute('data-sws', /^\d/);
+  await expect(chart.locator('[data-fsl-heading]')).toHaveText('FSL');
+  await expect(chart.locator('[data-fsl-panel]')).toHaveAttribute('data-fsl-reference', 'hqchart-max-dma');
+  await expect(chart.locator('[data-indicator-frame="fsl"] > line')).toHaveCount(2);
   await expect.poll(async () => (await chart.getAttribute('data-kline-period'))
     === (await page.getByRole('combobox', { name: 'K线周期', exact: true }).inputValue())).toBe(true);
   await expect(page.locator('.market-query-controls').getByRole('button', { name: '查询', exact: true })).toBeEnabled();
@@ -58,10 +66,11 @@ async function stockReady(page, market) {
 
 const analysisPanel = page => page.locator('section[aria-label="个股分析"]');
 
-async function analysisOpen(page, market, label) {
+async function analysisOpen(page, market, label, engine = 'original') {
   await stockOpen(page, { ashare: 'A股', hk: '港股', us: '美股' }[market]);
   await stockReady(page, market);
   if (['缠论研判', '笔端参考'].includes(label)) {
+    await page.getByRole('combobox', { name: '缠论引擎' }).selectOption(engine);
     const chan = page.getByRole('button', { name: '缠论', exact: true });
     if (await chan.getAttribute('aria-pressed') !== 'true') await chan.click();
   }
@@ -83,6 +92,8 @@ async function chanOutlookReady(page, market) {
   await expect(facts.getByText('现价', { exact: true }).locator('..').locator('.font-semibold')).toHaveText(/\d+\.\d{2}/);
   await expect(outlook.locator('section[aria-label="观察条件"] p')).toHaveText(/\S/);
   await expect(outlook.locator('section[aria-label="失效与操作参考"] p')).toHaveText(/\S/);
+  await expect(analysisPanel(page).getByText(/色框为本图最小级别的线段中枢/)).toBeAttached();
+  await expect(analysisPanel(page)).not.toContainText('滑动笔重叠区');
 }
 
 async function chanEndpointsReady(page, market) {
@@ -241,6 +252,21 @@ export const PAGE_CASES = [
   {
     id: 'ashare-financial', title: 'A股 / 财报',
     open: page => analysisOpen(page, 'ashare', '财报'), ready: financialReady,
+  },
+  {
+    id: 'ashare-external-outlook', title: 'A股 / 修正笔及三笔中枢研判',
+    open: page => analysisOpen(page, 'ashare', '缠论研判', 'external'),
+    async ready(page) {
+      await analysisReady(page, 'ashare', '缠论研判');
+      const outlook = page.getByLabel('缠论结构研判', { exact: true });
+      await expect(outlook.getByRole('heading', { name: '修正结构参考', exact: true })).toBeVisible();
+      await expect(outlook).toContainText('不是递归走势中枢');
+      await expect(outlook).toContainText('确认依据K');
+      await expect(outlook.locator('[aria-label="线段结构"]')).toContainText('段已确认');
+      const result = outlook.getByLabel('修正结构研判范围', { exact: true });
+      await expect(result).toContainText('尚无与当前修正结构相匹配');
+      await expect(result).toContainText('不能作为当前图的信号');
+    },
   },
   {
     id: 'ashare-outlook', title: 'A股 / 缠论研判', open: page => analysisOpen(page, 'ashare', '缠论研判'),

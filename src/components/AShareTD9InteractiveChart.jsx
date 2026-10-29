@@ -10,12 +10,18 @@ import { createTencentKlineHostSelector, TENCENT_KLINE_HOSTS } from "../lib/tenc
 import { tencentAshareVolumeToLots } from "../lib/tencentAshareVolume.js";
 import { fetchAshareMinuteKline } from "../lib/ashareMinuteKline.js";
 import { fetchAshareFourHourKline } from "../lib/ashareFourHourKline.js";
+import { calcFslSeries, findFslCrosses } from "../lib/fsl.js";
+import { IndicatorFrame, IndicatorHeader, IndicatorCrossMarker, IndicatorSignalToggle } from "./ChartIndicatorChrome.jsx";
 import { isMinutePeriod, isFourHourPeriod, periodLabel, klineDateLabel, klineTradingDate } from "../lib/klinePeriod.js";
 import ChanOverlay from "./ChanOverlay";
 import ChanFractalDetail from "./ChanFractalDetail";
 import ChanLegend from "./ChanLegend";
+import ChanPendingNotice from "./ChanPendingNotice";
+import ChanUncertaintyNotice from "./ChanUncertaintyNotice";
+import { assertMarketKlines, marketNumber } from "../lib/marketKlineIntegrity.js";
 import ChanControls from "./ChanControls";
 import { analyzeChan } from "../lib/chan/index.js";
+import { analyzeExternalChan } from "../lib/chan/external/index.js";
 import { isCurrentMarketSnapshot, marketSnapshotSourceLabel, formatMarketSnapshotTime } from "../lib/marketSnapshotQuality.js";
 import { todayMarketPresentation } from "../lib/todayMarketPresentation.js";
 import { Component, Fragment, lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -450,7 +456,7 @@ function parseTencentKlineResponse(res, { code, period, adjust }) {
   const keyCandidates = [];
   if (adj === "qfq") keyCandidates.push(`qfq${ktype}`, `${ktype}qfq`);
   if (adj === "hfq") keyCandidates.push(`hfq${ktype}`, `${ktype}hfq`);
-  keyCandidates.push(ktype);
+  if (!adj) keyCandidates.push(ktype);
 
   let arr = null;
   for (const key of keyCandidates) {
@@ -465,20 +471,19 @@ function parseTencentKlineResponse(res, { code, period, adjust }) {
   const parsed = arr
     .map((item) => {
       const date = item[0];
-      const open = Number(item[1]);
-      const close = Number(item[2]);
-      const high = Number(item[3]);
-      const low = Number(item[4]);
-      const volume = tencentAshareVolumeToLots(item[5], code);
+      const open = marketNumber(item[1]);
+      const close = marketNumber(item[2]);
+      const high = marketNumber(item[3]);
+      const low = marketNumber(item[4]);
+      const volume = Number.isFinite(marketNumber(item[5])) ? tencentAshareVolumeToLots(item[5], code) : NaN;
       const change = Number.isFinite(prevClose) ? close - prevClose : 0;
       const pct = Number.isFinite(prevClose) && prevClose !== 0 ? (change / prevClose) * 100 : 0;
       prevClose = close;
       return { date, open, close, high, low, volume, amount: 0, amplitude: 0, pct, change, turnover: 0 };
-    })
-    .filter((r) => r.date && [r.open, r.close, r.high, r.low, r.volume].every(Number.isFinite));
+    });
 
   if (!parsed.length) throw new Error("腾讯行情数据格式异常");
-  return parsed;
+  return assertMarketKlines(parsed, { adjusted: adj === "qfq" || adj === "hfq" });
 }
 
 async function fetchTencentKline({ code, period, adjust, limit }) {
@@ -603,25 +608,25 @@ async function fetchAshareKline({ code, period, adjust, limit }) {
             const parts = String(line).split(",");
             return {
               date: parts[0],
-              open: Number(parts[1]),
-              close: Number(parts[2]),
-              high: Number(parts[3]),
-              low: Number(parts[4]),
-              volume: Number(parts[5]),
+              open: marketNumber(parts[1]),
+              close: marketNumber(parts[2]),
+              high: marketNumber(parts[3]),
+              low: marketNumber(parts[4]),
+              volume: marketNumber(parts[5]),
               amount: Number(parts[6]),
               amplitude: Number(parts[7]),
               pct: Number(parts[8]),
               change: Number(parts[9]),
               turnover: Number(parts[10]),
             };
-          })
-          .filter((r) => r.date && [r.open, r.close, r.high, r.low, r.volume].every(Number.isFinite));
+          });
 
         if (parsed.length === 0) {
           errors.push(`${host} lmt=${currentLimit}: 数据格式异常`);
           continue;
         }
 
+        assertMarketKlines(parsed, { adjusted: ["1", "2"].includes(String(adjust)) });
         return {
           code: data.code || code,
           name: data.name || code,
@@ -663,22 +668,22 @@ async function fetchIndexKline({ secid, tencentSymbol, name, period = "101", lim
         let prevClose = null;
         const parsed = arr
           .map((item) => {
-            const close = Number(item[2]);
+            const close = marketNumber(item[2]);
             const change = Number.isFinite(prevClose) ? close - prevClose : null;
             const pct = Number.isFinite(change) && prevClose !== 0 ? (change / prevClose) * 100 : null;
             prevClose = close;
             return {
               date: item[0],
-              open: Number(item[1]),
+              open: marketNumber(item[1]),
               close,
-              high: Number(item[3]),
-              low: Number(item[4]),
-              volume: Number(item[5]),
+              high: marketNumber(item[3]),
+              low: marketNumber(item[4]),
+              volume: marketNumber(item[5]),
               change,
               pct,
             };
-          })
-          .filter((r) => r.date && [r.open, r.close, r.high, r.low].every(Number.isFinite));
+          });
+        assertMarketKlines(parsed);
         if (parsed.length) return { code: tencentSymbol, name, klines: parsed };
       } catch (e) {
         errors.push(`tencent: ${e?.message || e}`);
@@ -710,17 +715,17 @@ async function fetchIndexKline({ secid, tencentSymbol, name, period = "101", lim
             const parts = String(line).split(",");
             return {
               date: parts[0],
-              open: Number(parts[1]),
-              close: Number(parts[2]),
-              high: Number(parts[3]),
-              low: Number(parts[4]),
-              volume: Number(parts[5]),
+              open: marketNumber(parts[1]),
+              close: marketNumber(parts[2]),
+              high: marketNumber(parts[3]),
+              low: marketNumber(parts[4]),
+              volume: marketNumber(parts[5]),
               amount: Number(parts[6]),
               pct: Number(parts[8]),
               change: Number(parts[9]),
             };
-          })
-          .filter((r) => r.date && [r.open, r.close, r.high, r.low].every(Number.isFinite));
+          });
+        assertMarketKlines(parsed);
         if (parsed.length) {
           return { code: data.code || secid, name: data.name || name, klines: parsed };
         }
@@ -748,108 +753,41 @@ async function fetchUsKline({ symbol, period, adjust, limit }) {
     throw new Error("请输入有效的美股代码，例如 AAPL、MSFT、NVDA、BRK.B。");
   }
 
-  const errors = [];
-
-  try {
-    const params = new URLSearchParams({
-      symbol: normalized,
-      period,
-      adjust,
-      limit: String(limit || 600),
-    });
-    const res = await apiFetch(`/api/us-kline?${params.toString()}`, {
-      method: "GET",
-      cache: "no-store",
-    });
-    const payload = await res.json().catch(() => null);
-    if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
-    const klines = Array.isArray(payload?.klines) ? payload.klines : [];
-    if (!klines.length) throw new Error("本地美股代理返回空数据");
-    return {
-      code: payload.code || normalized,
-      name: payload.name || normalized,
-      marketCap: Number.isFinite(payload.marketCap) ? payload.marketCap : null,
-      floatMarketCap: Number.isFinite(payload.floatMarketCap) ? payload.floatMarketCap : null,
-      peRatio: Number.isFinite(payload.peRatio) ? payload.peRatio : null,
-      turnoverRate: Number.isFinite(payload.turnoverRate) ? payload.turnoverRate : null,
-      volumeRatio: payload.volumeRatioSource === "calculated" ? null : Number.isFinite(payload.volumeRatio) ? payload.volumeRatio : null,
-      volumeRatioSource: payload.volumeRatioSource || "unavailable",
-      sessionVwap: Number.isFinite(payload.sessionVwap) ? payload.sessionVwap : null,
-      sessionVwapPremium: Number.isFinite(payload.sessionVwapPremium) ? payload.sessionVwapPremium : null,
-      sessionVwapSource: payload.sessionVwapSource || "unavailable",
-      innerVol: Number.isFinite(payload.innerVol) ? payload.innerVol : null,
-      outerVol: Number.isFinite(payload.outerVol) ? payload.outerVol : null,
-      tradeSideVolumeSource: payload.tradeSideVolumeSource || "unavailable",
-      indicatorsQuoteTime: payload.indicatorsQuoteTime || "",
-      quoteTime: payload.quoteTime || "",
-      klines,
-      sourceInfo: payload.sourceInfo || "Nasdaq local proxy",
-    };
-  } catch (e) {
-    errors.push(`Nasdaq local proxy: ${e?.message || e}`);
-  }
-
-  const hosts = [
-    "https://push2his.eastmoney.com",
-    "https://79.push2his.eastmoney.com",
-    "https://82.push2his.eastmoney.com",
-  ];
-  const secids = [`105.${normalized}`, `106.${normalized}`];
-  const limits = Array.from(new Set([Math.max(300, Number(limit) || 600), 1200, 600].filter((v) => Number(v) > 0)));
-
-  for (const currentLimit of limits) {
-    for (const secid of secids) {
-      for (const host of hosts) {
-        const url = buildEastmoneyKlineUrl({ host, secid, period, adjust, limit: currentLimit });
-        try {
-          const res = await loadMarketJson(url);
-          const data = res?.data || null;
-          const klines = Array.isArray(data?.klines) ? data.klines : [];
-          if (!data || klines.length === 0) {
-            errors.push(`${host} ${secid} lmt=${currentLimit}: 空数据`);
-            continue;
-          }
-
-          const parsed = klines
-            .map((line) => {
-              const parts = String(line).split(",");
-              return {
-                date: parts[0],
-                open: Number(parts[1]),
-                close: Number(parts[2]),
-                high: Number(parts[3]),
-                low: Number(parts[4]),
-                volume: Number(parts[5]),
-                amount: Number(parts[6]),
-                amplitude: Number(parts[7]),
-                pct: Number(parts[8]),
-                change: Number(parts[9]),
-                turnover: Number(parts[10]),
-              };
-            })
-            .filter((r) => r.date && [r.open, r.close, r.high, r.low, r.volume].every(Number.isFinite));
-
-          if (!parsed.length) {
-            errors.push(`${host} ${secid} lmt=${currentLimit}: 数据格式异常`);
-            continue;
-          }
-
-          return {
-            code: data.code || normalized,
-            name: data.name || normalized,
-            marketCap: null,
-            floatMarketCap: null,
-            klines: parsed,
-            sourceInfo: `${host}, ${secid}, lmt=${currentLimit}`,
-          };
-        } catch (e) {
-          errors.push(`${host} ${secid} lmt=${currentLimit}: ${e?.message || e}`);
-        }
-      }
-    }
-  }
-
-  throw new Error(`美股行情暂时不可用。已尝试无 key 历史行情源，但都失败了。最后错误：${errors.slice(-3).join("；")}`);
+  const params = new URLSearchParams({
+    symbol: normalized,
+    period,
+    adjust,
+    limit: String(limit || 600),
+  });
+  const res = await apiFetch(`/api/us-kline?${params.toString()}`, {
+    method: "GET",
+    cache: "no-store",
+  });
+  const payload = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+  const klines = Array.isArray(payload?.klines) ? payload.klines : [];
+  if (!klines.length) throw new Error("本地美股代理返回空数据");
+  assertMarketKlines(klines);
+  return {
+    code: payload.code || normalized,
+    name: payload.name || normalized,
+    marketCap: Number.isFinite(payload.marketCap) ? payload.marketCap : null,
+    floatMarketCap: Number.isFinite(payload.floatMarketCap) ? payload.floatMarketCap : null,
+    peRatio: Number.isFinite(payload.peRatio) ? payload.peRatio : null,
+    turnoverRate: Number.isFinite(payload.turnoverRate) ? payload.turnoverRate : null,
+    volumeRatio: payload.volumeRatioSource === "calculated" ? null : Number.isFinite(payload.volumeRatio) ? payload.volumeRatio : null,
+    volumeRatioSource: payload.volumeRatioSource || "unavailable",
+    sessionVwap: Number.isFinite(payload.sessionVwap) ? payload.sessionVwap : null,
+    sessionVwapPremium: Number.isFinite(payload.sessionVwapPremium) ? payload.sessionVwapPremium : null,
+    sessionVwapSource: payload.sessionVwapSource || "unavailable",
+    innerVol: Number.isFinite(payload.innerVol) ? payload.innerVol : null,
+    outerVol: Number.isFinite(payload.outerVol) ? payload.outerVol : null,
+    tradeSideVolumeSource: payload.tradeSideVolumeSource || "unavailable",
+    indicatorsQuoteTime: payload.indicatorsQuoteTime || "",
+    quoteTime: payload.quoteTime || "",
+    klines,
+    sourceInfo: payload.sourceInfo || "US local proxy",
+  };
 }
 
 async function fetchHkKline({ code, period, adjust, limit }) {
@@ -865,6 +803,7 @@ async function fetchHkKline({ code, period, adjust, limit }) {
   const payload = await res.json().catch(() => null);
   if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
   if (!Array.isArray(payload?.klines) || !payload.klines.length) throw new Error("腾讯港股行情返回空数据。");
+  assertMarketKlines(payload.klines);
   return payload;
 }
 
@@ -3509,11 +3448,15 @@ export function Chart({
   // 1440px 左右的三栏布局里，中间栏通常只有 640~680px。旧的 720px 下限会让
   // 图表即使已经自适应容器，仍多出一小段横向滚动；640px 仍足够容纳价格轴与指标。
   const width = Math.max(600, Math.round(viewportWidth - 24));
-  const height = Math.round(Math.max(600, Math.min(expanded ? 920 : 760, width * 0.72)));
+  const fslH = 104;
+  const fslGap = 18;
+  // Add room for the new panel without squeezing the existing price/VOL/MACD.
+  const height = Math.round(Math.max(600, Math.min(expanded ? 920 : 760, width * 0.72))) + fslH + fslGap;
   const compactHeader = width < 820;
   const [hoverIndex, setHoverIndex] = useState(null);
   const [selectedIndex, setSelectedIndex] = useState(null);
   const [showMacdSignals, setShowMacdSignals] = useState(true);
+  const [showFslSignals, setShowFslSignals] = useState(true);
   const [klineFaded, setKlineFaded] = useState(false);
   const [showMaCrosses, setShowMaCrosses] = useState(false);
   const [showVolMaCrosses, setShowVolMaCrosses] = useState(true);
@@ -3677,9 +3620,8 @@ export function Chart({
     // 窄图将九转和均线分行，给顶部文字预留独立空间。
     const margin = { top: compactHeader ? 106 : 66, right: 72, bottom: 36, left: 58 };
     const gap = 18;
-    // 三个绘图区必须严格落在 SVG 的可用高度内。旧算法分别设置最小高度，
-    // 在响应式窄图（高度约 600px）中总和会超过画布，导致 MACD 底部被裁切。
-    const contentH = height - margin.top - margin.bottom - gap * 2;
+    // Reserve all four panels and their gaps inside the SVG canvas.
+    const contentH = height - margin.top - margin.bottom - gap * 2 - fslGap - fslH;
     const volH = Math.max(80, Math.round(contentH * 0.16));
     const macdH = Math.max(110, Math.round(contentH * 0.22));
     const mainH = contentH - volH - macdH;
@@ -3688,7 +3630,10 @@ export function Chart({
     const priceMin = Math.min(...safeRows.map((d) => d.low));
     const rawRange = Math.max(priceMax - priceMin, priceMax * 0.01, 1);
     const yMax = priceMax + rawRange * 0.08;
-    const yMin = Math.max(0, priceMin - rawRange * 0.08);
+    // Cumulative cash adjustments can put historical prices below zero.
+    // Only clamp the padding when every visible price is strictly positive.
+    const paddedMin = priceMin - rawRange * 0.08;
+    const yMin = priceMin > 0 ? Math.max(0, paddedMin) : paddedMin;
     const maxVol = Math.max(...safeRows.map((d) => d.volume), 1);
     // Calculate MACD from the complete history, then project it onto the visible
     // window. Changing "近N根" must not change DIF/DEA or their zero-axis position.
@@ -3741,6 +3686,43 @@ export function Chart({
     const macdTop = volBase + gap;
     const macdBase = macdTop + macdH / 2;
     const macdY = (value) => macdBase - (value / macdAbsMax) * (macdH * 0.46);
+    const fslTop = macdTop + macdH + fslGap;
+    const fullFslSeries = calcFslSeries(fullSafeRows);
+    const fullFslByDate = new Map(fullFslSeries.map(item => [item.date, item]));
+    const fslSeries = safeRows.map(row => fullFslByDate.get(row.date) ?? { date: row.date, swl: null, sws: null });
+    const fslValues = fslSeries.flatMap(item => [item.swl, item.sws]).filter(Number.isFinite);
+    const indicatorColumnWidth = Math.max(68, ...[...fslValues, ...macdValues].map(value => (value.toFixed(2).length + 4) * 7 + 12));
+    const fslLow = fslValues.length ? Math.min(...fslValues) : 0;
+    const fslHigh = fslValues.length ? Math.max(...fslValues) : 1;
+    const fslPad = Math.max((fslHigh - fslLow) * .1, Math.abs(fslHigh) * .005, .01);
+    const fslMin = fslLow - fslPad, fslMax = fslHigh + fslPad;
+    const fslY = value => fslTop + 4 + (fslMax - value) / (fslMax - fslMin) * (fslH - 8);
+    const fullFslCrossByDate = new Map(findFslCrosses(fullFslSeries).map(cross => [cross.date, cross]));
+    const minFslLabelY = fslTop + 35, maxFslLabelY = fslTop + fslH - 6;
+    const minFslLabelX = margin.left + 18, maxFslLabelX = width - margin.right - 18;
+    // Reserve non-overlapping 32×16 capsules across the whole plot. The former
+    // local ±72 search could run out of neighbours while most of the panel was
+    // still empty, then place several labels on the same coordinates.
+    const fslLabelSlots = [];
+    for (let labelY = minFslLabelY; labelY <= maxFslLabelY; labelY += 20) {
+      for (let labelX = minFslLabelX; labelX <= maxFslLabelX; labelX += 36) {
+        fslLabelSlots.push({ x: labelX, y: labelY });
+      }
+    }
+    const fslCrosses = safeRows.flatMap((row, index) => {
+      const cross = fullFslCrossByDate.get(row.date);
+      if (!cross) return [];
+      const cx = x(index), cy = fslY(cross.value);
+      const preferredY = Math.max(minFslLabelY, Math.min(maxFslLabelY, cy + (cross.type === 'golden' ? -10 : 16)));
+      let nearest = -1, nearestDistance = Infinity;
+      fslLabelSlots.forEach((slot, slotIndex) => {
+        const distance = (slot.x - cx) ** 2 + (slot.y - preferredY) ** 2;
+        if (distance < nearestDistance) { nearest = slotIndex; nearestDistance = distance; }
+      });
+      const label = nearest >= 0 ? fslLabelSlots.splice(nearest, 1)[0]
+        : { x: Math.max(minFslLabelX, Math.min(maxFslLabelX, cx)), y: preferredY };
+      return [{ ...cross, index, cx, cy, labelX: label.x, labelY: label.y }];
+    });
     const fullIndexByDate = new Map(fullSafeRows.map((row, index) => [row.date, index]));
     const projectAverage = (period, pick) => {
       const averages = movingAverage(fullSafeRows, period, pick);
@@ -3817,8 +3799,18 @@ export function Chart({
         .filter(Boolean)
         .join(" ");
     };
-    return { margin, mainH, gap, volH, macdH, plotW, xStep, candleW, x, y, vy, volBase, macdTop, macdBase, macdY, macdAbsMax, yMax, yMin, maxVol, ma5, ma10, ma20, ma60, ma120, bbi, volMa5, volMa10, volMaCrosses, maCrosses, macdSeries, macdCrosses, zeroAxisCrosses, gaps, klinePatterns, makePath };
-  }, [safeRows, fullSafeRows, width, height, compactHeader, visibleGaps]);
+    const fslPaths = Object.fromEntries(['swl', 'sws'].map(key => {
+      let started = false;
+      const path = fslSeries.map((item, index) => {
+        if (!Number.isFinite(item[key])) { started = false; return ''; }
+        const command = started ? 'L' : 'M';
+        started = true;
+        return `${command}${x(index)},${fslY(item[key])}`;
+      }).filter(Boolean).join(' ');
+      return [key, path];
+    }));
+    return { margin, mainH, gap, volH, macdH, plotW, xStep, candleW, x, y, vy, volBase, macdTop, macdBase, macdY, macdAbsMax, indicatorColumnWidth, fslTop, fslSeries, fslPaths, fslCrosses, fslMin, fslMax, fslY, yMax, yMin, maxVol, ma5, ma10, ma20, ma60, ma120, bbi, volMa5, volMa10, volMaCrosses, maCrosses, macdSeries, macdCrosses, zeroAxisCrosses, gaps, klinePatterns, makePath };
+  }, [safeRows, fullSafeRows, width, height, fslH, fslGap, compactHeader, visibleGaps]);
 
   if (!chart || safeRows.length === 0) {
     return <div className="rounded-2xl bg-slate-100 p-12 text-center text-slate-500">暂无可绘制数据</div>;
@@ -3829,6 +3821,8 @@ export function Chart({
   const guideIndex = clampedSelectedIndex ?? (hoverIndex == null ? null : clampedHoverIndex);
   const guideRow = guideIndex == null ? null : safeRows[guideIndex];
   const hover = safeRows[clampedHoverIndex];
+  const hoverFsl = chart.fslSeries[clampedHoverIndex];
+  const hoverMacd = chart.macdSeries[clampedHoverIndex];
   const positive = hover.close >= hover.open;
   const priceGuide = hoverPoint && hoverPoint.y >= chart.margin.top && hoverPoint.y <= chart.margin.top + chart.mainH
     ? (() => {
@@ -4190,7 +4184,7 @@ export function Chart({
           const volBarH = chart.volBase - volTop;
           const baseOpacity = klineFaded ? 0.07 : 1;
           return (
-            <g key={`${d.date}-${i}`} data-kline-time={d.date} data-kline-complete={d.complete === true ? "true" : d.complete === false ? "false" : undefined}
+            <g key={`${d.date}-${i}`} data-kline-time={d.date} data-kline-close={d.close} data-kline-complete={d.complete === true ? "true" : d.complete === false ? "false" : undefined}
               data-kline-start={d.periodStart} data-kline-end={d.periodEnd}
               data-kline-source-time={d.lastSourceTime} data-kline-source-count={d.sourceBarCount}>
               <line x1={cx} x2={cx} y1={highY} y2={lowY} stroke={color} strokeWidth={Math.min(1, chart.candleW)} opacity={baseOpacity} />
@@ -4389,8 +4383,7 @@ export function Chart({
           </g>
         )}
 
-        <line x1={chart.margin.left} x2={width - chart.margin.right} y1={chart.margin.top + chart.mainH + chart.gap} y2={chart.margin.top + chart.mainH + chart.gap} stroke="var(--chart-grid)" />
-        <line x1={chart.margin.left} x2={width - chart.margin.right} y1={chart.volBase} y2={chart.volBase} stroke="var(--chart-grid)" />
+        <line data-vol-bottom x1={chart.margin.left} x2={width - chart.margin.right} y1={chart.volBase} y2={chart.volBase} stroke="var(--chart-grid)" />
         <text x={width - chart.margin.right + 8} y={chart.margin.top + chart.mainH + chart.gap + 12} fontSize="11" fill="var(--chart-ink-3)">{formatNumber(chart.maxVol)}</text>
         <text x="18" y={chart.margin.top + chart.mainH + chart.gap + 12} fontSize="12" fill="var(--chart-ink-3)">VOL</text>
         {(() => {
@@ -4430,15 +4423,15 @@ export function Chart({
           });
         })()}
 
-        <line x1={chart.margin.left} x2={width - chart.margin.right} y1={chart.macdTop} y2={chart.macdTop} stroke="var(--chart-grid)" />
-        <line x1={chart.margin.left} x2={width - chart.margin.right} y1={chart.macdBase} y2={chart.macdBase} stroke="var(--chart-grid-soft)" strokeDasharray="4 4" />
-        <line x1={chart.margin.left} x2={width - chart.margin.right} y1={chart.macdTop + chart.macdH} y2={chart.macdTop + chart.macdH} stroke="var(--chart-grid)" />
-        <text x="18" y={chart.macdTop + 14} fontSize="12" fill="var(--chart-ink-3)">MACD</text>
-        <text x="64" y={chart.macdTop + 14} fontSize="12" fill="var(--chart-ink)">DIF</text>
-        <text x="102" y={chart.macdTop + 14} fontSize="12" fill="#b59f00">DEA</text>
-        <text x={width - chart.margin.right + 8} y={chart.macdTop + 12} fontSize="11" fill="var(--chart-ink-3)">+{chart.macdAbsMax.toFixed(2)}</text>
-        <text x={width - chart.margin.right + 8} y={chart.macdBase + 4} fontSize="11" fill="var(--chart-ink-3)">0</text>
-        <text x={width - chart.margin.right + 8} y={chart.macdTop + chart.macdH - 4} fontSize="11" fill="var(--chart-ink-3)">-{chart.macdAbsMax.toFixed(2)}</text>
+        <IndicatorFrame kind="macd" left={chart.margin.left} right={width - chart.margin.right} top={chart.macdTop} height={chart.macdH} middle={chart.macdBase} ticks={[
+          { y: chart.macdTop + 12, label: `+${chart.macdAbsMax.toFixed(2)}` },
+          { y: chart.macdBase + 4, label: '0' },
+          { y: chart.macdTop + chart.macdH - 4, label: `-${chart.macdAbsMax.toFixed(2)}` },
+        ]} />
+        <IndicatorHeader kind="macd" top={chart.macdTop} title="MACD" columnWidth={chart.indicatorColumnWidth} items={[
+          { key: 'dif', label: `DIF ${Number.isFinite(hoverMacd.dif) ? hoverMacd.dif.toFixed(2) : '—'}`, color: 'var(--chart-ink)' },
+          { key: 'dea', label: `DEA ${Number.isFinite(hoverMacd.dea) ? hoverMacd.dea.toFixed(2) : '—'}`, color: '#b59f00' },
+        ]} />
 
         {chart.macdSeries.map((m, i) => {
           if (!Number.isFinite(m.hist)) return null;
@@ -4457,16 +4450,8 @@ export function Chart({
             const cx = chart.x(cross.index);
             const cy = chart.macdY(cross.value);
             const isGolden = cross.type === "golden";
-            const color = isGolden ? "var(--chart-up)" : "var(--chart-down)";
-            const labelY = isGolden ? cy - 12 : cy + 18;
-            const labelBoxY = isGolden ? labelY - 11 : labelY - 10;
-            return (
-              <g key={`macd-cross-${idx}-${cross.index}`}>
-                <circle cx={cx} cy={cy} r="6" fill="var(--chart-chip-soft)" stroke={color} strokeWidth="2" />
-                <rect x={cx - 16} y={labelBoxY} width="32" height="16" rx="8" fill="var(--chart-chip-strong)" stroke={color} strokeWidth="1" />
-                <text x={cx} y={labelY + 1} textAnchor="middle" fontSize="10" fontWeight="700" fill={color}>{cross.label}</text>
-              </g>
-            );
+            const labelY = Math.max(chart.macdTop + 30, Math.min(chart.macdTop + chart.macdH - 6, isGolden ? cy - 11 : cy + 19));
+            return <IndicatorCrossMarker key={`macd-cross-${idx}-${cross.index}`} kind="macd" type={cross.type} x={cx} y={cy} labelY={labelY} />;
           })}
         {showMacdSignals &&
           chart.zeroAxisCrosses.map((cross, idx) => {
@@ -4484,6 +4469,25 @@ export function Chart({
             );
           })}
 
+        <g data-fsl-panel data-fsl-reference="hqchart-max-dma" aria-label="FSL分水岭">
+          <title>SWL=(EMA5×7+EMA10×3)/10；SWS=EMA12。公开FSL公式的DMA权重至少为1，按参考实现的边界规则取EMA12；使用完整已加载历史计算。</title>
+          <IndicatorFrame kind="fsl" left={chart.margin.left} right={width - chart.margin.right} top={chart.fslTop} height={fslH} middle={chart.fslTop + fslH / 2} ticks={[
+            { y: chart.fslTop + 12, label: chart.fslMax.toFixed(2) },
+            { y: chart.fslTop + fslH / 2 + 4, label: ((chart.fslMax + chart.fslMin) / 2).toFixed(2) },
+            { y: chart.fslTop + fslH - 4, label: chart.fslMin.toFixed(2) },
+          ]} />
+          <g data-fsl-legend data-date={hoverFsl.date} data-swl={hoverFsl.swl} data-sws={hoverFsl.sws}>
+            <IndicatorHeader kind="fsl" top={chart.fslTop} title="FSL" columnWidth={chart.indicatorColumnWidth} items={[
+              { key: 'swl', label: `SWL ${Number.isFinite(hoverFsl.swl) ? hoverFsl.swl.toFixed(2) : '—'}`, color: 'var(--chart-ink)' },
+              { key: 'sws', label: `SWS ${Number.isFinite(hoverFsl.sws) ? hoverFsl.sws.toFixed(2) : '—'}`, color: '#b59f00' },
+              { key: 'status', label: Number.isFinite(hoverFsl.sws) ? (hoverFsl.swl > hoverFsl.sws ? '强势' : hoverFsl.swl < hoverFsl.sws ? '弱势' : '持平') : hoverFsl.reason || '数据不足', color: 'var(--chart-ink-3)' },
+            ]} />
+          </g>
+          <path data-fsl-line="swl" d={chart.fslPaths.swl} fill="none" stroke="var(--chart-ink)" strokeWidth="1.5" />
+          <path data-fsl-line="sws" d={chart.fslPaths.sws} fill="none" stroke="#b59f00" strokeWidth="1.3" />
+          {showFslSignals && chart.fslCrosses.map(cross => <IndicatorCrossMarker key={`fsl-cross-${cross.date}`} kind="fsl" type={cross.type} date={cross.date} x={cross.cx} y={cross.cy} labelX={cross.labelX} labelY={cross.labelY} title={`${klineDateLabel(cross.date)} · ${cross.type === 'golden' ? '金叉' : '死叉'}`} />)}
+        </g>
+
         {Array.from({ length: xLabels }).map((_, i) => {
           const idx = xLabels === 1 ? 0 : Math.min(safeRows.length - 1, Math.round((safeRows.length - 1) * (i / (xLabels - 1))));
           return <text key={`x-${i}`} x={chart.x(idx)} y={height - 10} textAnchor="middle" fontSize={isMinutePeriod(period) ? "9" : "11"} fill="var(--chart-ink-3)">{klineDateLabel(safeRows[idx].date, { compact: true })}</text>;
@@ -4499,12 +4503,12 @@ export function Chart({
             const minX = chart.margin.left;
             const maxX = width - chart.margin.right - labelW;
             const boxX = Math.max(minX, Math.min(gx - labelW / 2, maxX));
-            const boxY = chart.macdTop + chart.macdH - labelH - 4;
+            const boxY = chart.fslTop + fslH - labelH - 4;
             const selected = clampedSelectedIndex === guideIndex;
             const guidePositive = guideRow.close >= guideRow.open;
             return (
               <g pointerEvents="none">
-                <line x1={gx} x2={gx} y1={chart.margin.top} y2={chart.macdTop + chart.macdH} stroke={selected ? "var(--chart-ink)" : "var(--chart-ink-3)"} strokeDasharray="3 3" opacity={selected ? "0.85" : "0.65"} />
+                <line x1={gx} x2={gx} y1={chart.margin.top} y2={chart.fslTop + fslH} stroke={selected ? "var(--chart-ink)" : "var(--chart-ink-3)"} strokeDasharray="3 3" opacity={selected ? "0.85" : "0.65"} />
                 <circle cx={gx} cy={chart.y(guideRow.close)} r="3" fill={guidePositive ? "var(--chart-up)" : "var(--chart-down)"} />
                 <rect x={boxX} y={boxY} width={labelW} height={labelH} rx="6" fill="var(--chart-surface)" stroke={selected ? "var(--chart-ink)" : "var(--chart-grid)"} />
                 <text x={boxX + labelW / 2} y={boxY + 14} textAnchor="middle" fontSize="11" fill="var(--chart-ink-2)">{label}</text>
@@ -4579,21 +4583,11 @@ export function Chart({
         >
           {showVolMaCrosses ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
         </button>
-        <button
-          type="button"
-          className="absolute bottom-4 right-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-200 bg-white/98 text-slate-500 shadow-sm backdrop-blur hover:border-slate-300 hover:bg-white hover:text-slate-700"
-          onClick={(e) => {
-            e.stopPropagation();
-            setShowMacdSignals((value) => !value);
-          }}
-          title={showMacdSignals ? "隐藏金叉/死叉标记" : "显示金叉/死叉标记"}
-          aria-label={showMacdSignals ? "隐藏金叉和死叉标记" : "显示金叉和死叉标记"}
-        >
-          {showMacdSignals ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-        </button>
+        <IndicatorSignalToggle kind="macd" top={chart.macdTop} shown={showMacdSignals} onToggle={() => setShowMacdSignals(value => !value)} />
+        <IndicatorSignalToggle kind="fsl" top={chart.fslTop} shown={showFslSignals} onToggle={() => setShowFslSignals(value => !value)} />
       </div>
     </div>
-      <div className="px-3 pb-1"><ChanLegend data={chanData} options={chanOptions} /></div>
+      <div className="px-3 pb-1"><ChanLegend data={chanData} options={chanOptions} rows={safeRows} /></div>
       {fractalDetail && <ChanFractalDetail detail={fractalDetail} kind={selectedFractal.kind} onClose={() => setSelectedFractal(null)} />}
     </div>
   );
@@ -5850,11 +5844,22 @@ function IndexTrendChart({ rows, maPeriod, displayCount, name, chanData, chanOpt
     </svg>
     {chanOptions?.enabled && chanData && (
       <div aria-label="指数缠论图例" className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
-        {chanOptions.bi && <span><span style={{ color: "var(--chan-bi)" }}>━</span> 笔 · 黄色实线末端为动态极值</span>}
-        {chanOptions.segment && <span><span style={{ color: "var(--chan-segment)" }}>━</span> 已确认线段 · 虚线为发展中参考</span>}
-        {chanOptions.zs && <span>色框：滑动笔重叠区（非递归中枢）</span>}
-        {(chanOptions.bi || chanOptions.fx) && <span>点击圆点或三角查看分型</span>}
-        <span>缠论计算：全部已加载 {chanData.dates.length} 根日K · 截至 {full.at(-1)?.date}</span>
+        {chanData.definition?.engine === 'external' ? <>
+          <span>本项目笔和特征序列线段 · 笔构造参考中枢 · 非递归走势中枢</span>
+          {chanOptions.bi && <span><span style={{ color: "var(--chan-bi)" }}>━</span> 笔 · 黄色实线末端为动态极值</span>}
+          {chanOptions.segment && <span><span style={{ color: "var(--chan-segment)" }}>━</span> 已确认线段 · 虚线为发展中参考</span>}
+          {chanOptions.zs && <><span>色框：笔构造参考中枢；确认依据K按本次历史复算 · 虚线框：后续状态不确定</span><ChanUncertaintyNotice data={chanData} /></>}
+          {(chanOptions.bi || chanOptions.fx) && <span>点击圆点或三角查看分型</span>}
+        </> : <>
+          {chanOptions.bi && <span><span style={{ color: "var(--chan-bi)" }}>━</span> 笔 · 黄色实线末端为动态极值</span>}
+          {chanOptions.segment && <span><span style={{ color: "var(--chan-segment)" }}>━</span> 已确认线段 · 虚线为发展中参考</span>}
+          {chanOptions.zs && <><span>色框：线段中枢 · 虚线框：后续状态无法确定</span><ChanUncertaintyNotice data={chanData} /></>}
+          {chanOptions.penZs && <span>青色虚线框：笔构造参考中枢（非递归走势中枢，不作为买卖信号）</span>}
+          {(chanOptions.bi || chanOptions.fx) && <span>点击圆点或三角查看分型</span>}
+        </>}
+        {chanOptions.bi && <ChanPendingNotice data={chanData} />}
+        {chanData.inputProblem ? <span className="text-amber-600 dark:text-amber-400">{`行情第 ${chanData.inputProblem.index + 1} 根 K 线数据无效，缠论计算已停止。`}</span>
+          : <span>缠论计算：全部已加载 {chanData.dates.length} 根日K · 截至 {full.at(-1)?.date}</span>}
       </div>
     )}
     {fractalDetail && <ChanFractalDetail detail={fractalDetail} kind={selectedFractal.kind} onClose={() => setSelectedFractal(null)} />}
@@ -5948,7 +5953,8 @@ function IndexTrendCard({ index, tab, year = "latest", chanOptions, onChanOption
   const defaultDisplayCount = Math.min(year === "latest" ? (tab.ma >= 60 ? 250 : 140) : maxDisplayCount, maxDisplayCount);
   const displayCount = Math.min(zoom?.key === viewKey ? zoom.count : defaultDisplayCount, maxDisplayCount);
   const zoomOptions = getDisplayCountOptions(maxDisplayCount, displayCount);
-  const chanData = useMemo(() => analyzeChan(feedRows, "101"), [feedRows]);
+  const chanData = useMemo(() => chanOptions.engine === 'original'
+    ? analyzeChan(feedRows, "101") : analyzeExternalChan(feedRows, "101"), [feedRows, chanOptions.engine]);
   const ready = !loading && !error && hasYearData && maxDisplayCount >= 2;
   const changeZoom = useCallback((direction) => setZoom((current) => {
     const currentCount = Math.min(current?.key === viewKey ? current.count : defaultDisplayCount, maxDisplayCount);
@@ -7699,7 +7705,7 @@ function HeatmapTooltip({ hover, box, metricLabel }) {
 function MarketTrendPageLayout({ onOpenStock }) {
   const [trendTab, setTrendTab] = useState("heatmap");
   const [trendYear, setTrendYear] = useState("latest");
-  const [chanOptions, setChanOptions] = useState({ enabled: true, bi: true, segment: true, zs: true, fx: true });
+  const [chanOptions, setChanOptions] = useState({ enabled: true, engine: 'external', bi: true, segment: true, zs: true, penZs: true, fx: true });
   const activeTab = TREND_TABS.find((t) => t.value === trendTab) || TREND_TABS[0];
 
   return (
@@ -9021,12 +9027,16 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const [period, setPeriod] = useState("101");
   const [loadedPeriod, setLoadedPeriod] = useState("101");
   const periodRef = useRef(period);
-  const adjust = "1";
+  // Market data adjustment is an explicit choice, not an inferred provider fallback.
+  const [adjustByMarket, setAdjustByMarket] = useState({ ashare: "1", hk: "0", us: "0" });
+  const adjustRef = useRef(adjustByMarket);
+  const adjust = adjustByMarket[market] ?? "1";
   const [displayCount, setDisplayCount] = useState(80);
   const [tdMode, setTdMode] = useState("current");
   const [showGaps, setShowGaps] = useState(true);
   const [unfilledOnly, setUnfilledOnly] = useState(true);
   const [chartFullscreen, setChartFullscreen] = useState(false);
+  const chartFullscreenRef = useRef(null);
   const [drawingTool, setDrawingTool] = useState("none");
   const [drawnLines, setDrawnLines] = useState([]);
   const [usPreloadEnabled, setUsPreloadEnabled] = useState(true);
@@ -9047,9 +9057,10 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showPatterns, setShowPatterns] = useState(false);
-  const [chanOptions, setChanOptions] = useState({ enabled: true, bi: true, segment: true, zs: true, fx: true });
+  const [chanOptions, setChanOptions] = useState({ enabled: true, engine: 'external', bi: true, segment: true, zs: true, penZs: true, fx: true });
   const [analysisTab, setAnalysisTab] = useState("financial");
-  const chanData = useMemo(() => analyzeChan(rawRows, loadedPeriod), [rawRows, loadedPeriod]);
+  const chanData = useMemo(() => chanOptions.engine === 'original'
+    ? analyzeChan(rawRows, loadedPeriod) : analyzeExternalChan(rawRows, loadedPeriod), [rawRows, loadedPeriod, chanOptions.engine]);
   const minuteView = isMinutePeriod(loadedPeriod);
 
   function handlePeriodChange(nextPeriod) {
@@ -9057,6 +9068,19 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     loadRunRef.current += 1;
     periodRef.current = nextPeriod;
     setPeriod(nextPeriod);
+    setRawRows([]);
+    setLoading(false);
+    setError("");
+    clearDrawings();
+  }
+
+  function handleAdjustChange(nextAdjust) {
+    if (nextAdjust === adjustRef.current[market]) return;
+    loadRunRef.current += 1;
+    adjustRef.current = { ...adjustRef.current, [market]: nextAdjust };
+    setAdjustByMarket(adjustRef.current);
+    stockDetailsLoader.cancel();
+    cancelTradeSidePoll();
     setRawRows([]);
     setLoading(false);
     setError("");
@@ -9108,6 +9132,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
 
   // 这些 tab 是独立页面，没有个股的代码搜索/周期/复权等控件，也不触发自动取数。
   const isStandaloneMarket = market === "agent" || market === "factor-research" || market === "market-trend" || market === "user-admin" || market === "account";
+  const showChartFullscreen = chartFullscreen && !isStandaloneMarket && rows.length > 0;
   const currentCode = marketCodes[market] || "";
 
   const watchlistInput = watchlistInputMap[market] || "";
@@ -9199,10 +9224,12 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
       adjust: targetAdjust,
       limit,
     }).then((data) => {
-      usKlineCacheRef.current.set(cacheKey, { data, ts: Date.now() });
+      if (usKlineCacheRef.current.get(cacheKey)?.promise === promise) {
+        usKlineCacheRef.current.set(cacheKey, { data, ts: Date.now() });
+      }
       return data;
     }).catch((error) => {
-      usKlineCacheRef.current.delete(cacheKey);
+      if (usKlineCacheRef.current.get(cacheKey)?.promise === promise) usKlineCacheRef.current.delete(cacheKey);
       throw error;
     });
 
@@ -9263,13 +9290,18 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   }
 
   useEffect(() => {
-    if (!chartFullscreen) return undefined;
-    function handleKeydown(event) {
-      if (event.key === "Escape") setChartFullscreen(false);
-    }
-    window.addEventListener("keydown", handleKeydown);
-    return () => window.removeEventListener("keydown", handleKeydown);
-  }, [chartFullscreen]);
+    if (!showChartFullscreen) return undefined;
+    const dialog = chartFullscreenRef.current;
+    const previousFocus = document.activeElement;
+    const previousOverflow = document.body.style.overflow;
+    dialog.showModal();
+    document.body.style.overflow = "hidden";
+    return () => {
+      dialog.close();
+      document.body.style.overflow = previousOverflow;
+      if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+    };
+  }, [showChartFullscreen]);
 
   useEffect(() => {
     if (market !== "ashare" || !ashareSuggestFocused || TREND_INDICES.some((index) => index.tencentSymbol === currentCode.toLowerCase())) {
@@ -9421,11 +9453,13 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
           if (activeMeta?.code === code && activeMeta?.name) {
             return { code, name: activeMeta.name };
           }
+          // This request obtains only the name; do not make the watchlist's
+          // name lookup depend on whether adjusted price history is available.
           const detail = requestedMarket === "ashare"
-            ? await fetchAshareKline({ code, period: "101", adjust, limit: 60 })
+            ? await fetchAshareKline({ code, period: "101", adjust: "1", limit: 60 })
             : requestedMarket === "hk"
-              ? await fetchHkKline({ code, period: "101", adjust, limit: 60 })
-              : await fetchUsKlineCached({ symbol: code, period: "101", adjust, limit: 60 });
+              ? await fetchHkKline({ code, period: "101", adjust: "0", limit: 60 })
+              : await fetchUsKlineCached({ symbol: code, period: "101", adjust: "0", limit: 60 });
           return {
             code: detail.code || code,
             name: detail.name || code,
@@ -9633,8 +9667,10 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   async function load(overrideCode, { refresh = false } = {}) {
     if (isStandaloneMarket || market !== marketRef.current) return;
     const requestPeriod = periodRef.current;
+    const requestAdjust = adjustRef.current[market];
     const runId = ++loadRunRef.current;
-    const isCurrent = () => runId === loadRunRef.current && requestPeriod === periodRef.current && market === marketRef.current;
+    const isCurrent = () => runId === loadRunRef.current && requestPeriod === periodRef.current
+      && market === marketRef.current && requestAdjust === adjustRef.current[market];
     if (!refresh) {
       stockDetailsLoader.cancel();
       cancelTradeSidePoll();
@@ -9687,7 +9723,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
           return fetchAshareKline({
             code: normalized,
             period: requestPeriod,
-            adjust,
+            adjust: requestAdjust,
             limit: Math.max(5000, Number(displayCount) + 120),
           });
         })()
@@ -9712,7 +9748,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
             return fetchHkKline({
               code: normalized,
               period: requestPeriod,
-              adjust,
+              adjust: requestAdjust,
               limit: Math.min(1000, Math.max(600, Number(displayCount) + 120)),
             });
           })()
@@ -9724,7 +9760,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
           return fetchUsKlineCached({
             symbol: normalized,
             period: requestPeriod,
-            adjust,
+            adjust: requestAdjust,
             limit: Math.max(5000, Number(displayCount) + 120),
           });
         })();
@@ -9875,7 +9911,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     }, 0);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [market, period]);
+  }, [market, period, adjust]);
 
   useEffect(() => {
     if (market !== "ashare" || !isMinutePeriod(period) || loadedPeriod !== period || loading || !rawRows.length || !meta.code) return undefined;
@@ -9888,7 +9924,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
     }, 60_000);
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [market, period, loadedPeriod, meta.code, meta.tencentSymbol, rawRows.length, loading]);
+  }, [market, period, adjust, loadedPeriod, meta.code, meta.tencentSymbol, rawRows.length, loading]);
 
   useEffect(() => {
     if (isStandaloneMarket) return undefined;
@@ -9957,16 +9993,18 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
             adjust,
             limit,
           });
+          if (cancelled || usPreloadRunRef.current !== runId) return;
+          done += 1;
         } catch {
           // Ignore individual preload failures and keep the queue moving.
+          if (cancelled || usPreloadRunRef.current !== runId) return;
         }
-        done += 1;
         setUsPreloadStatus({ running: true, total: usPreloadCodes.length, done, current: code });
-        if (done < usPreloadCodes.length) await delay(600);
+        if (code !== usPreloadCodes.at(-1)) await delay(600);
       }
 
       if (!cancelled && usPreloadRunRef.current === runId) {
-        setUsPreloadStatus({ running: false, total: usPreloadCodes.length, done: usPreloadCodes.length, current: "" });
+        setUsPreloadStatus({ running: false, total: usPreloadCodes.length, done, current: "" });
       }
     })();
 
@@ -10301,6 +10339,11 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
               {PERIOD_OPTIONS.filter((item) => !item.ashareOnly || market === "ashare").map((item) => (
                 <option key={item.value} value={item.value}>{item.label}</option>
               ))}
+            </select>
+            <select aria-label="复权方式" value={isIndex ? "0" : adjust} onChange={(e) => handleAdjustChange(e.target.value)} disabled={isStandaloneMarket || isIndex} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400">
+              <option value="0">不复权</option>
+              <option value="1">前复权</option>
+              {market !== "ashare" && <option value="2">后复权</option>}
             </select>
             <select value={visibleDisplayCount} onChange={(e) => setDisplayCount(Number(e.target.value))} disabled={isStandaloneMarket} className="rounded-xl border bg-white px-3 py-2 outline-none disabled:cursor-not-allowed disabled:text-slate-400" title="也可在 K 线图内滚动鼠标滚轮调整">
               {displayCountOptions.map((count) => <option key={count} value={count}>近{count}根</option>)}
@@ -10802,8 +10845,10 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
             onMoveItem={(item, group) => handleMoveFavorite(item, group, market)}
           />
         )}
-        {chartFullscreen && !isStandaloneMarket && rows.length > 0 && (
-          <div className="fixed inset-0 z-50 bg-slate-950/40 p-3 backdrop-blur-sm md:p-5">
+        {showChartFullscreen && (
+          <dialog ref={chartFullscreenRef} aria-label="全屏K线图" aria-modal="true"
+            onCancel={(event) => { event.preventDefault(); setChartFullscreen(false); }}
+            className="fixed inset-0 m-0 h-[100dvh] max-h-none w-screen max-w-none border-0 bg-slate-950/40 p-3 text-slate-900 backdrop:bg-slate-950/40 md:p-5">
             <div className="flex h-full flex-col rounded-2xl bg-white shadow-2xl">
               <div className="chart-panel-header flex min-w-0 flex-col gap-3 border-b px-4 py-4 md:px-5">
                 <div>
@@ -10871,7 +10916,7 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                 />
               </div>
             </div>
-          </div>
+          </dialog>
         )}
       </div>
     </div>

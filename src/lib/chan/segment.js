@@ -8,6 +8,8 @@
  * https://blog.sina.com.cn/s/blog_486e105c01000cmz.html
  */
 
+export const SEGMENT_RULE_VERSION = 'chan-segment-standard-gap-v3';
+
 const opposite = (direction) => direction === 'up' ? 'down' : 'up';
 const contains = (a, b) => (a.high >= b.high && a.low <= b.low)
   || (b.high >= a.high && b.low <= a.low);
@@ -82,7 +84,7 @@ function reverseFractal(points, end, direction) {
       if (isFractal(a, b, c, reverseDirection)) {
         const nextEnd = reverseDirection === 'up' ? b.highIndex : b.lowIndex;
         if (validEnd(points, end, nextEnd, reverseDirection)) {
-          return { confirmedIndex: limit, nextEnd };
+          return { confirmedIndex: limit, nextEnd, elements: [a, b, c] };
         }
       }
     }
@@ -105,12 +107,17 @@ function boundaryProof(points, start, end, direction) {
   const left = leftSequence.at(-1);
   const center = feature(points, end);
   if (!left) return null;
-  const gap = !overlaps(left, center);
+  // This raw boundary relation is only for lesson 71's first-break exception.
+  // The ordinary fractal branch must use the merged middle element below.
+  const boundaryGap = !overlaps(left, center);
 
   // 第 71 课：首笔即破坏，第三笔继续越过首笔结束位置，反向段成立。
   // 前后两元素不能包含合并，否则会抹去这一转折力度。
   const firstBreak = direction === 'up' ? center.low <= left.low : center.high >= left.high;
-  if (!gap && firstBreak) {
+  const enclosesTurn = direction === 'up' ? center.high >= left.high : center.low <= left.low;
+  // A lower local top / higher local bottom is not this enclosing exception.
+  // It must pass the ordinary standard-fractal proof instead (lessons 67/71).
+  if (!boundaryGap && firstBreak && enclosesTurn) {
     for (let index = end + 2; index < points.length; index++) {
       const resumes = direction === 'up' ? points[index].price >= points[end].price
         : points[index].price <= points[end].price;
@@ -118,7 +125,8 @@ function boundaryProof(points, start, end, direction) {
       if ((index - end) % 2 !== 1) continue;
       const breaksEnd = direction === 'up' ? points[index].price < points[end + 1].price
         : points[index].price > points[end + 1].price;
-      if (breaksEnd) return { end, confirmedIndex: index, mode: 'first_stroke_break', gap: false };
+      if (breaksEnd) return { end, confirmedIndex: index, mode: 'first_stroke_break', gap: false,
+        evidence: { kind: 'first_stroke_break', initial: [left, center], breaking: feature(points, index - 1) } };
     }
     return null;
   }
@@ -131,12 +139,16 @@ function boundaryProof(points, start, end, direction) {
     const [middle, right] = rightSequence;
     const pivot = direction === 'up' ? middle.highIndex : middle.lowIndex;
     if (pivot !== end || !isFractal(left, middle, right, direction)) return null;
-    if (!gap) return { end, confirmedIndex: index + 1, mode: 'feature_no_gap', gap: false };
+    // Inclusion can lift the middle's low (or lower its high). Re-evaluate the
+    // STANDARD sequence gap; the original left/center overlap can have vanished.
+    const evidence = { kind: 'standard_fractal', initial: [left, center], standard: [left, middle, right] };
+    if (overlaps(left, middle)) return { end, confirmedIndex: index + 1, mode: 'feature_no_gap', gap: false, evidence };
     const reverse = reverseFractal(points, end, direction);
     if (!reverse) return null;
     return {
       end, confirmedIndex: Math.max(index + 1, reverse.confirmedIndex),
       mode: 'feature_gap_reverse_fractal', gap: true, nextEnd: reverse.nextEnd,
+      evidence: { ...evidence, reverse: reverse.elements },
     };
   }
   return null;
@@ -156,6 +168,7 @@ function makeSegment(points, start, proof, direction) {
     high_time: highPoint.time, low_time: lowPoint.time,
     high_point: { ...highPoint }, low_point: { ...lowPoint },
     confirmation: proof.mode, feature_gap: proof.gap,
+    ruleVersion: SEGMENT_RULE_VERSION, evidence: proof.evidence,
     confirmedIndex: proof.confirmedIndex,
     // A pen endpoint occurs before the candle which fixes it. Confirmation
     // belongs to the latest required evidence candle, never to the old pivot.
@@ -202,7 +215,9 @@ export function buildSegments(biPoints) {
     // 第 77 课：第二序列的分型已确认 B 被 C 破坏，完成性沿时间向前传递。
     if (proof.nextEnd !== undefined) {
       forced = { end: proof.nextEnd, confirmedIndex: proof.confirmedIndex,
-        mode: 'reverse_feature_fractal', gap: false };
+        mode: 'reverse_feature_fractal', gap: false,
+        evidence: { kind: 'reverse_feature_fractal', standard: proof.evidence.reverse,
+          parentSegment: segments.at(-1).id } };
     }
   }
   let pendingEnd = null;

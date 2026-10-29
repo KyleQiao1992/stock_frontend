@@ -16,35 +16,54 @@ export function normalizeHkCode(value) {
 }
 
 function periodToTencentKtype(period) {
+  if (String(period) === "101") return "day";
   if (String(period) === "102") return "week";
   if (String(period) === "103") return "month";
-  return "day";
+  throw new Error("港股 K 线周期无效");
 }
 
 function adjustToTencentFq(adjust) {
-  return String(adjust) === "2" ? "hfq" : "qfq";
+  const value = String(adjust);
+  if (value === "0") return "";
+  if (value === "1") return "qfq";
+  if (value === "2") return "hfq";
+  throw new Error("港股复权类型无效");
 }
 
 function finite(value) {
+  if ((typeof value !== "number" && typeof value !== "string")
+      || (typeof value === "string" && !value.trim())) return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
 
 export function parseTencentHkRows(rows) {
   let previousClose = null;
+  let previousDate = '';
+  const numeric = value => (typeof value !== 'number' && typeof value !== 'string')
+    || (typeof value === 'string' && !value.trim()) ? NaN : Number(value);
   return (Array.isArray(rows) ? rows : [])
-    .map((item) => {
-      const open = finite(item?.[1]);
-      const close = finite(item?.[2]);
-      const high = finite(item?.[3]);
-      const low = finite(item?.[4]);
-      const volume = finite(item?.[5]) || 0;
-      if (!item?.[0] || [open, close, high, low].some((value) => value === null)) return null;
+    .map((item, index) => {
+      if (!Array.isArray(item)) throw new Error(`腾讯港股 K 线第 ${index + 1} 行格式异常`);
+      const open = numeric(item?.[1]);
+      const close = numeric(item?.[2]);
+      const high = numeric(item?.[3]);
+      const low = numeric(item?.[4]);
+      const volume = numeric(item?.[5]);
+      const date = String(item?.[0] ?? '');
+      const parsedDate = /^\d{4}-\d{2}-\d{2}$/.test(date) ? new Date(`${date}T00:00:00Z`) : null;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)
+        || !parsedDate || !Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date
+        || (previousDate && date <= previousDate)
+        || [open, close, high, low].some(value => !Number.isFinite(value) || value <= 0)
+        || !Number.isFinite(volume) || volume < 0 || high < Math.max(open, close)
+        || low > Math.min(open, close) || low > high) throw new Error(`腾讯港股 K 线第 ${index + 1} 行格式异常`);
       const change = previousClose === null ? 0 : close - previousClose;
       const pct = previousClose ? (change / previousClose) * 100 : 0;
       previousClose = close;
+      previousDate = date;
       return {
-        date: String(item[0]),
+        date,
         open,
         close,
         high,
@@ -56,8 +75,7 @@ export function parseTencentHkRows(rows) {
         change,
         turnover: 0,
       };
-    })
-    .filter(Boolean);
+    });
 }
 
 export function parseTencentHkQuote(qt, fallbackCode = "") {
@@ -92,7 +110,8 @@ export function parseTencentHkPayload(payload, { code, period = "101", adjust = 
   if (!node) throw new Error("腾讯港股行情未返回该标的。");
   const ktype = periodToTencentKtype(period);
   const fq = adjustToTencentFq(adjust);
-  const rawRows = node[`${fq}${ktype}`] || node[ktype];
+  const rawRows = node[`${fq}${ktype}`];
+  if (!Array.isArray(rawRows)) throw new Error(`腾讯港股缺少${fq === 'qfq' ? '前复权' : fq === 'hfq' ? '后复权' : '不复权'} K 线`);
   const klines = parseTencentHkRows(rawRows).slice(-Math.max(1, Number(limit) || 1000));
   if (!klines.length) throw new Error("腾讯港股 K 线为空。");
   const quote = parseTencentHkQuote(node?.qt?.[symbol], normalized);
@@ -133,9 +152,10 @@ export async function loadHkKline(params, request = fetch) {
   const ktype = periodToTencentKtype(period);
   const fq = adjustToTencentFq(adjust);
   const symbol = `hk${code}`;
-  const param = `${symbol},${ktype},,,${limit},${fq}`;
+  const param = `${symbol},${ktype},,,${limit}${fq ? `,${fq}` : ""}`;
+  const endpoint = fq ? "fqkline/get" : "kline/kline";
   const response = await request(
-    `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=${encodeURIComponent(param)}`,
+    `https://web.ifzq.gtimg.cn/appstock/app/${endpoint}?param=${encodeURIComponent(param)}`,
     { headers: TENCENT_HEADERS, signal: AbortSignal.timeout(12000), cache: "no-store" },
   );
   if (!response.ok) throw new Error(`腾讯港股行情 HTTP ${response.status}`);

@@ -11,6 +11,15 @@ function formatTime(value, period) {
 }
 // Reference observations are hypotheses. Direction/zone position never creates a confirmed signal.
 export function buildReferenceOutlook({ candles = [], biPoints = [], zsList = [], close, period = 'day' }) {
+  return buildObservation({ candles, biPoints, zsList, close, period });
+}
+
+/** Active chart: lowest-layer confirmed segment centers, with conditional watches only. */
+export function buildSegmentOutlook(options) {
+  return buildObservation({ ...options, segmentCenters: true });
+}
+
+function buildObservation({ candles = [], biPoints = [], zsList = [], zsUncertainty = [], close, period = 'day', segmentCenters = false }) {
   period = normalizedPeriod(period);
   const asof = referenceTime(candles.at(-1)?.time) || 0;
   if (biPoints.length < 2 || !candles.length) return { ok: false, asof, period };
@@ -19,26 +28,44 @@ export function buildReferenceOutlook({ candles = [], biPoints = [], zsList = []
   const extending = candles.some((c) => referenceTime(c.time) >= referenceTime(b.time)
     && (up ? c.high > b.price : c.low < b.price));
   const high = up ? b : a, low = up ? a : b;
-  const zone = zsList.reduce((latest, z) => !latest || referenceTime(z.edt) > referenceTime(latest.edt) ? z : latest, null);
+  const zone = segmentCenters ? zsList.at(-1)
+    : zsList.reduce((latest, z) => !latest || referenceTime(z.edt) > referenceTime(latest.edt) ? z : latest, null);
+  const zoneName = segmentCenters ? '线段中枢' : '滑动笔重叠区';
+  const areaName = segmentCenters ? '中枢' : '重叠区';
+  const uncertain = segmentCenters && (zsUncertainty.length > 0 || zone?.status === 'uncertain');
   // No zone evidence: retain facts without assigning a one/two/three class.
   if (!zone) return { ok: true, asof, period, conclusion: {
     title: '等待结构', kind: null, kind_hint: null, status: 'forming', status_label: '结构形成中',
-    structure_fact: `最新完成笔方向：${up ? '向上' : '向下'}；现价 ${price(close)}，尚无滑动笔重叠区。`,
-    observation: '尚无滑动笔重叠区，先跟踪末笔延伸及后续分型。', confirmed_signal: null, latest_signal: null,
-  }, levels: { close, last_bi_high: high.price, last_bi_low: low.price }, scenarios: [] };
+    structure_fact: `最新完成笔方向：${up ? '向上' : '向下'}；现价 ${price(close)}，${uncertain ? `无法确定是否形成${zoneName}` : `尚无${zoneName}`}。`,
+    observation: uncertain ? '端点K线内高低价的先后顺序无法确定，不能据此判定中枢边界及后续结构；需要更细粒度的行情核实。'
+      : segmentCenters ? '至少需要三个连续已确认线段存在共同价格区间；发展中的线段不参与成枢。'
+      : '尚无滑动笔重叠区，先跟踪末笔延伸及后续分型。', confirmed_signal: null, latest_signal: null,
+    invalidation: uncertain ? '细粒度行情或新证据可改变判断；数据修订及历史窗口变化也会触发结构重算。'
+      : segmentCenters
+      ? '后续线段确认后重新检查三个连续线段的共同区间；未完成线段或收盘价变化本身不能确认中枢。'
+      : '后续完成笔可能形成新的滑动笔重叠区。',
+  }, levels: { close, last_bi_high: high.price, last_bi_low: low.price,
+    ...(uncertain ? { vs_zs_label: '无法确定中枢是否形成' } : {}) }, scenarios: [] };
   const tag = (time, v) => `${formatTime(time, period)} @ ${price(v)}`;
-  const range = `当前滑动笔重叠区 ${formatTime(zone.sdt, period)} ~ ${formatTime(zone.edt, period)}（ZG ${price(zone.zg)} / ZD ${price(zone.zd)}）`;
+  const prefix = segmentCenters && uncertain ? '最近已确认的' : segmentCenters && zone.status === 'closed' ? '最近已结束的' : '当前';
+  const range = `${prefix}${zoneName} ${formatTime(zone.sdt, period)} ~ ${formatTime(zone.edt, period)}（ZG ${price(zone.zg)} / ZD ${price(zone.zd)}）`;
   const position = close > zone.zg ? 'above' : close < zone.zd ? 'below' : 'inside';
-  const positionLabel = { above: '重叠区上方', below: '重叠区下方', inside: '重叠区内部' }[position];
+  const positionLabel = `${areaName}${{ above: '上方', below: '下方', inside: '内部' }[position]}`;
   const title = `向${up ? '上' : '下'}末笔 · ${positionLabel}`;
   const context = { range, close: price(close), high: price(high.price), low: price(low.price),
     highBar: tag(high.time, high.price), lowBar: tag(low.time, low.price), zg: price(zone.zg), zd: price(zone.zd),
     zgBar: tag(zone.zg_time, zone.zg), zdBar: tag(zone.zd_time, zone.zd) };
-  const observation = {
+  let observation = {
     above: '现价处于重叠区上方，接下来关注继续上行、首次回试或重新回到区间。',
     inside: '现价处于重叠区内部，接下来关注区间内往返，以及向上或向下离开后的走势。',
     below: '现价处于重叠区下方，接下来关注继续下行、首次反抽或重新回到区间。',
   }[position];
+  if (uncertain) observation = '端点K线内高低价的先后顺序无法确定，后续中枢状态和结构无法确定；需要更细粒度的行情核实。';
+  else if (segmentCenters) observation = zone.status === 'closed'
+    ? '这个中枢已经结束。此处仅记录现价相对最近中枢的位置，等待后续三个连续已确认线段形成新的中枢。'
+    : zone.phase === 'leaving'
+      ? '已确认线段离开核心区间，首次反向回试尚未确认；此时不能判定中枢已经结束。'
+      : '中枢由前三个连续已确认线段的共同区间确定；延伸时保留原上下沿，碰到边界仍算重叠。';
   const vsLabel = `${positionLabel}（${range}）`;
   const biasNote = `现价 ${price(close)} 位于${vsLabel}。`;
   // Restore conditional observations, without turning a price-position branch
@@ -80,21 +107,28 @@ export function buildReferenceOutlook({ candles = [], biPoints = [], zsList = []
       path: '下行延续 → 首次反抽，或下探后出现转折。', next_points: [watches.S3, watches.B1],
       invalid: `收盘不再低于 ${context.zd} 时，不再满足下方位置条件。` },
   ];
+  if (segmentCenters) for (const scenario of scenarios) scenario.name = scenario.name.replace('重叠区', '中枢');
   return { ok: true, asof, period,
     conclusion: { kind: null, kind_hint: null, position_branch: `${up ? 'up' : 'down'}-${position}`,
       is_hypothesis: true, status: 'forming', status_label: '位置观察',
       title, side: null, summary: observation, basis: '', confirm_note: '',
-      observation_basis: '仅依据最新完成笔方向与现价相对滑动笔重叠区的位置生成观察；未执行一二三类买卖点识别。',
+      observation_basis: `仅依据最新完成笔方向与现价相对${zoneName}的位置生成观察；未执行一二三类买卖点识别。`,
       bias: '位置观察', bias_note: biasNote,
       structure_fact: `最新完成笔方向：${up ? '向上' : '向下'}${extending ? `，端点后出现${up ? '更高高点' : '更低低点'}` : ''}；现价 ${price(close)}，${vsLabel}。`,
       observation, action_hint: biasNote,
-      invalidation: '现价跨过重叠区边界，位置分支随之改变；新行情或历史窗口变化也可能修正笔与重叠区。',
+      invalidation: segmentCenters ? '收盘价穿过边界只改变位置；中枢延伸或结束由后续已确认线段判定。新行情、数据修订或加载范围变化会随上游线段重新计算中枢。'
+        : '现价跨过重叠区边界，位置分支随之改变；新行情或历史窗口变化也可能修正笔与重叠区。',
       confirmed_signal: null, latest_signal: null },
     scenarios,
-    watch_note: '以下是后续条件观察，未判定已触发。图上价格来自笔与滑动重叠区，不能代替各类买卖点所需的级别、背驰及中枢结构。',
+    watch_note: uncertain ? '后续中枢状态尚不确定。以下是对已确认区间的条件观察，未判定已触发；未递归构造更高级别走势类型或计算背驰。'
+      : segmentCenters ? '以下是后续条件观察，未判定已触发。本图仅构造最低层线段中枢，尚未递归构造更高级别走势类型或计算背驰；离开回试结构不直接标为买卖点。'
+      : '以下是后续条件观察，未判定已触发。图上价格来自笔与滑动重叠区，不能代替各类买卖点所需的级别、背驰及中枢结构。',
     levels: { close, last_bi_high: high.price, last_bi_low: low.price, last_bi_high_bar: context.highBar,
       last_bi_low_bar: context.lowBar, zs_zg: zone.zg, zs_zd: zone.zd,
-      active_zs_id: `zs-${referenceTime(zone.sdt)}-${referenceTime(zone.edt)}`,
+      active_zs_id: segmentCenters ? zone.id : `zs-${referenceTime(zone.sdt)}-${referenceTime(zone.edt)}`,
+      ...(segmentCenters ? { zs_status: zone.status, zs_phase: zone.phase, zs_segment_count: zone.segment_count,
+        zs_confirmed_time: formatTime(zone.confirmed_time, period),
+        zs_closed_time: zone.closed_time ? formatTime(zone.closed_time, period) : null } : {}),
       zs_algorithm: zone.algorithm, zs_bi_count: zone.bi_count, zs_zg_bar: context.zgBar, zs_zd_bar: context.zdBar,
       zs_range: range, vs_zs: position, vs_zs_label: vsLabel, bias: '位置观察', bias_note: biasNote },
     disclaimer: '关键价旁标注对应K线时间。条件观察不构成投资建议。' };

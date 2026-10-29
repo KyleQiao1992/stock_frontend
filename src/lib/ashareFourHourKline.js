@@ -22,7 +22,7 @@ function sameSourceBar(left, right) {
     .every(key => left[key] === right[key]);
 }
 
-function normalizeRows(rows, nowSeconds, quoteSeconds) {
+function normalizeRows(rows, nowSeconds, quoteSeconds, adjusted) {
   if (!Array.isArray(rows) || !rows.length) throw new Error('4小时聚合没有可用的30分钟K线');
   const unique = new Map();
   for (const source of rows) {
@@ -30,7 +30,7 @@ function normalizeRows(rows, nowSeconds, quoteSeconds) {
     const time = date.slice(11);
     if (date.length !== 16 || !CHILD_STARTS[time]
       || parseKlineTime(source?.date) !== parseKlineTime(date)
-      || PRICE_KEYS.some(key => !Number.isFinite(source?.[key]) || source[key] <= 0)
+      || PRICE_KEYS.some(key => !Number.isFinite(source?.[key]) || (!adjusted && source[key] <= 0))
       || source.high < Math.max(source.open, source.close)
       || source.low > Math.min(source.open, source.close) || source.low > source.high
       || !Number.isFinite(source.volume) || source.volume < 0
@@ -60,11 +60,13 @@ function normalizeRows(rows, nowSeconds, quoteSeconds) {
  * Only a contiguous, closed suffix at the very beginning may be discarded as a
  * pagination cut. Interior gaps are errors, never silently bridged by a chart.
  */
-export function aggregateAshareFourHourKline(rows, { now = Date.now(), quoteTime } = {}) {
+export function aggregateAshareFourHourKline(rows, { now = Date.now(), quoteTime, adjusted = false } = {}) {
   const nowSeconds = (typeof now === 'function' ? Number(now()) : Number(now)) / 1000;
   if (!Number.isFinite(nowSeconds)) throw new Error('4小时聚合本地时间无效');
   const quoteSeconds = parseKlineTime(quoteTime);
-  const sourceRows = normalizeRows(rows, nowSeconds, quoteSeconds);
+  // Verified forward adjustment can produce finite zero/negative prices.
+  // Raw quotes retain the positive-price requirement; all other checks remain.
+  const sourceRows = normalizeRows(rows, nowSeconds, quoteSeconds, adjusted === true);
   const groups = new Map();
   const days = new Map();
   for (const row of sourceRows) {
@@ -151,8 +153,9 @@ export async function fetchAshareFourHourKline({ period, limit = 2400, now = Dat
   const symbol = String(options.symbol || '').toLowerCase();
   const quoteText = String(source.quotePayload?.data?.[symbol]?.qt?.[symbol]?.[30] ?? '');
   const quoteTime = /^\d{14}$/.test(quoteText) && Number.isFinite(parseKlineTime(quoteText)) ? quoteText : undefined;
+  const adjusted = !options.isIndex && String(options.adjust === undefined ? '1' : options.adjust) === '1';
   const { klines, sourceBarCount, discardedSourceBarCount } = aggregateAshareFourHourKline(source.klines,
-    { now: snapshotNow, quoteTime });
+    { now: snapshotNow, quoteTime, adjusted });
   return { klines, quotePayload: source.quotePayload,
     sourceInfo: `Tencent 30m → 4h (09:30–13:30 / 13:30–15:00), ${klines.length} bars from ${sourceBarCount} source bars; discarded leading=${discardedSourceBarCount}; ${source.sourceInfo}` };
 }

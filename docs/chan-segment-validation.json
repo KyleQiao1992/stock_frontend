@@ -1,0 +1,596 @@
+{
+  "scope": "Current production rules: finite source-derived checks and structural properties, not proof of all original figures.",
+  "version": "chan-segment-standard-gap-v3",
+  "hashes": {
+    "segment.js": "17d67c7f6c3d2254dc06859c4d37b324508f04583d102c437463ac1b0b0309af",
+    "referenceEngine.js": "7b42e393b018e69294ba7ebe30a20ba32d60bb812e124bb4ef3cec45995c8d93",
+    "index.js": "c022e2060a03a2424a5ff0f6d97853dd38767928107f5caaa14a7b791c5d6a6c"
+  },
+  "cases": [
+    {
+      "id": "merged-gap-waits",
+      "sign": 1,
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105
+      ],
+      "expected": [],
+      "actual": [],
+      "passed": true
+    },
+    {
+      "id": "merged-gap-waits",
+      "sign": -1,
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105
+      ],
+      "expected": [],
+      "actual": [],
+      "passed": true
+    },
+    {
+      "id": "merged-gap-resumes",
+      "sign": 1,
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        121
+      ],
+      "expected": [],
+      "actual": [],
+      "passed": true
+    },
+    {
+      "id": "merged-gap-resumes",
+      "sign": -1,
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        121
+      ],
+      "expected": [],
+      "actual": [],
+      "passed": true
+    },
+    {
+      "id": "merged-gap-lower-local-top",
+      "sign": 1,
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40
+      ],
+      "expected": [],
+      "actual": [],
+      "passed": true
+    },
+    {
+      "id": "merged-gap-lower-local-top",
+      "sign": -1,
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40
+      ],
+      "expected": [],
+      "actual": [],
+      "passed": true
+    },
+    {
+      "id": "merged-gap-eventually-confirms",
+      "sign": 1,
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40,
+        112,
+        45,
+        114
+      ],
+      "expected": [
+        [
+          0,
+          3,
+          13,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          10,
+          13,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "actual": [
+        [
+          0,
+          3,
+          13,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          10,
+          13,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "id": "merged-gap-eventually-confirms",
+      "sign": -1,
+      "prices": [
+        0,
+        100,
+        40,
+        120,
+        50,
+        115,
+        110,
+        114,
+        105,
+        113,
+        40,
+        112,
+        45,
+        114
+      ],
+      "expected": [
+        [
+          0,
+          3,
+          13,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          10,
+          13,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "actual": [
+        [
+          0,
+          3,
+          13,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          10,
+          13,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "id": "ordinary-no-gap",
+      "sign": 1,
+      "prices": [
+        0,
+        10,
+        4,
+        12,
+        5,
+        9,
+        3
+      ],
+      "expected": [
+        [
+          0,
+          3,
+          6,
+          "feature_no_gap"
+        ]
+      ],
+      "actual": [
+        [
+          0,
+          3,
+          6,
+          "feature_no_gap"
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "id": "ordinary-no-gap",
+      "sign": -1,
+      "prices": [
+        0,
+        10,
+        4,
+        12,
+        5,
+        9,
+        3
+      ],
+      "expected": [
+        [
+          0,
+          3,
+          6,
+          "feature_no_gap"
+        ]
+      ],
+      "actual": [
+        [
+          0,
+          3,
+          6,
+          "feature_no_gap"
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "id": "first-break",
+      "sign": 1,
+      "prices": [
+        0,
+        10,
+        4,
+        12,
+        3,
+        8,
+        2
+      ],
+      "expected": [
+        [
+          0,
+          3,
+          6,
+          "first_stroke_break"
+        ]
+      ],
+      "actual": [
+        [
+          0,
+          3,
+          6,
+          "first_stroke_break"
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "id": "first-break",
+      "sign": -1,
+      "prices": [
+        0,
+        10,
+        4,
+        12,
+        3,
+        8,
+        2
+      ],
+      "expected": [
+        [
+          0,
+          3,
+          6,
+          "first_stroke_break"
+        ]
+      ],
+      "actual": [
+        [
+          0,
+          3,
+          6,
+          "first_stroke_break"
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "id": "gap-without-price-fill",
+      "sign": 1,
+      "prices": [
+        0,
+        4,
+        2,
+        10,
+        7,
+        9,
+        6,
+        8,
+        7,
+        9
+      ],
+      "expected": [
+        [
+          0,
+          3,
+          9,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          6,
+          9,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "actual": [
+        [
+          0,
+          3,
+          9,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          6,
+          9,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "id": "gap-without-price-fill",
+      "sign": -1,
+      "prices": [
+        0,
+        4,
+        2,
+        10,
+        7,
+        9,
+        6,
+        8,
+        7,
+        9
+      ],
+      "expected": [
+        [
+          0,
+          3,
+          9,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          6,
+          9,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "actual": [
+        [
+          0,
+          3,
+          9,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          3,
+          6,
+          9,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "id": "active-closed-ohlc",
+      "count": 82,
+      "sign": 1,
+      "expected": [],
+      "actual": [],
+      "passed": true
+    },
+    {
+      "id": "active-closed-ohlc",
+      "count": 121,
+      "sign": 1,
+      "expected": [],
+      "actual": [],
+      "passed": true
+    },
+    {
+      "id": "active-closed-ohlc",
+      "count": 122,
+      "sign": 1,
+      "expected": [
+        [
+          "segment-9-33",
+          122,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          "segment-33-89",
+          122,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "actual": [
+        [
+          "segment-9-33",
+          122,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          "segment-33-89",
+          122,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "id": "active-closed-ohlc",
+      "count": 82,
+      "sign": -1,
+      "expected": [],
+      "actual": [],
+      "passed": true
+    },
+    {
+      "id": "active-closed-ohlc",
+      "count": 121,
+      "sign": -1,
+      "expected": [],
+      "actual": [],
+      "passed": true
+    },
+    {
+      "id": "active-closed-ohlc",
+      "count": 122,
+      "sign": -1,
+      "expected": [
+        [
+          "segment-9-33",
+          122,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          "segment-33-89",
+          122,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "actual": [
+        [
+          "segment-9-33",
+          122,
+          "feature_gap_reverse_fractal"
+        ],
+        [
+          "segment-33-89",
+          122,
+          "reverse_feature_fractal"
+        ]
+      ],
+      "passed": true
+    },
+    {
+      "id": "old-retraction-fixture-invalid-confirmation",
+      "seed": 1283762,
+      "expected": [
+        [],
+        []
+      ],
+      "actual": [
+        [],
+        []
+      ],
+      "passed": true
+    },
+    {
+      "id": "upstream-retraction-preserved",
+      "seed": 27,
+      "expected": [
+        [
+          [
+            "segment-35-99",
+            147,
+            "feature_no_gap"
+          ],
+          [
+            "segment-99-129",
+            184,
+            "first_stroke_break"
+          ]
+        ],
+        [
+          [
+            "segment-35-99",
+            147,
+            "feature_no_gap"
+          ]
+        ]
+      ],
+      "actual": [
+        [
+          [
+            "segment-35-99",
+            147,
+            "feature_no_gap"
+          ],
+          [
+            "segment-99-129",
+            184,
+            "first_stroke_break"
+          ]
+        ],
+        [
+          [
+            "segment-35-99",
+            147,
+            "feature_no_gap"
+          ]
+        ]
+      ],
+      "passed": true
+    }
+  ],
+  "properties": {
+    "seed": 67177881,
+    "inputs": 2000,
+    "endpoints": 31,
+    "prefixFailures": 0,
+    "mirrorFailures": 0,
+    "positiveScaleFailures": 0,
+    "evidenceFailures": 0,
+    "examples": []
+  },
+  "pageTests": "Recorded separately in test-results/isolated; this script does not run a browser."
+}

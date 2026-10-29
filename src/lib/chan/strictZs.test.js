@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildZs } from './zs.js';
+import { buildZs, compareCenterGeometry } from './zs.js';
 
 function segments(prices) {
   const points = prices.map((price, index) => ({ time: index + 1, price, idx: index, mark: index % 2 ? 'G' : 'D' }));
@@ -87,10 +87,15 @@ test('leaving Z segment that still overlaps remains in the extension, without sh
   assert.equal(zone.thirdSignal.kind, 'up_departure_retest');
 });
 
-test('downward departure and retest are symmetric, with border touch allowed by 不升破', () => {
-  const [zone] = buildZs(segments([20, 10, 16, 8, 10]));
+test('downward departure is symmetric; a boundary touch extends and a strict outside return closes', () => {
+  // This lowest-layer version keeps a touching interval in extension (lesson
+  // 20's Z-interval rule). It does not equate 不升破 with a confirmed trade.
+  const [touching] = buildZs(segments([20, 10, 16, 8, 10]));
+  assert.equal(touching.status, 'active');
+  assert.equal(touching.thirdSignal, null);
+  const [zone] = buildZs(segments([20, 10, 16, 8, 9]));
   assert.equal(zone.thirdSignal.kind, 'down_departure_retest');
-  assert.equal(zone.thirdSignal.price, 10);
+  assert.equal(zone.thirdSignal.price, 9);
   assert.equal(zone.thirdSignal.time, 5);
 });
 
@@ -103,15 +108,59 @@ test('a failed first retest extends the same center instead of confirming a late
   assert.equal(zone.zg, 10);
 });
 
-test('new centers start after the old departure/retest and do not reuse its formation segments', () => {
+test('new centers may reuse the leaving segment, retaining each earliest confirmed triple', () => {
   const zones = buildZs(segments([0, 10, 4, 12, 11, 16, 13, 18, 14]));
-  assert.equal(zones.length, 2);
-  assert.ok(zones[1].startIndex > zones[0].endIndex);
-  assert.equal(zones[1].zd, 13);
-  assert.equal(zones[1].zg, 16);
-  // 核心虽分离，第二中枢外围波动仍触及前中枢外围，不能直接称上涨趋势（第20课）。
+  // The old implementation skipped 4→12 and lost the [11,12] core formed by
+  // [4,12], [11,12], [11,16]. Reuse is the declared sequential geometry policy.
+  assert.equal(zones.length, 3);
+  assert.deepEqual(zones.map(z => [z.startIndex, z.zd, z.zg]), [[0, 4, 10], [2, 11, 12], [4, 13, 16]]);
+  assert.equal(zones[1].startIndex, zones[0].endIndex);
+  assert.ok(zones[1].confirmed_time >= zones[0].closed_time);
+  // 核心虽分离，外围在本版几何中重叠；复用离开段使其不能独立证明升级。
   assert.equal(zones[1].relation, 'overlapping_fluctuations');
-  assert.equal(zones[1].requires_recursive_level, true);
+  assert.equal(zones[1].requires_recursive_level, null);
+  assert.equal(zones[1].relation_evidence.departure_reused, true);
+});
+
+test('overlap with a reused departure is not independent evidence of level expansion', () => {
+  const zones = buildZs(segments([0, 10, 4, 12, 11, 16, 13]));
+  const current = zones[1];
+  assert.equal(current.relation, 'overlapping_fluctuations');
+  assert.equal(current.requires_recursive_level, null);
+  assert.deepEqual(current.relation_evidence.shared_z_segment_ids, ['seg-2']);
+  assert.equal(current.relation_evidence.departure_reused, true);
+  assert.equal(current.relation_evidence.movement_classification, 'not_verified');
+  assert.equal(current.relation_evidence.history_coverage, 'not_verified');
+  assert.equal(current.relation_evidence.recursive_level, 'not_computed');
+});
+
+test('reused departure remains uncertain when it is not one of the previous Z segments', () => {
+  const zones = buildZs(segments([10, 20, 14, 18, 5, 8, 2]));
+  assert.equal(zones.length, 2);
+  assert.equal(zones[1].relation, 'overlapping_fluctuations');
+  assert.deepEqual(zones[1].relation_evidence.shared_z_segment_ids, []);
+  assert.equal(zones[1].relation_evidence.departure_reused, true);
+  assert.equal(zones[1].requires_recursive_level, null);
+});
+
+test('nonshared overlap is a reason to investigate higher levels, while separated ranges are geometry only', () => {
+  const zone = (id, dd, gg, zids) => ({ id, dd, gg, z_segment_ids: zids });
+  const prior = zone('a', 0, 10, ['a1', 'a2']);
+  const overlap = compareCenterGeometry(prior, zone('b', 9, 15, ['b1', 'b2']));
+  assert.equal(overlap.relation, 'overlapping_fluctuations');
+  assert.equal(overlap.requires_recursive_level, true);
+  assert.deepEqual(overlap.relation_evidence.shared_z_segment_ids, []);
+  assert.equal(overlap.relation_evidence.recursive_level, 'not_computed');
+  const up = compareCenterGeometry(prior, zone('c', 11, 15, ['c1', 'c2']));
+  assert.equal(up.relation, 'up_separated');
+  assert.equal(up.requires_recursive_level, false);
+  assert.equal(up.relation_evidence.movement_classification, 'not_verified');
+  const down = compareCenterGeometry(zone('x', 15, 20, ['x1']), prior);
+  assert.equal(down.relation, 'down_separated');
+  assert.equal(down.relation_evidence.recursive_level, 'not_computed');
+  const uncertain = compareCenterGeometry(prior, zone('u', null, 15, ['u1']));
+  assert.equal(uncertain.relation, 'uncertain');
+  assert.equal(uncertain.requires_recursive_level, null);
 });
 
 test('zero-width triple intersection is not a center', () => {

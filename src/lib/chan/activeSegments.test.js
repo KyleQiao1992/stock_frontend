@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeChan } from './index.js';
 import { analyzeReferenceCandles } from './referenceEngine.js';
+import { retractionRows } from './fixtures/segmentGap.js';
+import { mergeCandles, findFractals } from './fractal.js';
+import { isStrictBi } from './bi.js';
 
 const targets = [2, 0, 10, 4, 12, 5, 9, 3, 8, 2, 7, 4, 10, 6, 12, 5, 9, 3, 8, 2, 7, 4, 10];
 function rowsFromTargets(turns) {
@@ -185,42 +188,48 @@ test('long day history remains causal beyond the old 300-candle and 50-stroke bo
   assert.ok([...firstSeen.values()].some((length) => length > 300));
 });
 
-test('a cascading pen rollback retracts earlier confirmed endpoints instead of retaining orphan structure', () => {
-  // Positive, valid OHLC with inclusion snapshots: three endpoints are later
-  // retracted, so discarding only the latest point cannot guarantee a fixed past.
+test('rollback reselects a genuine extremum rather than connecting a superseded top', () => {
+  // The old expected 6→11 pen crosses higher processed highs at K9/K10.
+  // The separate seed-27 test below retains the multi-segment rollback case.
   const ranges = [[948.07, 961.9], [909.55, 942.56], [916.99, 945.25], [928.01, 973.38],
     [943.86, 985.82], [968, 988.87], [965.51, 975.24], [955.91, 1025.44],
     [958.91, 1004.5], [959.41, 1004.51], [949.2, 987.05], [981.79, 1015.43],
     [981.42, 1012.68], [942.93, 1028.45], [981.13, 1003.1], [978.92, 1006.92]];
   const input = ranges.map(([low, high], i) => ({ date: `K${i + 1}`, low, high,
     open: (high + low) / 2, close: (high + low) / 2, volume: 100, complete: true }));
+  const source = candles(input.slice(0, 12));
+  const merged = mergeCandles(source);
+  const fractals = findFractals(source, merged);
+  const at = time => fractals.find(f => f.time === time);
+  assert.equal(isStrictBi(at(6), at(11), merged), false);
+  assert.equal(isStrictBi(at(2), at(10), merged), true);
+  assert.ok(merged.find(b => b.time === 9).high > at(6).price);
+  assert.ok(merged.find(b => b.time === 10).high > at(6).price);
   const before = analyze(input.slice(0, 12));
-  assert.deepEqual(before.segmentBi.map((point) => point.time), [2, 6, 11]);
-  assert.ok(before.segmentBi.slice(0, 2).every((point) => point.confirmed));
+  assert.deepEqual(before.segmentBi.map((point) => point.time), [2, 10]);
+  assert.deepEqual(before.segmentBi.map(point => point.confirmed), [true, false]);
   const after = analyze(input);
-  for (const key of ['bi', 'segmentBi', 'segments', 'pendingSegments']) assert.deepEqual(after[key], []);
+  assert.deepEqual(after.segmentBi.map((point) => point.time), [2, 12]);
+  assert.deepEqual(after.segments, []);
+  assert.deepEqual(after.pendingSegments, []);
   assert.equal(after.definition.historyBars, input.length, 'rollback restores the original available history');
 });
 
 test('a segment is withdrawn when its previously valid confirming pen is retracted', () => {
-  let state = 1283762;
-  const random = () => ((state = (Math.imul(state, 1664525) + 1013904223) >>> 0) / 4294967296);
-  let price = 1000;
-  const input = Array.from({ length: 200 }, (_, i) => {
-    price += (random() - 0.5) * 40;
-    const width = 0.2 + random() * 10;
-    return { date: `K${i + 1}`, open: price, close: price, low: price - width,
-      high: price + width, volume: 100, complete: true };
-  });
+  // Seed 1283762 relied on a false first-break confirmation: retained as a
+  // negative case in segmentGapRules.test.js. Seed 27 proves actual withdrawal.
+  const input = retractionRows(27);
   const before = analyze(input.slice(0, 199));
   assert.deepEqual(before.segments.map(({ id, confirmed_time }) => ({ id, confirmed_time })), [
-    { id: 'segment-13-142', confirmed_time: 199 },
+    { id: 'segment-35-99', confirmed_time: 147 },
+    { id: 'segment-99-129', confirmed_time: 184 },
   ]);
-  assert.equal(before.segmentBi.find((point) => point.time === 189).confirmed, true);
+  assert.equal(before.segmentBi.find((point) => point.time === 178).confirmed, true);
   const after = analyze(input);
-  assert.equal(after.segmentBi.at(-1).time, 189);
+  assert.equal(after.segmentBi.at(-1).time, 178);
   assert.equal(after.segmentBi.at(-1).confirmed, false);
-  assert.deepEqual(after.segments, []);
+  assert.deepEqual(after.segments.map(({ id, confirmed_time }) => ({ id, confirmed_time })),
+    [{ id: 'segment-35-99', confirmed_time: 147 }]);
   const engine = analyzeReferenceCandles(candles(input));
   assert.deepEqual(after.segmentBi, engine.segmentBi);
 });

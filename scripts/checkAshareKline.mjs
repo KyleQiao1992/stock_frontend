@@ -12,6 +12,8 @@ import { chromium } from 'playwright';
 // Default runs use explicitly synthetic market responses. --live additionally
 // exercises untouched external requests in a fresh, cookie-free browser context.
 const liveEnabled = process.argv.includes('--live');
+const liveCode = process.env.ASHARE_KLINE_CODE || '688610';
+assert.match(liveCode, /^\d{6}$/, 'ASHARE_KLINE_CODE must be a six-digit A-share code');
 const root = fileURLToPath(new URL('..', import.meta.url));
 const output = process.env.ASHARE_KLINE_OUTPUT || '/tmp/ashare-kline-check';
 const syntheticRows = Array.from({ length: 160 }, (_, i) => {
@@ -19,7 +21,7 @@ const syntheticRows = Array.from({ length: 160 }, (_, i) => {
   const price = 80 + i * 0.04 + Math.sin(i / 5) * 8;
   return [date, price - 0.3, price + 0.3, price + 1, price - 1, 100000 + i];
 });
-const html = `<!doctype html><html lang="zh-CN" class="dark"><head><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+const html = `<!doctype html><html lang="zh-CN" class="dark"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="data:,"></head>
 <body><div id="root"></div><script type="module">
 import React, {useState} from 'react';
 import {createRoot} from 'react-dom/client';
@@ -207,7 +209,7 @@ try {
     const livePageErrors = [];
     live.on('pageerror', error => livePageErrors.push(error.message));
     live.on('response', response => {
-      if (response.url().includes('gtimg.cn') || response.url().includes('proxy.finance.qq.com')
+      if (response.status() >= 400 || response.url().includes('gtimg.cn') || response.url().includes('proxy.finance.qq.com')
         || response.url().includes('eastmoney.com')) {
         report.liveNetwork.push({ url: response.url(), status: response.status(), type: response.request().resourceType() });
       }
@@ -215,11 +217,11 @@ try {
     live.on('requestfailed', request => report.liveNetwork.push({ url: request.url(), failure: request.failure()?.errorText,
       type: request.resourceType() }));
     live.on('console', message => {
-      if (['error', 'warning'].includes(message.type())) report.liveConsole.push({ type: message.type(), text: message.text() });
+      if (['error', 'warning'].includes(message.type())) report.liveConsole.push({ type: message.type(), text: message.text(), url: message.location().url });
     });
     await visit(live);
     for (const [period, label] of [['101', 'day'], ['102', 'week'], ['103', 'month']]) {
-      const loaded = await load(live, { code: '688610', period, adjust: '1', limit: 1000 });
+      const loaded = await load(live, { code: liveCode, period, adjust: '1', limit: 1000 });
       report.live.push({ label, ...loaded });
       await checkRendered(live, loaded);
       const mainSwitch = live.getByRole('button', { name: '缠论', exact: true });
@@ -227,15 +229,16 @@ try {
       assert.equal(await live.locator('[data-chan-layer]').count(), 0);
       await mainSwitch.click();
       assert.equal(await live.locator('[data-chan-layer]').count(), 2);
-      await live.screenshot({ path: join(output, `live-688610-${label}.png`), fullPage: true });
-      console.log(`Live 688610 ${label}: ${loaded.rows} bars, ${loaded.last}, close ${loaded.close}, ${loaded.sourceInfo}`);
+      await live.screenshot({ path: join(output, `live-${liveCode}-${label}.png`), fullPage: true });
+      console.log(`Live ${liveCode} ${label}: ${loaded.rows} bars, ${loaded.last}, close ${loaded.close}, ${loaded.sourceInfo}`);
     }
     assert.deepEqual(livePageErrors, []);
+    assert.deepEqual(report.liveConsole, [], 'unexpected live-browser console errors or warnings');
     await liveContext.close();
   }
   report.finishedAt = new Date().toISOString();
   console.log(`Actual fetchAshareKline browser checks passed: ${report.synthetic.length} synthetic cases${liveEnabled
-    ? ', plus 3 untouched live 688610 day/week/month requests rendered with actual Chan analysis and chart' : '; live requests not run (use --live)'}. Report: ${output}/report.json`);
+    ? `, plus 3 untouched live ${liveCode} day/week/month requests rendered with actual Chan analysis and chart` : '; live requests not run (use --live)'}. Report: ${output}/report.json`);
 } finally {
   await writeFile(join(output, 'report.json'), `${JSON.stringify(report, null, 2)}\n`);
   await browser?.close();
