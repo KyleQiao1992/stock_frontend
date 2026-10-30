@@ -89,6 +89,51 @@ function generatedBars(count, step = 5) {
   return rows;
 }
 
+test('same-page identical minute duplicates are deduplicated but conflicting OHLC or volume fail', async () => {
+  const original = ['202610190935', 10, 10, 10, 10, 100];
+  const next = ['202610190940', 11, 11, 11, 11, 100];
+  const fetch = duplicate => fetchAshareMinuteKline({ symbol: 'sh603268', period: '5', adjust: '0', limit: 3,
+    loadJson: async () => payload('sh603268', 'm5', [original, duplicate, next]), now: SNAPSHOT_TIME });
+  const identical = await fetch([...original]);
+  assert.equal(identical.klines.length, 2);
+  for (const duplicate of [
+    ['202610190935', 20, 20, 20, 20, 100],
+    ['202610190935', 10, 10, 10, 10, 101],
+  ]) await assert.rejects(fetch(duplicate), /重复.*冲突/);
+});
+
+test('conflicting overlapping history-page bars fail before cursor filtering; identical overlaps deduplicate', async () => {
+  const minutes = generatedBars(801);
+  const firstPage = minutes.slice(1);
+  async function fetchWithOverlap(conflict) {
+    let requests = 0;
+    const result = await fetchAshareMinuteKline({ symbol: 'sh603268', period: '5', adjust: '0', limit: 801,
+      loadJson: async () => {
+        requests++;
+        if (requests === 1) return payload('sh603268', 'm5', firstPage);
+        const repeated = [...firstPage[0]];
+        if (conflict) repeated[2] = 100.5;
+        return payload('sh603268', 'm5', [minutes[0], repeated]);
+      }, now: SNAPSHOT_TIME });
+    return { result, requests };
+  }
+  const same = await fetchWithOverlap(false);
+  assert.equal(same.requests, 2);
+  assert.equal(same.result.klines.length, 801);
+  await assert.rejects(fetchWithOverlap(true), /重复.*冲突/);
+});
+
+test('conflicting same-page duplicates cannot hide among records beyond a history cursor', async () => {
+  const minutes = generatedBars(801);
+  let requests = 0;
+  await assert.rejects(fetchAshareMinuteKline({ symbol: 'sh603268', period: '5', adjust: '0', limit: 801,
+    loadJson: async () => {
+      requests++;
+      return payload('sh603268', 'm5', requests === 1 ? minutes.slice(1) : [minutes[0],
+        ['202612010935', 10, 10, 10, 10, 100], ['202612010935', 20, 20, 20, 20, 100]]);
+    }, now: SNAPSHOT_TIME }), /重复.*冲突/);
+});
+
 test('minute history is paginated with <=800 requests and retains unique full times beyond 500 bars', async () => {
   const minutes = generatedBars(1600);
   const { calls, loadJson } = loader({ symbol: 'sh603268', minutes });

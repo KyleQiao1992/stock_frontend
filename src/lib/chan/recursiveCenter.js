@@ -60,18 +60,24 @@ function validateMove(move, index, targetLevel) {
  * this version's explicit convention; this is not a universal ruling on all
  * original-text boundary wording.
  */
-export function formCenterFromMoves(moves, { targetLevel, asOfTime, source } = {}) {
-  if (!Array.isArray(moves)) throw new TypeError('moves must be an array');
+// An immutable snapshot lets a multi-window extension validate history once
+// without permitting later caller changes to bypass that validation.
+export function createCenterFormationInspector({ targetLevel, asOfTime, source } = {}) {
   requireInteger(targetLevel, 'targetLevel', 1);
   requireInteger(asOfTime, 'asOfTime', 1);
-  if (!source || typeof source.basis !== 'string' || !source.basis.trim() || !Array.isArray(source.bars)) {
+  if (!source || typeof source !== 'object') {
     throw new TypeError('source basis and bars are required');
   }
-  if (source.bars.length < asOfTime) throw new RangeError('source does not include the requested asOfTime');
+  const { basis, bars } = source;
+  if (typeof basis !== 'string' || !basis.trim() || !Array.isArray(bars)) {
+    throw new TypeError('source basis and bars are required');
+  }
+  if (bars.length < asOfTime) throw new RangeError('source does not include the requested asOfTime');
   // One-based bar coordinates match analyzeChan's existing data contract.
   // Read only bars available as of the observation, never a future suffix.
+  const checkedBars = [];
   for (let i = 0; i < asOfTime; i++) {
-    const bar = source.bars[i];
+    const bar = bars[i];
     if (!bar || bar.time !== i + 1) throw new RangeError('source bar times must be complete and consecutive');
     if (!Number.isFinite(bar.high) || !Number.isFinite(bar.low) || bar.high < bar.low) {
       throw new RangeError(`source bar ${i + 1} has an invalid price range`);
@@ -79,7 +85,20 @@ export function formCenterFromMoves(moves, { targetLevel, asOfTime, source } = {
     if (bar.complete != null && typeof bar.complete !== 'boolean') {
       throw new TypeError(`source bar ${i + 1} has an invalid completion state`);
     }
+    checkedBars.push(Object.freeze({ time: bar.time, high: bar.high, low: bar.low, complete: bar.complete }));
   }
+  const checkedSource = Object.freeze({ basis, bars: Object.freeze(checkedBars) });
+  const form = moves => formCenterFromCheckedSource(moves, { targetLevel, asOfTime, source: checkedSource });
+  return Object.freeze({ source: checkedSource, form });
+}
+
+export function formCenterFromMoves(moves, options = {}) {
+  if (!Array.isArray(moves)) throw new TypeError('moves must be an array');
+  return createCenterFormationInspector(options).form(moves);
+}
+
+function formCenterFromCheckedSource(moves, { targetLevel, asOfTime, source }) {
+  if (!Array.isArray(moves)) throw new TypeError('moves must be an array');
   const first = moves.slice(0, 3);
   const ids = new Set();
   first.forEach((move, index) => {
@@ -189,7 +208,9 @@ export function formCenterFromMoves(moves, { targetLevel, asOfTime, source } = {
     id: JSON.stringify([source.basis, targetLevel, first[0].start.time, first[2].end.time]),
     level: targetLevel, lower_level: targetLevel - 1, basis: first[0].basis,
     sdt: first[0].start.time, edt: first[2].end.time,
-    zg, zd, zz: (zg + zd) / 2,
+    // Finite boundaries can overflow when added even though their average is
+    // representable. Preserve ordinary/subnormal rounding for finite sums.
+    zg, zd, zz: Number.isFinite(zg + zd) ? (zg + zd) / 2 : zg / 2 + zd / 2,
     // These bounds are conservative: shared endpoint-K ordering may couple
     // the movements, so not every point in the intervals must be realizable.
     core_bounds: { zg: [zgMin, zgMax], zd: [zdMin, zdMax] },

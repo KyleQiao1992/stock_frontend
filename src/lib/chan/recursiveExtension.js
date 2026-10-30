@@ -1,4 +1,4 @@
-import { formCenterFromMoves } from './recursiveCenter.js';
+import { createCenterFormationInspector } from './recursiveCenter.js';
 
 /**
  * Lesson 20, center theorem 1, for an explicitly directional up/down/up (or
@@ -23,7 +23,9 @@ import { formCenterFromMoves } from './recursiveCenter.js';
  * Source: https://blog.sina.com.cn/s/blog_486e105c010007zw.html
  */
 export function inspectCenterExtension(moves, options) {
-  const formed = formCenterFromMoves(moves, options);
+  if (!Array.isArray(moves)) throw new TypeError('moves must be an array');
+  const checked = createCenterFormationInspector(options);
+  const formed = checked.form(moves);
   if (formed.status !== 'conditional') return formed;
   const { center } = formed;
   const opposite = { up: 'down', down: 'up' };
@@ -34,7 +36,7 @@ export function inspectCenterExtension(moves, options) {
     ? move.start.price === move.low && move.end.price === move.high
     : move.start.price === move.high && move.end.price === move.low;
   const endpointCandleRangeCertain = move => [move.start.time, move.end.time].every(time => {
-    const bar = options.source.bars[time - 1];
+    const bar = checked.source.bars[time - 1];
     return bar.high <= move.high && bar.low >= move.low;
   });
   if (!isDirectionalPattern(direction, moves[1].type, moves[2].type)) {
@@ -64,7 +66,7 @@ export function inspectCenterExtension(moves, options) {
     // Reuse the formation kernel for full source, continuity and candle checks.
     // A disjoint triple is valid evidence too: we do not use its own core.
     const window = moves.slice(i - 2, i + 1);
-    const proof = formCenterFromMoves(window, options);
+    const proof = checked.form(window);
     if (proof.status === 'pending') break;
     if (ids.has(moves[i - 1].id) || ids.has(moves[i].id)) {
       throw new RangeError('movement IDs must be unique across the whole extension');
@@ -81,7 +83,7 @@ export function inspectCenterExtension(moves, options) {
     for (const move of window) {
       observedTime = Math.max(observedTime, move.confirmed_time);
       for (let time = move.start.time; time <= move.confirmed_time; time++) {
-        if (options.source.bars[time - 1].complete !== true) observedTime = Math.max(observedTime, time + 1);
+        if (checked.source.bars[time - 1].complete !== true) observedTime = Math.max(observedTime, time + 1);
       }
     }
     if (!isDirectionalPattern(direction, moves[i - 1].type, moves[i].type)) {

@@ -165,7 +165,16 @@ export async function fetchAshareMinuteKline({ symbol, code, period, adjust = '1
     }
     if (!rows.length) break;
     const beforeSize = bars.size;
+    const pageRows = new Map();
     for (const row of rows) {
+      // Check overlapping page records *before* excluding the cursor. The
+      // endpoint can repeat an already loaded bar; silently overwriting or
+      // dropping a different OHLC/volume would hide an unreliable history.
+      const previous = pageRows.get(row.date) ?? bars.get(row.date);
+      if (previous && ['open', 'high', 'low', 'close', 'volume'].some(key => previous[key] !== row[key])) {
+        throw new Error(`腾讯分钟 K 线重复时间冲突：${row.date}`);
+      }
+      pageRows.set(row.date, row);
       if (end && row.date.replace(/[- :]/g, '') >= end) continue;
       bars.set(row.date, row);
     }

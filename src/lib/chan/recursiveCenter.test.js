@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formCenterFromMoves } from './recursiveCenter.js';
+import { createCenterFormationInspector, formCenterFromMoves } from './recursiveCenter.js';
 import { analyzeChan } from './index.js';
 import { zoneLifecycleRows } from './fixtures/zoneLifecycle.js';
 
@@ -240,4 +240,35 @@ test('guaranteed overlap with uncertain core boundaries remains explicitly condi
   assert.equal(result.center.core_price_proof, 'caller_supplied_endpoint_order_unknown');
   assert.deepEqual(result.center.core_bounds, { zg: [10, 11], zd: [4, 4] });
   assert.equal(result.center.zg, 10, 'displayed upper boundary is caller supplied, not independently proved');
+});
+
+test('finite large positive and reflected prices retain a finite center midpoint', () => {
+  for (const sign of [1, -1]) {
+    const values = [8e307, 1.2e308, 9e307, 1.4e308].map(value => sign * value);
+    const bars = values.map((value, i) => ({ time: i + 1, high: value, low: value, complete: true }));
+    const moves = values.slice(0, -1).map((value, i) => move(String(i), [i + 1, value],
+      [i + 2, values[i + 1]], Math.min(value, values[i + 1]), Math.max(value, values[i + 1]), 4));
+    const result = formCenterFromMoves(moves, opts(4, { basis: 'SH600851:qfq:5m', bars }));
+    assert.equal(result.status, 'conditional');
+    assert.ok(Number.isFinite(result.center.zz));
+    assert.ok(result.center.zz >= result.center.zd && result.center.zz <= result.center.zg);
+    assert.ok(Math.abs(result.center.zz / 1e308 - sign * 1.05) < 1e-14);
+  }
+});
+
+test('a validated observation snapshot does not read future candles or change when the caller mutates history', () => {
+  const evidence = source();
+  const initial = evidence.bars.slice(0, 15);
+  Object.defineProperty(initial, '15', { get() { throw new Error('future candle was read'); } });
+  const mutableSource = { basis: evidence.basis, bars: initial };
+  const inspector = createCenterFormationInspector(opts(15, mutableSource));
+  const original = inspector.form(three());
+  assert.equal(original.status, 'conditional');
+  initial[1].high = 100;
+  mutableSource.basis = 'changed-source';
+  assert.deepEqual(inspector.form(three()), original, 'a validated observation remains an immutable snapshot');
+  const wrongBasis = three().map(item => ({ ...item, basis: 'changed-source' }));
+  assert.throws(() => inspector.form(wrongBasis), /basis/i, 'mutating the caller basis cannot change the checked basis');
+  assert.throws(() => { inspector.source.basis = 'changed-source'; }, TypeError);
+  assert.throws(() => { inspector.source.bars[1].high = 100; }, TypeError);
 });

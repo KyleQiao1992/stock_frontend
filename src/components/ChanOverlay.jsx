@@ -1,9 +1,11 @@
 import { useId } from 'react';
 import { visibleOffset } from '../lib/chan/index.js';
+import ChanUpstreamOverlay from './ChanUpstreamOverlay.jsx';
 
 export default function ChanOverlay({ layer, data, options, rows, chart, onSelectFractal }) {
   const clipId = useId();
   if (!options?.enabled || !data || !rows.length) return null;
+  if (data.definition?.engine === 'upstream') return <ChanUpstreamOverlay layer={layer} data={data} options={options} rows={rows} chart={chart} />;
   const offset = visibleOffset(data, rows);
   if (offset < 0) return null;
   const x = (time) => chart.x(time - 1 - offset);

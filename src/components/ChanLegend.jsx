@@ -1,5 +1,6 @@
 import ChanUncertaintyNotice from './ChanUncertaintyNotice.jsx';
 import ChanPendingNotice from './ChanPendingNotice.jsx';
+import ChanUpstreamNotice from './ChanUpstreamNotice.jsx';
 
 export default function ChanLegend({ data, options, rows }) {
   if (!options?.enabled || !data) return null;
@@ -9,6 +10,12 @@ export default function ChanLegend({ data, options, rows }) {
   const lastTime = rows?.length ? data.dates.indexOf(rows.at(-1).date) + 1 : data.dates.length;
   const windowZoneCount = data.zs.filter(zone => zone.edt >= firstTime && zone.sdt <= lastTime).length;
   const uncertainty = data.zsUncertainty ?? [];
+  if (data.definition?.engine === 'upstream') return <div aria-label="缠论图例" className="flex flex-wrap items-center gap-x-4 gap-y-1 px-2 py-2 text-[11px] text-slate-500">
+    <span>开源原版对照 · 简化线段 · 笔构造中枢（非递归）</span>
+    <ChanUpstreamNotice data={data} />
+    {data.upstreamRaw?.ok && <><span>笔 {data.upstreamRaw.bis.length} 条 / 线段 {data.upstreamRaw.segments.length} 条 / 笔中枢 {data.upstreamRaw.pivots.length} 个</span>
+      <span>上游的线段端点可能不相接；实线与虚线分别按上游完成状态展示。上游未按K线完成状态确认，也未提供确认依据时刻。</span></>}
+  </div>;
   if (data.inputProblem) return <div aria-label="缠论图例" className="px-2 py-2 text-[11px] text-amber-600 dark:text-amber-400">
     {`行情第 ${data.inputProblem.index + 1} 根 K 线${data.inputProblem.date ? `（${data.inputProblem.date}）` : ''}数据无效，缠论计算已停止，避免跨越缺失数据错误划线。`}
   </div>;

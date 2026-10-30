@@ -269,6 +269,33 @@ export const PAGE_CASES = [
     },
   },
   {
+    id: 'ashare-upstream-outlook', title: 'A股 / 开源原版对照',
+    open: page => analysisOpen(page, 'ashare', '缠论研判', 'upstream'),
+    async ready(page) {
+      await analysisReady(page, 'ashare', '缠论研判');
+      const outlook = page.getByLabel('缠论结构研判', { exact: true });
+      await expect(outlook.getByRole('heading', { name: '开源原版对照', exact: true })).toBeVisible();
+      await expect(outlook).toContainText('不是递归走势中枢');
+      await expect(outlook).toContainText('上游计算：');
+      await expect(page.locator('[data-chan-upstream-pen]')).not.toHaveCount(0);
+      await expect(page.locator('[data-chan-upstream-zone]')).not.toHaveCount(0);
+    },
+  },
+  {
+    id: 'ashare-cross-period', title: 'A股 / 5分钟与30分钟行情核对',
+    async open(page) {
+      await analysisOpen(page, 'ashare', '缠论研判', 'original');
+      await page.getByRole('button', { name: '核对5分钟与30分钟', exact: true }).click();
+    },
+    async ready(page) {
+      await analysisReady(page, 'ashare', '缠论研判');
+      const check = page.getByLabel('5分钟与30分钟行情核对', { exact: true });
+      await expect(check.locator('[data-cross-period-result]')).toContainText('对照范围：');
+      await expect(check.locator('[data-cross-period-result]')).toContainText(/匹配 \d+.*冲突 \d+/);
+      await expect(check).toContainText('不是走势中枢');
+    },
+  },
+  {
     id: 'ashare-outlook', title: 'A股 / 缠论研判', open: page => analysisOpen(page, 'ashare', '缠论研判'),
     async ready(page) {
       await analysisReady(page, 'ashare', '缠论研判');

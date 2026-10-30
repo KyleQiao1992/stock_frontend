@@ -60,6 +60,41 @@ test('invalid candles stop analysis and inconsistent structure evidence is rejec
     'a later price revision with identical dates must not reuse stale structural evidence');
 });
 
+test('a revised completion flag cannot reuse a center confirmed from an earlier history', () => {
+  const rows = zoneLifecycleRows(114);
+  const original = analyzeChan(rows, 'day');
+  assert.equal(original.zs.length, 1);
+  const revised = structuredClone(rows);
+  revised[113].complete = false;
+  assert.equal(analyzeChan(revised, 'day').zs.length, 0, 'the last bar no longer confirms the center');
+  assert.throws(() => assessRecursiveReadiness(revised, original, { period: 'day' }), /history basis/i,
+    'the previous result must not be reused after a candle completion revision');
+  const corrupted = structuredClone(original);
+  corrupted.analysisCandles.at(-1).complete = false;
+  assert.throws(() => assessRecursiveReadiness(rows, corrupted, { period: 'day' }), /history basis/i,
+    'the recorded candle itself must agree with the source completion state');
+});
+
+test('a revised skipped prefix and a different period cannot reuse stale structural evidence', () => {
+  const rows = JSON.parse(readFileSync(new URL('./fixtures/600851-qfq-2026-10-27.json', import.meta.url)));
+  const original = analyzeChan(rows, 'day');
+  assert.ok(original.historyOffset > 0, 'the engine trimmed an input prefix from its retained candles');
+  const revised = structuredClone(rows); revised[0].high += 1;
+  assert.throws(() => assessRecursiveReadiness(revised, original, { period: 'day' }), /history basis/i);
+  assert.throws(() => assessRecursiveReadiness(rows, original, { period: '5m' }), /history basis/i);
+});
+
+test('an invalid analysis cannot be reused for repaired or differently invalid history', () => {
+  const rows = zoneLifecycleRows(114);
+  const bad = structuredClone(rows); bad[10].high = null;
+  const invalid = analyzeChan(bad, 'day');
+  assert.equal(invalid.recursiveReadiness.status, 'invalid_input');
+  assert.throws(() => assessRecursiveReadiness(rows, invalid, { period: 'day' }), /history basis/i);
+  const nan = structuredClone(rows); nan[10].high = NaN;
+  assert.throws(() => assessRecursiveReadiness(nan, invalid, { period: 'day' }), /history basis/i);
+  assert.throws(() => assessRecursiveReadiness(bad, invalid, { period: '5m' }), /history basis/i);
+});
+
 test('flat prices, legitimate negative adjusted prices and minute time keys remain valid', () => {
   const minute = Array.from({ length: 90 }, (_, i) => ({
     date: `2026-01-01 ${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}`,

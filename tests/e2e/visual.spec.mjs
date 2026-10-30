@@ -3,12 +3,20 @@ import { PAGE_CASES } from './pages.mjs';
 
 const widths = [320, 390, 768, 1280, 1440, 1920];
 const analysisCases = new Set([
-  'ashare-financial', 'ashare-outlook', 'ashare-external-outlook', 'ashare-endpoints', 'ashare-news', 'ashare-trade-history',
+  'ashare-financial', 'ashare-outlook', 'ashare-external-outlook', 'ashare-upstream-outlook', 'ashare-cross-period', 'ashare-endpoints', 'ashare-news', 'ashare-trade-history',
   'hk-news', 'hk-outlook', 'hk-endpoints', 'us-outlook', 'us-endpoints',
 ]);
 
 function analysisTargets(page, id) {
   const panel = page.getByRole('region', { name: '个股分析', exact: true });
+  if (id === 'ashare-cross-period') {
+    const check = panel.getByLabel('5分钟与30分钟行情核对', { exact: true });
+    return [check.locator('p').first(), check.locator('[data-cross-period-result] p').last()];
+  }
+  if (id === 'ashare-upstream-outlook') {
+    const outlook = panel.locator('[aria-label="缠论结构研判"]');
+    return [outlook.locator(':scope > p').first(), outlook.locator(':scope > p').last()];
+  }
   if (id === 'ashare-external-outlook') {
     const outlook = panel.locator('[aria-label="缠论结构研判"]');
     return [outlook.locator(':scope > p').first(),

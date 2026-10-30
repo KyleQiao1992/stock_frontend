@@ -3,6 +3,7 @@ import { Card, CardContent } from './ui/card';
 import StockNewsPanel from './StockNewsPanel';
 import ChanRecursiveStatus from './ChanRecursiveStatus';
 import ChanUncertaintyNotice from './ChanUncertaintyNotice';
+import ChanUpstreamNotice from './ChanUpstreamNotice';
 import { periodLabel } from '../lib/klinePeriod.js';
 
 const price = (n) => Number.isFinite(n) ? n.toFixed(2) : '—';
@@ -31,6 +32,18 @@ function ChanSegments({ data }) {
 }
 function ChanOutlook({ data }) {
   const outlook = data.outlook;
+  if (data.definition?.engine === 'upstream') {
+    const raw = data.upstreamRaw;
+    const last = raw?.pivots?.at(-1);
+    return <div aria-label="缠论结构研判" className="space-y-3 text-sm leading-6 text-slate-700">
+      <h3 className="font-semibold text-slate-900">开源原版对照</h3>
+      <p>使用开源项目自己的笔、简化线段和笔中枢；该结果不是递归走势中枢，也不代表已经验证符合原文。</p>
+      <ChanUpstreamNotice data={data} />
+      {raw?.ok && <><p>上游计算：{raw.bis.length} 笔，{raw.segments.length} 条线段，{raw.pivots.length} 个笔中枢。</p>
+        {last && <p>上游最近笔中枢：{data.dates[last.i0]} 至 {data.dates[last.i1]}，ZD {price(last.zd)} / ZG {price(last.zg)}，DD {price(last.dd)} / GG {price(last.gg)}，{last.count} 笔。{last.upgraded ? '上游九笔升级标记，不代表已证明递归级别。' : ''}</p>}
+        <p>上游不按K线完成状态确认，也未提供线段或中枢的确认依据时刻；相邻线段的端点可能不相接。走势、背驰及买卖点未在此模式展示。</p></>}
+    </div>;
+  }
   if (data.inputProblem) return <p className="py-6 text-sm text-amber-600">{`行情第 ${data.inputProblem.index + 1} 根 K 线${data.inputProblem.date ? `（${data.inputProblem.date}）` : ''}数据无效，缠论计算已停止。`}</p>;
   if (data.definition?.engine === 'external') {
     const latest = data.zs.at(-1);
@@ -125,6 +138,13 @@ function ChanOutlook({ data }) {
 }
 function ChanEndpoints({ data }) {
   const [filter, setFilter] = useState('all');
+  if (data.definition?.engine === 'upstream') return <div className="space-y-3 text-sm text-slate-700">
+    <ChanUpstreamNotice data={data} />
+    <p>逐笔列出开源原版结果，分型详情和确认时刻未提供。</p>
+    <ol className="max-h-[420px] divide-y divide-slate-200 overflow-y-auto">{data.upstreamRaw?.bis.map((pen, i) => <li key={i} className="py-2">
+      {data.dates[pen.i0]} @ {price(pen.p0)} → {data.dates[pen.i1]} @ {price(pen.p1)}
+    </li>)}</ol>
+  </div>;
   if (data.inputProblem) return <p className="py-6 text-sm text-amber-600">{`行情第 ${data.inputProblem.index + 1} 根 K 线数据无效，缠论计算已停止。`}</p>;
   if (data.definition?.engine === 'external') return <div className="text-sm text-slate-700">
     <p className="mb-3 text-xs text-slate-500">本项目笔端参考，不含动态末端；新行情可能引起笔回退重算。</p>
@@ -148,7 +168,7 @@ function ChanEndpoints({ data }) {
     </div>
   </div>;
 }
-export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, code, name, period, market = 'ashare', showFinancial, financialReportContent, showNews, showTradeSideHistory, tradeSideHistoryContent }) {
+export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, code, name, period, market = 'ashare', showFinancial, financialReportContent, showNews, showTradeSideHistory, tradeSideHistoryContent, crossPeriodCheck }) {
   const tabs = [
     ...(showFinancial ? [['financial','财报']] : []),
     ...(enabled ? [['outlook','缠论研判'],['endpoints','笔端参考']] : []),
@@ -166,12 +186,16 @@ export default function StockAnalysisPanel({ data, enabled, tab, onTabChange, co
           <span className="text-xs text-slate-500">{name} {code}</span>
         </div>
         {active === 'financial' ? financialReportContent : active === 'news' ? <div className="flex h-[520px] min-h-0 overflow-hidden"><StockNewsPanel code={code} market={market} /></div> : active === 'tradeSideHistory' ? tradeSideHistoryContent : <>
-          <p className="mb-4 text-xs leading-5 text-slate-500">{data.inputProblem ? '行情包含无效K线，无法安全计算缠论结构。' : `${periodLabel(period)} · 全部已加载 ${data.dates.length} 根K线参与计算 · 截至 ${data.dates.at(-1) || '—'}；缩放不改变计算起点。`}</p>
+          <p className="mb-4 text-xs leading-5 text-slate-500">{data.inputProblem ? '行情不满足当前引擎输入要求，计算已停止。' : `${periodLabel(period)} · 全部已加载 ${data.dates.length} 根K线参与计算 · 截至 ${data.dates.at(-1) || '—'}；缩放不改变计算起点。`}</p>
           {active === 'outlook' ? <ChanOutlook data={data} /> : <ChanEndpoints data={data} />}
           {active === 'outlook' && <ChanRecursiveStatus data={data} />}
+          {active === 'outlook' && crossPeriodCheck}
           <details className="mb-4 rounded-xl border border-slate-200 p-3 text-xs leading-5 text-slate-500">
             <summary className="cursor-pointer font-medium text-slate-700">计算口径与范围</summary>
-            {data.definition?.engine === 'external' ? <>
+            {data.definition?.engine === 'upstream' ? <>
+              <p className="mt-2">开源原版对照使用固定版本上游计算结果，笔、简化线段和笔中枢均来自同一上游笔链；端点不相接也按原样显示。该算法不是完整的特征序列线段或递归走势中枢。</p>
+              <p className="mt-2">上游不按K线完成状态确认，不提供确认依据K；本模式也不展示上游走势、背驰或买卖点。上游会过滤非正收盘价；为避免改变行情比较，遇到此类记录时对照停止并提示。</p>
+            </> : data.definition?.engine === 'external' ? <>
               <p className="mt-2">笔与线段使用本项目算法，笔有破坏回退与极值检查；线段使用特征序列规则，确认依据K按本次历史复算，后续可能回退。笔构造参考中枢由三笔的实际价格区间形成，延伸时核心保持不变；结束与确认时间另行记录。端点K线内高低先后不明而影响判断时标记不确定。</p>
               <p className="mt-2">本图没有递归构造更高级别走势中枢。尚无与当前修正结构匹配的第三方走势、背驰及买卖点结果；此处展示的笔中枢仅供参考。</p>
             </> : <>

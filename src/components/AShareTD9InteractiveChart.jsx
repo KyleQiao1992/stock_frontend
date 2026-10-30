@@ -2,6 +2,7 @@ import { authFetch as apiFetch } from "../lib/authClient.js";
 import UserAdminPanel from "./UserAdminPanel";
 import AccountPanel from "./AccountPanel";
 import StockAnalysisPanel from "./StockAnalysisPanel";
+import ChanCrossPeriodCheck from "./ChanCrossPeriodCheck";
 import TradeSideHistoryPanel from "./TradeSideHistoryPanel";
 import MarketIndexStrip from "./MarketIndexStrip";
 import { fetchTradeSideHistory, formatTradeQuoteTime } from "../lib/tradeSideHistory.js";
@@ -16,12 +17,14 @@ import { isMinutePeriod, isFourHourPeriod, periodLabel, klineDateLabel, klineTra
 import ChanOverlay from "./ChanOverlay";
 import ChanFractalDetail from "./ChanFractalDetail";
 import ChanLegend from "./ChanLegend";
+import ChanUpstreamNotice from "./ChanUpstreamNotice";
 import ChanPendingNotice from "./ChanPendingNotice";
 import ChanUncertaintyNotice from "./ChanUncertaintyNotice";
 import { assertMarketKlines, marketNumber } from "../lib/marketKlineIntegrity.js";
 import ChanControls from "./ChanControls";
 import { analyzeChan } from "../lib/chan/index.js";
 import { analyzeExternalChan } from "../lib/chan/external/index.js";
+import { analyzeUpstreamReference } from "../lib/chan/external/upstreamAdapter.js";
 import { isCurrentMarketSnapshot, marketSnapshotSourceLabel, formatMarketSnapshotTime } from "../lib/marketSnapshotQuality.js";
 import { todayMarketPresentation } from "../lib/todayMarketPresentation.js";
 import { Component, Fragment, lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
@@ -5844,7 +5847,11 @@ function IndexTrendChart({ rows, maPeriod, displayCount, name, chanData, chanOpt
     </svg>
     {chanOptions?.enabled && chanData && (
       <div aria-label="指数缠论图例" className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
-        {chanData.definition?.engine === 'external' ? <>
+        {chanData.definition?.engine === 'upstream' ? <>
+          <span>开源原版对照 · 简化线段 · 笔构造中枢（非递归）</span>
+          <ChanUpstreamNotice data={chanData} />
+          {chanData.upstreamRaw?.ok && <span>{chanData.upstreamRaw.bis.length} 笔 / {chanData.upstreamRaw.segments.length} 条线段 / {chanData.upstreamRaw.pivots.length} 个笔中枢；上游未提供确认依据时刻。</span>}
+        </> : chanData.definition?.engine === 'external' ? <>
           <span>本项目笔和特征序列线段 · 笔构造参考中枢 · 非递归走势中枢</span>
           {chanOptions.bi && <span><span style={{ color: "var(--chan-bi)" }}>━</span> 笔 · 黄色实线末端为动态极值</span>}
           {chanOptions.segment && <span><span style={{ color: "var(--chan-segment)" }}>━</span> 已确认线段 · 虚线为发展中参考</span>}
@@ -5858,7 +5865,7 @@ function IndexTrendChart({ rows, maPeriod, displayCount, name, chanData, chanOpt
           {(chanOptions.bi || chanOptions.fx) && <span>点击圆点或三角查看分型</span>}
         </>}
         {chanOptions.bi && <ChanPendingNotice data={chanData} />}
-        {chanData.inputProblem ? <span className="text-amber-600 dark:text-amber-400">{`行情第 ${chanData.inputProblem.index + 1} 根 K 线数据无效，缠论计算已停止。`}</span>
+        {chanData.inputProblem ? chanData.definition?.engine !== 'upstream' && <span className="text-amber-600 dark:text-amber-400">{`行情第 ${chanData.inputProblem.index + 1} 根 K 线数据无效，缠论计算已停止。`}</span>
           : <span>缠论计算：全部已加载 {chanData.dates.length} 根日K · 截至 {full.at(-1)?.date}</span>}
       </div>
     )}
@@ -5954,7 +5961,8 @@ function IndexTrendCard({ index, tab, year = "latest", chanOptions, onChanOption
   const displayCount = Math.min(zoom?.key === viewKey ? zoom.count : defaultDisplayCount, maxDisplayCount);
   const zoomOptions = getDisplayCountOptions(maxDisplayCount, displayCount);
   const chanData = useMemo(() => chanOptions.engine === 'original'
-    ? analyzeChan(feedRows, "101") : analyzeExternalChan(feedRows, "101"), [feedRows, chanOptions.engine]);
+    ? analyzeChan(feedRows, "101") : chanOptions.engine === 'upstream'
+      ? analyzeUpstreamReference(feedRows, "101") : analyzeExternalChan(feedRows, "101"), [feedRows, chanOptions.engine]);
   const ready = !loading && !error && hasYearData && maxDisplayCount >= 2;
   const changeZoom = useCallback((direction) => setZoom((current) => {
     const currentCount = Math.min(current?.key === viewKey ? current.count : defaultDisplayCount, maxDisplayCount);
@@ -9060,7 +9068,8 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
   const [chanOptions, setChanOptions] = useState({ enabled: true, engine: 'external', bi: true, segment: true, zs: true, penZs: true, fx: true });
   const [analysisTab, setAnalysisTab] = useState("financial");
   const chanData = useMemo(() => chanOptions.engine === 'original'
-    ? analyzeChan(rawRows, loadedPeriod) : analyzeExternalChan(rawRows, loadedPeriod), [rawRows, loadedPeriod, chanOptions.engine]);
+    ? analyzeChan(rawRows, loadedPeriod) : chanOptions.engine === 'upstream'
+      ? analyzeUpstreamReference(rawRows, loadedPeriod) : analyzeExternalChan(rawRows, loadedPeriod), [rawRows, loadedPeriod, chanOptions.engine]);
   const minuteView = isMinutePeriod(loadedPeriod);
 
   function handlePeriodChange(nextPeriod) {
@@ -10720,6 +10729,10 @@ export default function AShareTD9InteractiveChart({ onLogout, user, themePrefere
                   data={chanData} enabled={chanOptions.enabled} tab={analysisTab} onTabChange={setAnalysisTab}
                   code={meta.code || currentCode} name={meta.name} period={loadedPeriod}
                   market={market}
+                  crossPeriodCheck={market === "ashare" && !loading && rawRows.length && meta.code
+                    ? <ChanCrossPeriodCheck key={`${meta.tencentSymbol || meta.code}:${adjust}:${period}`}
+                      code={meta.code} symbol={meta.tencentSymbol || toTencentSymbol(meta.code)}
+                      adjust={adjust} isIndex={isIndex} loadJson={loadTencentMinuteJson} /> : null}
                   showFinancial={market === "ashare" && !isIndex}
                   financialReportContent={<FinancialReportPanel
                     financialInfo={financialInfo}

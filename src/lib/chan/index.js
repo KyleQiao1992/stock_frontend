@@ -4,7 +4,8 @@ import { buildTrades } from './outlook.js';
 import { buildSegmentOutlook } from './referenceOutlook.js';
 import { buildSegments, SEGMENT_RULE_VERSION } from './segment.js';
 import { buildPenCenters } from './penCenters.js';
-import { assessRecursiveReadiness } from './recursiveReadiness.js';
+import { assessRecursiveReadiness, recursiveHistoryBasis } from './recursiveReadiness.js';
+import { validMarketDate } from '../marketKlineIntegrity.js';
 
 // Interior raw bars are fully inside the segment; the other extreme of each
 // endpoint bar may occur on either side of its endpoint. Preserve both bounds
@@ -52,10 +53,16 @@ function findInvalidCandle(rows) {
   const seenDates = new Set();
   let priorDate = null;
   const comparableDate = date => /^\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?$/.test(date);
+  // Test and research callers also use opaque ordinal labels such as K1.
+  // A calendar-keyed series, however, must remain calendar-keyed throughout.
+  const calendarKey = rows.find(row => typeof row?.date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(row.date))?.date;
+  const calendarSeries = calendarKey != null;
+  const dateLength = calendarKey?.length;
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index];
     const date = row?.date;
     if (typeof date !== 'string' || !date.trim() || seenDates.has(date)
+        || (calendarSeries && (!validMarketDate(date) || date.length !== dateLength))
         || (priorDate && comparableDate(date) && comparableDate(priorDate) && date <= priorDate)
         || ![row?.open, row?.high, row?.low, row?.close, row?.volume].every(Number.isFinite)
         || row.high < row.low || row.high < Math.max(row.open, row.close)
@@ -76,7 +83,7 @@ export function analyzeChan(rows, period = 'day') {
     // The chart may still show valid prices, but no Chan structure is claimed.
     const dates = rows.filter(r => r && [r.open, r.high, r.low, r.close, r.volume].every(Number.isFinite))
       .map(r => r.date);
-    const analysis = { dates, historyOffset: 0, historyDates: [], analysisCandles: [], fx: [], bi: [], zs: [], penZs: [], penZsUncertainty: [],
+    const analysis = { dates, recursiveHistoryBasis: recursiveHistoryBasis(rows, String(period)), historyOffset: 0, historyDates: [], analysisCandles: [], fx: [], bi: [], zs: [], penZs: [], penZsUncertainty: [],
       zsUncertainty: [], pending: [], pendingUncertainty: [], fractalDetails: [], biLine: [], segmentBi: [], segments: [],
       pendingSegments: [], outlook: { ok: false, reason: 'invalid_candle' }, trades: [], inputProblem,
       definition: { segmentHistoryStart: null } };
@@ -130,6 +137,7 @@ export function analyzeChan(rows, period = 'day') {
     close: candles.at(-1)?.close, period });
   const historyOffset = result.candles[0]?.time - 1 || 0;
   const analysis = {
+    recursiveHistoryBasis: recursiveHistoryBasis(rows, String(period)),
     dates: bars.map((r) => r.date), historyOffset, historyDates: result.candles.map((c) => c.date),
     analysisCandles: result.candles, fx, bi, zs, zsUncertainty, penZs, penZsUncertainty, pending,
     pendingUncertainty: result.pendingUncertainty, fractalDetails: result.fractalDetails,

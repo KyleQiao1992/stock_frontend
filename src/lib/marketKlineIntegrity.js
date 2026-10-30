@@ -5,7 +5,7 @@ export function marketNumber(value) {
   return Number(value);
 }
 
-function validMarketDate(value) {
+export function validMarketDate(value) {
   if (typeof value !== 'string') return false;
   const match = value.match(/^(\d{4}-\d{2}-\d{2})(?: (\d{2}):(\d{2})(?::(\d{2}))?)?$/);
   if (!match) return false;

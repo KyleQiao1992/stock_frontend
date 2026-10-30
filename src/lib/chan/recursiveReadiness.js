@@ -1,3 +1,5 @@
+import { validMarketDate } from '../marketKlineIntegrity.js';
+
 /**
  * Inspect the real lowest-layer segment/center output before recursion.
  *
@@ -9,6 +11,25 @@
  * order and the same observation window. Its source/adjustment and absence
  * of missing market sessions remain caller-supplied, not verified here.
  */
+export function recursiveHistoryBasis(rows, period) {
+  // Keep exact input values, including the complete flag and prefix which the
+  // pen engine can trim after using it to choose the initial stroke. Comparing
+  // only retained analysisCandles would accept stale evidence for a revision.
+  // JSON normally serializes NaN, Infinity and null identically. Invalid
+  // histories need a distinct basis too, so retain each value's type.
+  const encode = value => {
+    if (value === null) return ['null'];
+    if (value === undefined) return ['undefined'];
+    if (typeof value === 'number') return ['number', Number.isNaN(value) ? 'NaN'
+      : value === Infinity ? 'Infinity' : value === -Infinity ? '-Infinity' : Object.is(value, -0) ? '-0' : value];
+    if (typeof value === 'string' || typeof value === 'boolean') return [typeof value, value];
+    return [typeof value];
+  };
+  return JSON.stringify([period, rows.map(row => row == null ? encode(row)
+    : [encode(row.date), encode(row.open), encode(row.high), encode(row.low),
+      encode(row.close), encode(row.volume), encode(row.complete)])]);
+}
+
 export function assessRecursiveReadiness(rows, analysis, { period = 'day', asOfTime = rows?.length } = {}) {
   if (!Array.isArray(rows) || !analysis || typeof analysis !== 'object') throw new TypeError('rows and analysis are required');
   if (typeof period !== 'string' || !period.trim()) throw new TypeError('period is required');
@@ -19,6 +40,9 @@ export function assessRecursiveReadiness(rows, analysis, { period = 'day', asOfT
     bars: rows.length, basis: 'caller_supplied', historyBeforeStart: 'unverified', marketContinuity: 'unverified' };
   const nextLevel = { relativeLevel: 1, status: 'undetermined', completedMovements: null, centers: null,
     missingEvidence: ['completed_lower_level_movements', 'movement_completion_proof', 'consistent_decomposition'] };
+  if (analysis.recursiveHistoryBasis !== recursiveHistoryBasis(rows, period)) {
+    throw new RangeError('analysis and observation history basis must match');
+  }
   if (analysis.inputProblem) return { status: 'invalid_input', source,
     inputProblem: { ...analysis.inputProblem }, foundation: { confirmedSegmentCount: 0, centers: [], uncertaintyCount: 0 }, nextLevel };
   if (!Array.isArray(analysis.dates) || analysis.dates.length !== rows.length
@@ -28,8 +52,12 @@ export function assessRecursiveReadiness(rows, analysis, { period = 'day', asOfT
   const dates = new Set();
   let previousDate = null;
   const comparableDate = date => /^\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2}(?::\d{2})?)?$/.test(date);
+  const calendarKey = rows.find(row => typeof row?.date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(row.date))?.date;
+  const calendarSeries = calendarKey != null;
+  const dateLength = calendarKey?.length;
   for (const row of rows) {
     if (typeof row.date !== 'string' || !row.date.trim() || dates.has(row.date)
+        || (calendarSeries && (!validMarketDate(row.date) || row.date.length !== dateLength))
         || (previousDate && comparableDate(previousDate) && comparableDate(row.date) && row.date <= previousDate)
         || ![row.open, row.high, row.low, row.close, row.volume].every(Number.isFinite)
         || row.high < row.low || row.high < Math.max(row.open, row.close)
@@ -48,7 +76,8 @@ export function assessRecursiveReadiness(rows, analysis, { period = 'day', asOfT
   for (const candle of analysis.analysisCandles) {
     const raw = rows[candle.time - 1];
     if (!Number.isSafeInteger(candle.time) || !raw || candle.date !== raw.date
-        || ['open', 'high', 'low', 'close', 'volume'].some(key => candle[key] !== raw[key])) {
+        || ['open', 'high', 'low', 'close', 'volume'].some(key => candle[key] !== raw[key])
+        || (candle.complete ?? null) !== (raw.complete ?? null)) {
       throw new RangeError('analysis candle history basis does not match');
     }
   }

@@ -194,3 +194,24 @@ test('an indeterminate later window is propagated without asserting an extension
   assert.deepEqual(result.extension.z_move_ids, ['a', 'c']);
   assert.equal(result.extension.first_outside_z_move_id, undefined);
 });
+
+test('repeated extensions do not rescan the complete source history for every new Z movement', () => {
+  const price = [0, 10, 4, 12];
+  while (price.length < 102) price.push(price.length % 2 === 0 ? 5 : 12);
+  const bars = Array.from({ length: 10000 }, (_, i) => {
+    const value = price[Math.min(i, price.length - 1)];
+    return { time: i + 1, low: value, high: value, complete: true };
+  });
+  let barReads = 0;
+  const countedBars = new Proxy(bars, { get(target, key, receiver) {
+    if (typeof key === 'string' && /^\d+$/.test(key)) barReads += 1;
+    return Reflect.get(target, key, receiver);
+  } });
+  const moves = price.slice(0, -1).map((value, i) => movement(`m${i}`, i % 2 ? 'down' : 'up',
+    [i + 1, value], [i + 2, price[i + 1]], Math.min(value, price[i + 1]), Math.max(value, price[i + 1]), i + 2));
+  const result = inspectCenterExtension(moves, { targetLevel: 2, asOfTime: bars.length,
+    source: { basis, bars: countedBars } });
+  assert.equal(result.extension.status, 'extending');
+  assert.equal(result.extension.z_move_ids.length, 51);
+  assert.ok(barReads < 20000, `full source was repeatedly scanned: ${barReads} indexed reads`);
+});

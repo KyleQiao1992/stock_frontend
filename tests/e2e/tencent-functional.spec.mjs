@@ -7,6 +7,7 @@ import { chartReady } from './pages.mjs';
 const snapshot = JSON.parse(readFileSync(new URL('./fixtures/tencent-sh600851-qfqmonth.json', import.meta.url), 'utf8'));
 const historicalDaily = JSON.parse(readFileSync(new URL('../../src/lib/chan/fixtures/600851-qfq-old-bi-2025.json', import.meta.url), 'utf8'));
 const fullDaily = JSON.parse(readFileSync(new URL('../../src/lib/chan/fixtures/600851-qfq-2026-10-27.json', import.meta.url), 'utf8'));
+const upstreamSnapshot = JSON.parse(readFileSync(new URL('../../src/lib/chan/fixtures/600851-external-upstream-274f7a2.json', import.meta.url), 'utf8'));
 
 test('海欣笔参考区贯穿核心后仍延伸，形成和离开状态分别展示', async ({ page, request }, testInfo) => {
   await control(request, { reset: true });
@@ -195,6 +196,59 @@ test('海欣股份日K使用参考引擎绘制笔中枢，切换引擎后结果�
   await expect(recursive).toContainText('更高级别走势中枢尚未判定');
   await expect(outlook).toContainText('确认依据K');
   await expect(page.getByLabel('修正结构研判范围', { exact: true })).toContainText('不能作为当前图的信号');
+  await engine.selectOption('upstream');
+  await expect(legend).toContainText('开源原版对照');
+  await expect(legend).toContainText('简化线段');
+  await expect(legend).toContainText('非递归');
+  await expect(legend).toContainText('最新K线未提供收盘状态');
+  await expect(svg.locator('[data-chan-upstream-pen]')).toHaveCount(51);
+  await expect(svg.locator('[data-chan-upstream-segment]')).toHaveCount(9);
+  await expect(svg.locator('[data-chan-upstream-zone]')).toHaveCount(13);
+  await expect(svg.locator('[data-chan-upstream-fractal]')).toHaveCount(upstreamSnapshot.fractals.length);
+  await expect(svg.locator('[data-chan-upstream-endpoint]')).toHaveCount(52);
+  await expect(svg.locator('[data-chan-zone][data-chan-engine="external"]')).toHaveCount(0);
+  const upstreamZone = svg.locator('[data-chan-upstream-zone="12"]');
+  await expect(upstreamZone).toHaveAttribute('data-chan-zone-zd', '8.13');
+  await expect(upstreamZone).toHaveAttribute('data-chan-zone-zg', '9.4');
+  await expect(upstreamZone).toHaveAttribute('aria-label', /GG 9.43 \/ DD 7.35/);
+  const upstreamLines = await svg.locator('[data-chan-upstream-segment]').evaluateAll(lines => lines.map(line => ({
+    path: line.getAttribute('d'), done: line.getAttribute('data-chan-upstream-done'), label: line.getAttribute('aria-label'),
+  })));
+  expect(upstreamLines.filter(line => line.done === 'true')).toHaveLength(8);
+  expect(upstreamLines[0].label).toContain('2024-04-16 @ 4.815');
+  expect(upstreamLines[0].label).toContain('2024-09-18 @ 4.5');
+  expect(upstreamLines[1].label).toContain('2024-09-09 @ 5.01');
+  expect(upstreamLines[0].label).toContain('未提供确认依据时刻');
+  const coordinate = d => [...d.matchAll(/[ML]\s*([^,\s]+),([^\sML]+)/g)].map(match => [+match[1], +match[2]]);
+  expect(coordinate(upstreamLines[0].path)[1]).not.toEqual(coordinate(upstreamLines[1].path)[0]);
+  const mappedPaths = await svg.evaluate((node, expected) => {
+    const bars = [...node.querySelectorAll('g[data-kline-time]')];
+    const parse = d => [...d.matchAll(/[ML]\s*([^,\s]+),([^\sML]+)/g)].map(match => [+match[1], +match[2]]);
+    const scaleBar = bars.findIndex((_, i) => expected.rows[i].high !== expected.rows[i].low);
+    const scaleLine = bars[scaleBar].querySelector('line');
+    const hi = +scaleLine.getAttribute('y1'), lo = +scaleLine.getAttribute('y2');
+    const row = expected.rows[scaleBar];
+    const y = value => hi + (row.high - value) * (lo - hi) / (row.high - row.low);
+    const check = (selector, records) => [...node.querySelectorAll(selector)].map((line, i) => {
+      const actual = parse(line.getAttribute('d'));
+      const record = records[i];
+      const x0 = +bars[record.i0].querySelector('line').getAttribute('x1');
+      const x1 = +bars[record.i1].querySelector('line').getAttribute('x1');
+      return Math.max(Math.abs(actual[0][0] - x0), Math.abs(actual[0][1] - y(record.p0)),
+        Math.abs(actual[1][0] - x1), Math.abs(actual[1][1] - y(record.p1)));
+    });
+    return { pens: check('[data-chan-upstream-pen]', expected.pens),
+      segments: check('[data-chan-upstream-segment]', expected.segments) };
+  }, { rows: fullDaily, pens: upstreamSnapshot.bis, segments: upstreamSnapshot.segments });
+  expect(mappedPaths.pens).toHaveLength(51);
+  expect(mappedPaths.segments).toHaveLength(9);
+  expect(Math.max(...mappedPaths.pens, ...mappedPaths.segments)).toBeLessThan(0.01);
+  await expect(outlook).toContainText('开源原版对照');
+  await expect(outlook).toContainText('51 笔');
+  await expect(outlook).toContainText('13 个笔中枢');
+  await expect(outlook).toContainText('不是递归走势中枢');
+  await expect(page.getByLabel('递归走势中枢状态', { exact: true })).toHaveCount(0);
+  await testInfo.attach('600851-upstream-full-history', { body: await svg.screenshot(), contentType: 'image/png' });
   await engine.selectOption('original');
   await expect(svg.locator('[data-chan-zone][data-chan-engine="external"]')).toHaveCount(0);
   await expect(legend).toContainText('线段中枢');
@@ -305,6 +359,16 @@ test('腾讯前复权月K保留负历史价格和完整历史，负价蜡烛仍�
   expect(repairedPen, 'the external center mode must calculate pens across valid negative adjusted history').toBeTruthy();
   await page.getByRole('combobox', { name: '缠论引擎' }).selectOption('original');
   await expect(page.getByText(`全部已加载 ${snapshot.rows.length} 根K线参与计算`, { exact: false }).first()).toBeAttached();
+  await expect(svg.locator('path[data-chan-path="bi"]')).toHaveAttribute('d', repairedPen);
+  await page.getByRole('combobox', { name: '缠论引擎' }).selectOption('upstream');
+  await expect(legend).toContainText('收盘价不是正数');
+  await expect(legend).toContainText('不能静默改变行情');
+  await expect(svg.locator('[data-chan-upstream-pen]')).toHaveCount(0);
+  await page.getByRole('tab', { name: '缠论研判', exact: true }).click();
+  await expect(page.getByLabel('缠论结构研判', { exact: true })).toContainText('收盘价不是正数');
+  await expect(page.getByLabel('个股分析', { exact: true })).toContainText('行情不满足当前引擎输入要求');
+  await expect(page.getByLabel('个股分析', { exact: true })).not.toContainText('行情包含无效K线');
+  await page.getByRole('combobox', { name: '缠论引擎' }).selectOption('original');
   await expect(svg.locator('path[data-chan-path="bi"]')).toHaveAttribute('d', repairedPen);
   const negative = svg.locator('g[data-kline-time="1994-07-29"]');
   await expect(negative).toHaveAttribute('data-kline-close', '-0.074');

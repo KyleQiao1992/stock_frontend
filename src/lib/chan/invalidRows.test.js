@@ -50,3 +50,19 @@ test('out-of-order daily and intraday bars cannot establish continuous Chan stru
     assert.equal(result.zs.length, 0);
   }
 });
+
+test('calendar histories reject invalid dates and mixed time formats instead of joining structures', () => {
+  for (const date of ['2024-02-30', 'not-a-date', '2024-02-10 09:30']) {
+    const rows = zoneLifecycleRows(114);
+    rows[40].date = date;
+    const result = analyzeChan(rows, 'day');
+    assert.deepEqual(result.inputProblem, { reason: 'invalid_candle', index: 40, date });
+    assert.equal(result.bi.length, 0);
+    assert.equal(result.zs.length, 0);
+  }
+  const badFirst = zoneLifecycleRows(114);
+  badFirst[0].date = 'not-a-date';
+  const result = analyzeChan(badFirst, 'day');
+  assert.deepEqual(result.inputProblem, { reason: 'invalid_candle', index: 0, date: 'not-a-date' });
+  assert.equal(result.zs.length, 0);
+});
